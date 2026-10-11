@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>הגדרות העוזר</title>
+<style>
+  :root { --bg:#faf8f5; --card:#fff; --ink:#1f1d1a; --muted:#77716a; --line:#e7e2da; --accent:#1f1d1a; --ok:#2f7d5b; --bad:#b3402e; --soft:#f3efe9; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 system-ui, "Segoe UI", Arial, sans-serif; }
+  .wrap { display:grid; grid-template-columns: 210px minmax(0, 760px); gap:56px; max-width:1060px; margin:0 auto; padding:56px 24px 96px; }
+  nav { position:sticky; top:56px; align-self:start; }
+  nav h1 { font:400 30px/1 Georgia, "Times New Roman", serif; margin:0 0 28px; }
+  nav a { display:block; padding:5px 0; color:var(--muted); text-decoration:none; }
+  nav a:hover { color:var(--ink); }
+  nav .meta { margin-top:28px; font-size:13px; color:var(--muted); }
+  section { margin-bottom:56px; scroll-margin-top:32px; }
+  h2 { font:400 26px/1.2 Georgia, "Times New Roman", serif; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 14px; }
+  .rows { border-top:1.5px solid var(--ink); }
+  .row { display:flex; align-items:center; gap:16px; padding:16px 4px; border-bottom:1px solid var(--line); }
+  .row.block { display:block; }
+  .row .grow { flex:1; min-width:0; }
+  .row b { font-weight:600; }
+  .small { font-size:13px; color:var(--muted); }
+  .pill { display:inline-block; padding:2px 10px; border-radius:99px; font-size:12.5px; background:var(--soft); color:var(--muted); }
+  .pill.ok { background:#e6f2ec; color:var(--ok); }
+  .pill.bad { background:#f8e7e3; color:var(--bad); }
+  button, .btn { font:inherit; cursor:pointer; border-radius:8px; padding:7px 16px; border:1px solid var(--line); background:var(--card); color:var(--ink); text-decoration:none; white-space:nowrap; }
+  button.primary, .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.danger { color:var(--bad); }
+  button.link { border:0; background:none; padding:0 4px; color:var(--muted); }
+  button.link:hover { color:var(--bad); }
+  form.fields { display:grid; grid-template-columns: 170px 1fr; gap:10px 14px; align-items:center; margin-top:14px; }
+  form.fields label { color:var(--muted); font-size:14px; }
+  form.fields .hint { grid-column:2; margin-top:-6px; font-size:12.5px; color:var(--muted); }
+  form.fields .actions { grid-column:2; display:flex; gap:10px; align-items:center; }
+  input, select { font:inherit; width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); direction:ltr; text-align:left; }
+  input[type=checkbox] { width:auto; }
+  input.rtl { direction:rtl; text-align:right; }
+  details > summary { cursor:pointer; color:var(--muted); font-size:14px; list-style:none; }
+  details > summary::before { content:"+ "; }
+  details[open] > summary::before { content:"− "; }
+  ol.steps { margin:10px 0 0; padding-inline-start:20px; color:var(--muted); font-size:14px; }
+  code { background:var(--soft); padding:1px 6px; border-radius:5px; direction:ltr; display:inline-block; font-size:13px; }
+  .log { font-size:13px; color:var(--muted); max-height:320px; overflow:auto; }
+  .log div { padding:6px 4px; border-bottom:1px solid var(--line); }
+  #toast { position:fixed; inset-inline:0; bottom:24px; margin:auto; width:max-content; max-width:90vw; background:var(--ink); color:#fff; padding:10px 18px; border-radius:10px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  #toast.on { opacity:1; }
+  #banner { display:none; background:#fff6d9; border:1px solid #ecd98c; padding:12px 16px; border-radius:10px; margin-bottom:28px; align-items:center; gap:14px; }
+  @media (max-width: 820px) { .wrap { grid-template-columns: 1fr; gap:24px; padding:28px 16px 80px; } nav { position:static; } nav a { display:inline-block; margin-inline-end:14px; } form.fields { grid-template-columns:1fr; } form.fields .hint, form.fields .actions { grid-column:1; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <h1 id="name">Helper</h1>
+    <a href="#connect">חיבורים</a>
+    <a href="#active">מה פעיל</a>
+    <a href="#memory">זיכרון</a>
+    <a href="#prefs">העדפות</a>
+    <a href="#log">מה נשלח</a>
+    <div class="meta" id="meta"></div>
+  </nav>
+  <main>
+    <div id="banner"><span class="grow">חלק מהשינויים ייכנסו לתוקף רק אחרי הפעלה מחדש.</span><button class="primary" id="restart">הפעל מחדש</button></div>
+    <section id="connect"><h2>חיבורים</h2><p class="sub">החשבונות והשירותים שהעוזר יכול להשתמש בהם</p><div class="rows" id="connectors"></div></section>
+    <section id="active"><h2>מה פעיל</h2><p class="sub">מקורות, תזכורות, משימות ומעקבים</p><div class="rows" id="activeRows"></div></section>
+    <section id="memory"><h2>זיכרון</h2><p class="sub">מה שהעוזר זוכר עליך. אפשר למחוק כל פריט בנפרד</p><div class="rows" id="memoryRows"></div></section>
+    <section id="prefs"><h2>העדפות</h2><p class="sub">שם, שעות ותזמונים</p><div class="rows" id="prefRows"></div></section>
+    <section id="log"><h2>מה נשלח</h2><p class="sub">ההודעות האחרונות שהעוזר שלח מיוזמתו</p><div class="rows"><div class="log" id="sent"></div></div></section>
+  </main>
+</div>
+<div id="toast"></div>
+<script>
+// Everything shown comes from /api/state and is inserted as text, never as HTML.
+const $ = (id) => document.getElementById(id)
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag)
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') el.className = v
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v)
+    else if (v !== false && v != null) el.setAttribute(k, v === true ? '' : v)
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid)
+  return el
+}
+// Replaces an element's content. Takes elements, strings and nested arrays; skips empty values.
+function fill(el, ...kids) {
+  el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false && k !== ''))
+}
+function toast(text) {
+  $('toast').textContent = text
+  $('toast').classList.add('on')
+  clearTimeout(toast.t)
+  toast.t = setTimeout(() => $('toast').classList.remove('on'), 2600)
+}
+async function post(route, body) {
+  const res = await fetch('/api/' + route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || 'הפעולה נכשלה')
+  return data
+}
+async function act(route, body, done) {
+  try {
+    const out = await post(route, body)
+    if (out.restart) $('banner').style.display = 'flex'
+    toast(done || 'נשמר')
+    await load()
+  } catch (e) {
+    toast(e.message)
+  }
+}
+
+// A settings form: fields = [[KEY, label, {secret, hint, rtl, options, placeholder}]]
+function form(S, fields, { clear } = {}) {
+  const inputs = {}
+  const rows = fields.flatMap(([key, label, o = {}]) => {
+    const cur = S.settings[key]
+    let input
+    if (o.options) {
+      input = h('select', {}, o.options.map(([v, t]) => h('option', { value: v, selected: v === (cur || o.options[0][0]) }, t)))
+    } else {
+      input = h('input', { type: o.secret ? 'password' : 'text', class: o.rtl ? 'rtl' : '', value: o.secret ? '' : cur, placeholder: o.secret ? (cur.set ? 'מוגדר ✓ (ריק = בלי שינוי)' : 'לא מוגדר') : o.placeholder || '', autocomplete: 'off' })
+    }
+    inputs[key] = input
+    return [h('label', {}, label), input, o.hint && h('div', { class: 'hint' }, o.hint)]
+  })
+  const el = h('form', { class: 'fields', onsubmit: (e) => {
+    e.preventDefault()
+    act('settings', { set: Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value])) })
+  } }, rows, h('div', { class: 'actions' },
+    h('button', { class: 'primary', type: 'submit' }, 'שמור'),
+    clear && S.settings[clear].set && h('button', { class: 'danger', type: 'button', onclick: () => confirm('לנתק?') && act('settings', { clear: [clear] }, 'נותק') }, 'נתק')))
+  return el
+}
+function connector(title, desc, on, body) {
+  return h('div', { class: 'row block' },
+    h('div', { style: 'display:flex;gap:16px;align-items:center' },
+      h('div', { class: 'grow' }, h('b', {}, title), h('div', { class: 'small' }, desc)),
+      h('span', { class: 'pill ' + (on ? 'ok' : '') }, on ? 'מחובר' : 'לא מחובר')),
+    h('details', { style: 'margin-top:10px' }, h('summary', {}, on ? 'עריכה' : 'חיבור'), body))
+}
+function item(text, sub, onDelete, pill) {
+  return h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', {}, text), sub && h('div', { class: 'small' }, sub)), pill, onDelete && h('button', { class: 'link', title: 'מחיקה', onclick: onDelete }, '✕'))
+}
+const empty = (text) => h('div', { class: 'row small' }, text)
+const head = (text) => h('div', { class: 'row small', style: 'border-bottom:0;padding-bottom:0;font-weight:600;color:var(--ink)' }, text)
+const del = (kind, id) => () => confirm('למחוק?') && act('delete', { kind, id }, 'נמחק')
+const repeat = { none: '', daily: ' · כל יום', weekly: ' · כל שבוע' }
+
+function render(S) {
+  document.title = S.botName + ' · הגדרות'
+  $('name').textContent = S.botName
+  fill($('meta'),
+    h('div', {}, h('span', { class: 'pill ' + (S.whatsapp.connected ? 'ok' : 'bad') }, S.whatsapp.connected ? 'וואטסאפ מחובר' : 'וואטסאפ מנותק')),
+    h('div', { style: 'margin-top:8px' }, S.whatsapp.connected ? 'ברצף ' + S.whatsapp.since : S.whatsapp.paired ? 'מנסה להתחבר' : 'צריך לסרוק QR בחלון העוזר'),
+    h('div', { style: 'margin-top:8px;direction:ltr;text-align:right' }, S.model),
+    S.waiting ? h('div', { style: 'margin-top:8px' }, S.waiting + ' הודעות ממתינות') : '')
+
+  const G = S.google
+  const googleBody = h('div', {},
+    G.accounts.map((a) => h('div', { class: 'row', style: 'padding:10px 0' },
+      h('div', { class: 'grow', style: 'direction:ltr;text-align:right' }, a.email),
+      h('label', { class: 'small', title: 'העוזר קורא מהחשבון, אבל לא שולח ממנו מייל ולא מוסיף בו אירועים או משימות' }, h('input', { type: 'checkbox', checked: a.readOnly, onchange: (e) => act('google/readonly', { email: a.email, readOnly: e.target.checked }) }), ' קריאה בלבד'),
+      h('button', { class: 'link', onclick: () => confirm('לנתק את ' + a.email + '?') && act('google/remove', { email: a.email }, 'נותק') }, 'נתק'))),
+    G.configured && h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/google/connect' }, G.accounts.length ? 'הוסף חשבון' : 'חבר חשבון Google')),
+    h('details', { open: !G.configured, style: 'margin-top:8px' }, h('summary', {}, 'מפתחות הגישה ל-Google (חד-פעמי)'),
+      h('ol', { class: 'steps' },
+        h('li', {}, 'ב-console.cloud.google.com יוצרים פרויקט, ומפעילים את Gmail API, Google Calendar API, Tasks API, Google Drive API ו-Google Classroom API.'),
+        h('li', {}, 'ב-OAuth consent screen בוחרים External, ובסיום לוחצים Publish app.'),
+        h('li', {}, 'ב-Credentials יוצרים OAuth client ID מסוג Desktop app, ומדביקים כאן את שני הערכים.')),
+      form(S, [['GOOGLE_CLIENT_ID', 'Client ID'], ['GOOGLE_CLIENT_SECRET', 'Client secret', { secret: true }]])))
+
+  fill($('connectors'),
+    connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.length > 0, googleBody),
+    connector('מודל AI', S.model, S.settings.LLM_API_KEY.set, form(S, [
+      ['LLM_BASE_URL', 'כתובת הספק', { hint: 'כל ספק תואם OpenAI. Groq: https://api.groq.com/openai/v1' }],
+      ['LLM_API_KEY', 'מפתח API', { secret: true }],
+      ['LLM_MODEL', 'מודל ראשי'],
+      ['LLM_CHEAP_MODEL', 'מודל לרקע', { hint: 'סינון מיילים, מעקבים וסיכומים' }],
+      ['LLM_STRONG_MODEL', 'מודל חזק', { hint: 'מופעל בצ׳אט עם /model strong' }],
+      ['LLM_FALLBACK_MODEL', 'מודל גיבוי'],
+      ['LLM_LIGHT', 'מצב קל', { options: [['false', 'כבוי'], ['true', 'פעיל (לחבילות חינמיות עם מכסה קטנה)']] }],
+    ])),
+    connector('ElevenLabs', 'הודעות קוליות: מבין ועונה בקול. גם אפקטים ומוזיקה', S.settings.ELEVENLABS_API_KEY.set, form(S, [
+      ['ELEVENLABS_API_KEY', 'מפתח API', { secret: true }],
+      ['ELEVENLABS_VOICE_ID', 'מזהה הקול'],
+      ['ELEVENLABS_TTS_MODEL', 'מודל דיבור', { hint: 'חייב לתמוך בעברית: eleven_v3 או eleven_v4' }],
+    ], { clear: 'ELEVENLABS_API_KEY' })),
+    connector('GitHub', 'קריאה בלבד: ריפוזיטוריז, issues וקוד', S.settings.GITHUB_TOKEN.set, form(S, [
+      ['GITHUB_TOKEN', 'Personal access token', { secret: true, hint: 'מומלץ fine-grained עם הרשאות קריאה בלבד' }],
+    ], { clear: 'GITHUB_TOKEN' })),
+    connector('תיבת מייל (IMAP)', 'לתיבות שאינן Google, או כשאי אפשר לחבר את Google', Boolean(S.settings.MAIL_USER && S.settings.MAIL_PASS.set), form(S, [
+      ['MAIL_HOST', 'שרת', { placeholder: 'imap.gmail.com' }],
+      ['MAIL_USER', 'כתובת'],
+      ['MAIL_PASS', 'סיסמת אפליקציה', { secret: true }],
+    ], { clear: 'MAIL_PASS' })),
+    connector('יומן (iCal)', 'קריאה בלבד מכתובת iCal סודית', Boolean(S.settings.CALENDAR_ICS_URL), form(S, [['CALENDAR_ICS_URL', 'כתובת iCal']])),
+    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })))
+
+  fill($('activeRows'),
+    head('מקורות'),
+    S.sources.length ? S.sources.map((s) => item(s.label, 'נבדק בהצלחה: ' + s.checked, null, h('span', { class: 'pill ' + (s.ok === null ? '' : s.ok ? 'ok' : 'bad') }, s.ok === null ? 'ממתין לבדיקה' : s.ok ? 'עובד' : 'לא עובד'))) : empty('אין מקור מחובר עדיין'),
+    head('תזכורות'),
+    S.reminders.length ? S.reminders.map((r) => item(r.text, r.when + repeat[r.repeat], del('reminder', r.id))) : empty('אין תזכורות'),
+    head('משימות מתוזמנות'),
+    S.tasks.length ? S.tasks.map((t) => item(t.text, t.when + repeat[t.repeat], del('task', t.id))) : empty('אין משימות'),
+    head('מעקבים'),
+    S.watchers.length ? S.watchers.map((w) => item(w.text + ': ' + w.value, 'נבדק בהצלחה ' + w.checked + ' · כל ' + w.every + ' דק׳', del('watcher', w.id), h('span', { class: 'pill ' + (w.ok ? 'ok' : 'bad') }, w.ok ? 'עובד' : 'לא עובד'))) : empty('אין מעקבים'),
+    head('מטלות שלא הוגשו'),
+    S.homework.length ? S.homework.map((w) => item(w.title, w.course + ' · ' + w.due)) : empty('אין מטלות פתוחות, או ש-Classroom לא מחובר'))
+
+  fill($('memoryRows'), S.memory.length ? S.memory.map((m) => item(m.text, null, del('memory', m.id))) : empty('הזיכרון ריק'))
+
+  fill($('prefRows'), h('div', { class: 'row block' }, form(S, [
+    ['BOT_NAME', 'שם העוזר', { rtl: true }],
+    ['QUIET_HOURS', 'שעות שקט', { placeholder: '22:00-08:00', hint: 'בשעות האלה נשלחות רק תזכורות והתראות אבטחה. ריק = כבוי' }],
+    ['NEWS_BRIEF_TIME', 'תקציר חדשות', { placeholder: '08:00', hint: 'מה קרה מאז אתמול בערב. ריק = כבוי' }],
+    ['DAILY_BRIEF_TIME', 'סיכום בוקר', { placeholder: '08:00', hint: 'תזכורות, יומן ומטלות של היום. ריק = כבוי' }],
+    ['NEWS_FEEDS', 'מקורות חדשות', { hint: 'כתובות RSS מופרדות בפסיק. ריק = ynet, מעריב וישראל היום' }],
+    ['TIMEZONE', 'אזור זמן', { placeholder: 'Asia/Jerusalem' }],
+    ['COMPUTER_MODE', 'שליטה במחשב', { options: [['ask', 'מבקש אישור לכל פעולה'], ['off', 'כבוי'], ['auto', 'בלי אישור (מסוכן)']] }],
+  ])))
+
+  fill($('sent'), (S.sent.length ? S.sent.map((line) => h('div', {}, line)) : [h('div', {}, 'עוד לא נשלח כלום')]))
+}
+
+async function load() {
+  const res = await fetch('/api/state')
+  if (!res.ok) return toast('אין גישה. פתח מחדש את הכתובת מחלון העוזר.')
+  // Open panels are kept open across a refresh of the data.
+  const open = [...document.querySelectorAll('details[open] > summary')].map((s) => s.parentElement.parentElement.querySelector('b')?.textContent + '|' + s.textContent)
+  render(await res.json())
+  for (const s of document.querySelectorAll('details > summary')) if (open.includes(s.parentElement.parentElement.querySelector('b')?.textContent + '|' + s.textContent)) s.parentElement.open = true
+}
+$('restart').onclick = async () => {
+  await post('restart', {}).catch(() => {})
+  toast('מפעיל מחדש...')
+  $('banner').style.display = 'none'
+  setTimeout(load, 6000)
+}
+const connected = new URLSearchParams(location.search).get('connected')
+if (connected) { history.replaceState(null, '', '/'); setTimeout(() => toast('החשבון ' + connected + ' חובר'), 400) }
+load()
+</script>
+</body>
+</html>

@@ -1,0 +1,203 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { randomBytes } from 'node:crypto'
+import pino from 'pino'
+import QRCode from 'qrcode'
+import baileys, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, normalizeMessageContent, jidNormalizedUser, downloadMediaMessage } from '@whiskeysockets/baileys'
+import { DATA_DIR } from './config.js'
+import { state as store, save } from './store.js'
+
+const CATCH_UP = 12 * 3600
+const MAX_SEEN = 500
+const MAX_QR = 15
+const MAX_SENT = 300
+
+const makeWASocket = baileys.default ?? baileys
+const AUTH_DIR = path.join(DATA_DIR, 'auth')
+const QR_FILE = path.join(DATA_DIR, 'qr.png')
+const CODE_FILE = path.join(DATA_DIR, 'pair-code.txt')
+// Invisible prefix on everything the bot sends, so it never answers itself in a self-chat.
+const BOT_MARK = '​'
+const MAX_MEDIA = 15 * 1024 * 1024
+const logger = pino({ level: 'silent' })
+
+// onMessage({ jids, fromMe, selfChat, key, lateSeconds, text, getMedia, reaction? })
+// onReady({ jid, lid }): the linked account's own ids, each time the connection opens.
+export async function startWhatsApp(onMessage, onReady = () => {}) {
+  const bootedAt = Math.floor(Date.now() / 1000)
+  // Handled message ids survive a restart, so nothing is answered twice. Messages sent while the assistant was
+  // off are still picked up, as long as they are newer than the last one handled and not older than CATCH_UP.
+  const seen = new Set(store.wa.seen)
+  const since = store.wa.lastAt ? Math.max(store.wa.lastAt, bootedAt - CATCH_UP) : bootedAt
+  let sock
+  let ready = false
+  let attempts = 0
+  let qrShown = 0
+  let openedAt = 0
+  // What was sent lately, by message id. When the phone cannot decrypt a message it asks for it again, and without
+  // this the resend has nothing to send, so the message stays on "waiting for this message" forever.
+  const sent = new Map()
+
+  // The "message yourself" chat lives under the account's lid. Sent to the phone number instead, the message
+  // reaches the phone but it cannot decrypt it.
+  function target(jid) {
+    const [pn, lid] = ownIds()
+    return lid && jidNormalizedUser(jid) === pn ? lid : jid
+  }
+
+  async function deliver(jid, content, options) {
+    const msg = await sock.sendMessage(target(jid), content, options)
+    if (msg?.key?.id && msg.message) {
+      sent.set(msg.key.id, msg.message)
+      if (sent.size > MAX_SENT) sent.delete(sent.keys().next().value)
+    }
+    return msg
+  }
+
+  // The account's own addresses: its phone-number id first, then its "lid". The "message yourself" chat can arrive
+  // under either one. They are read from the saved credentials, because right after the first QR scan sock.user
+  // does not carry the lid yet, and a self-chat message addressed to it would look like someone else's chat.
+  function ownIds() {
+    const me = { ...sock.user, ...sock.authState?.creds?.me }
+    return [me.id, me.lid].filter(Boolean).map(jidNormalizedUser)
+  }
+
+  function remember(id, at = Math.floor(Date.now() / 1000)) {
+    seen.add(id)
+    store.wa.seen = [...store.wa.seen, id].slice(-MAX_SEEN)
+    store.wa.lastAt = Math.max(store.wa.lastAt, at)
+    save()
+  }
+
+  async function connect() {
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
+    const { version } = await fetchLatestBaileysVersion().catch(() => ({}))
+    sock = makeWASocket({ auth: state, version, logger, markOnlineOnConnect: false, syncFullHistory: false, getMessage: async (key) => sent.get(key.id) })
+    sock.ev.on('creds.update', saveCreds)
+    let codeAsked = false
+
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+      if (qr) {
+        // Nobody is scanning: stop instead of printing codes forever. Exit code 2 tells start.bat not to restart.
+        if (++qrShown > MAX_QR) {
+          console.log('\nהקוד לא נסרק. כשתהיה מוכן לסרוק, הפעל שוב את start.bat.')
+          process.exit(2)
+        }
+        console.log('\nסרוק את הקוד: וואטסאפ בטלפון > מכשירים מקושרים > קישור מכשיר\n')
+        console.log(await QRCode.toString(qr, { type: 'terminal', small: true }))
+        await QRCode.toFile(QR_FILE, qr, { width: 420 })
+        console.log(`(אם הקוד לא קריא כאן, פתח את התמונה: ${QR_FILE})\n`)
+        // A phone cannot scan a code shown on its own screen. When the number is already known from an earlier
+        // link, a code to type in is offered as well: Linked devices > Link a device > Link with phone number.
+        // On a server there is no screen to scan at all, so the number can also be given up front:
+        // WHATSAPP_PAIRING_NUMBER, digits only with the country code.
+        const number = process.env.WHATSAPP_PAIRING_NUMBER?.replace(/\D/g, '') || (/^\d+@s\.whatsapp\.net$/.test(store.owner?.jid || '') && store.owner.jid.split('@')[0])
+        if (number && !codeAsked) {
+          codeAsked = true
+          try {
+            const code = await sock.requestPairingCode(number)
+            fs.writeFileSync(CODE_FILE, code)
+            console.log(`או בלי סריקה: מכשירים מקושרים > קישור מכשיר > קישור עם מספר טלפון, והקלד: ${code}\n`)
+          } catch (e) {
+            console.log(`[whatsapp] ${e.message}`)
+          }
+        }
+      }
+      if (connection === 'open') {
+        ready = true
+        attempts = 0
+        openedAt = Date.now()
+        qrShown = 0
+        fs.rmSync(QR_FILE, { force: true })
+        fs.rmSync(CODE_FILE, { force: true })
+        console.log('מחובר לוואטסאפ ✔')
+        // Deferred a tick so the caller already holds the returned handle when this runs.
+        setTimeout(() => Promise.resolve(onReady({ jid: ownIds()[0], lid: ownIds()[1] || null })).catch((e) => console.log(`[whatsapp] ${e.message}`)))
+      }
+      if (connection === 'close') {
+        ready = false
+        const code = lastDisconnect?.error?.output?.statusCode
+        if (code === DisconnectReason.loggedOut) {
+          fs.rmSync(AUTH_DIR, { recursive: true, force: true })
+          console.log('החיבור נותק מהטלפון. מתחבר מחדש עם קוד QR חדש...')
+        }
+        // 3s, 6s, 12s ... up to a minute, so a long outage is not hammered with reconnects.
+        const delay = Math.min(60000, 3000 * 2 ** attempts++)
+        setTimeout(() => connect().catch((e) => console.log(`[whatsapp] ${e.message}`)), delay)
+      }
+    })
+
+    sock.ev.on('messages.upsert', ({ messages }) => {
+      for (const msg of messages) {
+        const jid = msg.key?.remoteJid
+        if (!jid || !msg.message || jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) continue
+        const sentAt = Number(msg.messageTimestamp)
+        if (sentAt < since || seen.has(msg.key.id)) continue
+        remember(msg.key.id, sentAt)
+        const content = normalizeMessageContent(msg.message)
+        const base = () => {
+          const own = ownIds()
+          const jids = [jid, msg.key.senderPn, msg.key.remoteJidAlt].filter(Boolean).map(jidNormalizedUser)
+          // lateSeconds > 0: the message was written before this run started, while the assistant was off.
+          return { jids, fromMe: Boolean(msg.key.fromMe), selfChat: jids.some((j) => own.includes(j)), key: msg.key, lateSeconds: Math.max(0, bootedAt - sentAt) }
+        }
+        // An emoji reaction arrives as its own message; an empty one means the reaction was removed.
+        if (content?.reactionMessage) {
+          const reaction = content.reactionMessage.text
+          if (reaction) Promise.resolve(onMessage({ ...base(), text: '', reaction, getMedia: async () => null })).catch((e) => console.log(`[whatsapp] ${e.message}`))
+          continue
+        }
+        const part = content?.imageMessage || content?.audioMessage || content?.documentMessage
+        const text = content?.conversation || content?.extendedTextMessage?.text || part?.caption || ''
+        if ((!text && !part) || text.startsWith(BOT_MARK)) continue
+        // Downloaded lazily, so media from chats the bot ignores is never fetched.
+        const getMedia = async () => {
+          if (!part) return null
+          if (Number(part.fileLength) > MAX_MEDIA) throw new Error('הקובץ גדול מדי (מעל 15MB)')
+          const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage })
+          return { kind: content.imageMessage ? 'image' : content.audioMessage ? 'audio' : 'file', buffer, mime: part.mimetype || '', name: part.fileName || '' }
+        }
+        Promise.resolve(onMessage({ ...base(), text, getMedia })).catch((e) =>
+          console.log(`[whatsapp] ${e.message}`)
+        )
+      }
+    })
+  }
+
+  await connect()
+
+  // Media cannot carry BOT_MARK, so its id is registered up front to keep the bot from answering itself.
+  async function sendTracked(jid, content) {
+    if (!ready) throw new Error('וואטסאפ לא מחובר כרגע')
+    const messageId = '3EB0' + randomBytes(9).toString('hex').toUpperCase()
+    remember(messageId)
+    await deliver(jid, content, { messageId })
+  }
+
+  return {
+    async send(jid, text) {
+      if (!ready) throw new Error('וואטסאפ לא מחובר כרגע')
+      let last
+      for (let i = 0; i < text.length; i += 3500) last = await deliver(jid, { text: BOT_MARK + text.slice(i, i + 3500) })
+      // The id WhatsApp knows the message by, for anyone who needs proof that it left.
+      return last?.key?.id || null
+    },
+    sendVoice(jid, ogg) {
+      return sendTracked(jid, { audio: ogg, mimetype: 'audio/ogg; codecs=opus', ptt: true })
+    },
+    // media: { buffer, mime, caption? }. Images and videos show inline, audio plays, anything else arrives as a file.
+    sendMedia(jid, { buffer, mime, caption, name }) {
+      const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'document'
+      return sendTracked(jid, { [kind]: buffer, mimetype: mime, ...(kind !== 'audio' && caption && { caption }), ...(kind === 'document' && { fileName: name || 'file' }) })
+    },
+    // Puts an emoji on the message with this key; an empty string takes it off again.
+    react(jid, key, emoji) {
+      return sendTracked(jid, { react: { text: emoji, key } })
+    },
+    // When the current connection opened, or 0 while disconnected.
+    connectedSince: () => (ready ? openedAt : 0),
+    typing(jid) {
+      if (ready) sock.sendPresenceUpdate('composing', target(jid)).catch(() => {})
+    },
+  }
+}

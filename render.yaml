@@ -1,0 +1,53 @@
+# Render Blueprint: one always-on background worker with a persistent disk.
+# A free web service will not do: it sleeps when idle and loses its files on every restart,
+# which would log the assistant out of WhatsApp each time.
+services:
+  - type: worker
+    name: helper
+    runtime: docker
+    plan: starter
+    autoDeploy: false
+    disk:
+      name: helper-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      # Secrets are typed into the Render dashboard, never into this file.
+      - key: LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: openai/gpt-oss-120b
+      - key: LLM_CHEAP_MODEL
+        value: qwen/qwen3.8-27b
+      - key: LLM_FALLBACK_MODEL
+        value: qwen/qwen3.8-27b,openai/gpt-oss-20b
+      - key: LLM_LIGHT
+        value: "true"
+      - key: STT_MODEL
+        value: whisper-large-v3
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_READONLY_ACCOUNTS
+        sync: false
+      # Upload data/google.json from the home computer as a secret file named google.json.
+      - key: GOOGLE_ACCOUNTS_SEED
+        value: /etc/secrets/google.json
+      # Digits only, with the country code. Used once, to link WhatsApp with a typed code instead of a QR.
+      - key: WHATSAPP_PAIRING_NUMBER
+        sync: false
+      - key: QUIET_HOURS
+        value: 22:00-08:00
+      - key: DAILY_BRIEF_TIME
+        value: "08:00"
+      - key: NEWS_BRIEF_TIME
+        value: "08:00"
+      - key: CHECK_IN_PER_DAY
+        value: "3"

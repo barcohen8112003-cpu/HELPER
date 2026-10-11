@@ -1,0 +1,23 @@
+{
+  "name": "helper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal WhatsApp assistant: memory, reminders, watchers, mail, calendar, computer control",
+  "scripts": {
+    "start": "node src/index.js",
+    "google": "node src/google-connect.js",
+    "check": "node src/selftest.js",
+    "test:watch": "node src/monitoring/selftest.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "~6.7.24",
+    "imapflow": "^1.0.180",
+    "mailparser": "^3.7.2",
+    "mammoth": "^1.13.0",
+    "node-ical": "^0.20.1",
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4",
+    "unpdf": "^1.8.1"
+  }
+}
