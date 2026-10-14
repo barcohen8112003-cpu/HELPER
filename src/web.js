@@ -37,7 +37,7 @@ export function htmlToText(html) {
 
 const programFiles = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean)
 // Edge or Chrome on Windows; Chromium on a Linux server (the Dockerfile installs it). CHROME_PATH overrides both.
-const BROWSER = [
+export const BROWSER = [
   process.env.CHROME_PATH,
   ...['Microsoft\\Edge\\Application\\msedge.exe', 'Google\\Chrome\\Application\\chrome.exe'].flatMap((exe) => programFiles.map((dir) => path.join(dir, exe))),
   '/usr/bin/chromium',
@@ -47,7 +47,7 @@ const BROWSER = [
   .filter(Boolean)
   .find((p) => fs.existsSync(p))
 // Inside a container the browser runs as root, where its sandbox cannot start.
-const SERVER_FLAGS = process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []
+export const SERVER_FLAGS = process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []
 
 // Below this much text a page is assumed to be a JavaScript shell or a bot wall.
 const THIN_PAGE = 500

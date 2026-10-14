@@ -10,6 +10,7 @@ const NEWS_WINDOW = 4 * 60
 const FIRST_CHECK_IN = 3 * 60000
 const startedAt = Date.now()
 import { checkWatcher } from './watchers.js'
+import * as archive from './archive.js'
 import { mailSince, watchInbox, watchGmail } from './mail.js'
 import { upcomingEvents, listEvents, calendarOn } from './calendar.js'
 import { googleAccounts, googleEnabled, gmailSince, classroomWork, calendarChanges, accessToken } from './google.js'
@@ -151,7 +152,12 @@ async function mail(notify, runTask, monitoring) {
         await track(notify, `mail ${account.user}`, `המייל של ${account.user}`, e)
       }
     }
-    for (const m of mails) await monitoring.handleEvent(mailEvent(m))
+    for (const m of mails) {
+      const event = mailEvent(m)
+      // Every mail goes into the long-term archive, whatever the monitoring decides about telling the user now.
+      archive.add({ key: event.id, source: event.source, title: `${event.title} (מאת ${event.metadata.from})`, text: event.body, at: event.occurred_at }).catch((e) => console.log(`[archive] ${e.message}`))
+      await monitoring.handleEvent(event)
+    }
   } catch (e) {
     console.log(`[mail] ${e.message}`)
   }

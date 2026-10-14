@@ -1,20 +1,30 @@
+import { createHash } from 'node:crypto'
 import mammoth from 'mammoth'
 import { extractText, getDocumentProxy } from 'unpdf'
 import { config } from './config.js'
+import * as archive from './archive.js'
 
 const TEXT_FILE = /\.(txt|md|csv|json|xml|html?|css|jsx?|tsx?|py|java|c|cpp|h|cs|go|rs|rb|php|sql|sh|ps1|ya?ml|ini|log)$/i
 
 const MAX_FILE_TEXT = 20000
 
-// Text of a text, PDF or Word file; null for a type that cannot be read.
-async function fileText({ buffer, mime = '', name = '' }) {
+// Pages of a text, PDF or Word file (a PDF has its real pages, anything else is one); null for a type that cannot be read.
+async function filePages({ buffer, mime = '', name = '' }) {
   if (mime === 'application/pdf' || /\.pdf$/i.test(name)) {
-    const { text } = await extractText(await getDocumentProxy(new Uint8Array(buffer)), { mergePages: true })
-    return text.trim()
+    const { text } = await extractText(await getDocumentProxy(new Uint8Array(buffer)), { mergePages: false })
+    return text.map((t) => t.trim())
   }
-  if (/\.docx$/i.test(name) || mime.includes('wordprocessingml')) return (await mammoth.extractRawText({ buffer })).value.trim()
-  if (mime.startsWith('text/') || TEXT_FILE.test(name)) return buffer.toString('utf8')
+  if (/\.docx$/i.test(name) || mime.includes('wordprocessingml')) return [(await mammoth.extractRawText({ buffer })).value.trim()]
+  if (mime.startsWith('text/') || TEXT_FILE.test(name)) return [buffer.toString('utf8')]
   return null
+}
+
+// Every file the user sends is kept in the long-term archive, so it can be found again months later.
+// The key is the file's content, so the same file sent twice is stored once.
+function archiveFile(media, pages) {
+  if (!pages.some(Boolean)) return
+  const key = `file:${createHash('sha1').update(media.buffer).digest('hex')}`
+  archive.add({ key, source: 'whatsapp/file', title: media.name || 'קובץ', pages: pages.length > 1 ? pages : undefined, text: pages[0] }).catch((e) => console.log(`[archive] ${e.message}`))
 }
 
 const ELEVEN = 'https://api.elevenlabs.io/v1'
@@ -99,7 +109,16 @@ export async function prepare({ text, media }) {
   if (!media) return { text }
   if (media.kind === 'audio') return { text: `[הודעה קולית, תמלול] ${await transcribe(media)}`, voice: true }
   if (media.kind === 'image') return { text: text || 'מה יש בתמונה?', image: `data:${media.mime || 'image/jpeg'};base64,${media.buffer.toString('base64')}` }
-  const content = await fileText(media).catch((e) => `(קריאת הקובץ נכשלה: ${e.message})`)
+  let content = null
+  try {
+    const pages = await filePages(media)
+    if (pages) {
+      archiveFile(media, pages)
+      content = pages.filter(Boolean).join('\n\n')
+    }
+  } catch (e) {
+    content = `(קריאת הקובץ נכשלה: ${e.message})`
+  }
   if (content !== null) return { text: `${text}\n\n[קובץ מצורף: ${media.name}]\n${content.slice(0, MAX_FILE_TEXT) || '(לא נמצא טקסט בקובץ - ייתכן שהוא סרוק כתמונה)'}`.trim() }
   return { text: `${text}\n\n[המשתמש שלח קובץ "${media.name}" מסוג ${media.mime}, אבל אין לך אפשרות לקרוא סוג כזה. אמור לו את זה.]`.trim() }
 }

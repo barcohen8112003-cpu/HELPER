@@ -3,12 +3,19 @@ import assert from 'node:assert/strict'
 import { htmlToText, webSearch, fetchPage } from './web.js'
 import { nextOccurrence } from './scheduler.js'
 import { tools, activeTools } from './tools.js'
+import { tokens, chunkText } from './archive.js'
 
 assert.equal(htmlToText('<p>a &amp; b</p><script>x()</script><div>c</div>'), 'a & b\nc')
 
 const now = Date.parse('2026-10-11T12:00:00Z')
 assert.equal(nextOccurrence('2026-10-09T08:00:00Z', 'daily', now), '2026-10-12T08:00:00.000Z')
 assert.equal(nextOccurrence('2026-10-09T08:00:00Z', 'weekly', now), '2026-10-16T08:00:00.000Z')
+
+// Hebrew prefixes come off, so "בהיסטוריה" finds "היסטוריה"; long text is cut into overlapping passages.
+assert.ok(tokens('בהיסטוריה של המהפכה').includes('היסטוריה'))
+assert.ok(tokens('והמהפכה').includes('מהפכה'))
+const passages = chunkText(Array.from({ length: 30 }, (_, i) => `פסקה ${i} ` + 'מילה '.repeat(50)).join('\n\n'))
+assert.ok(passages.length > 5 && passages.every((p) => p.length <= 1200))
 
 for (const t of tools) {
   assert.match(t.name, /^[a-z_]+$/)

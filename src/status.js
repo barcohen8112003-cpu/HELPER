@@ -4,6 +4,13 @@ import { googleAccounts } from './google.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak } from './media.js'
 import { chatModel } from './llm.js'
+import { stats, embeddingsOn } from './archive.js'
+
+function archiveLine() {
+  const a = stats()
+  const meaning = embeddingsOn() ? `חיפוש לפי משמעות: ${a.withMeaning}/${a.passages}` : 'חיפוש לפי מילים (EMBEDDING_MODEL לא מוגדר)'
+  return `${a.items} פריטים, ${a.passages} קטעים | ${meaning}`
+}
 
 export function ago(ts) {
   if (!ts) return 'עוד לא נבדק'
@@ -47,6 +54,7 @@ export function status(connectedSince) {
     `*מטלות שלא הוגשו (${state.homework.open.length})*`,
     ...state.homework.open.slice(0, 10).map((w) => `• ${w.title} (${w.course}) - ${w.due}`),
     `*זיכרון:* ${state.memory.length} עובדות`,
+    `*ארכיון:* ${archiveLine()}`,
   ]
   return lines.filter((l) => l !== false).join('\n')
 }

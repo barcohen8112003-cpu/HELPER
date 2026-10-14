@@ -103,6 +103,19 @@ const build = () => ({
     pollMinutes: Math.max(2, Number(env('MAIL_POLL_MINUTES', '10')) || 10),
   },
   calendarUrl: env('CALENDAR_ICS_URL'),
+  // Long-term archive (src/archive.js). Without an embedding model the archive still works, on keyword search alone.
+  embeddings: {
+    baseUrl: (env('EMBEDDING_BASE_URL') || env('LLM_BASE_URL', 'https://api.openai.com/v1')).replace(/\/+$/, ''),
+    apiKey: env('EMBEDDING_API_KEY') || env('LLM_API_KEY'),
+    model: env('EMBEDDING_MODEL'),
+  },
+  // The browsing agent (src/browser.js). show: a visible window instead of a headless one, on a computer with a screen.
+  // vision: each step also sends the model a screenshot, for models that take images.
+  browser: {
+    show: env('BROWSER_SHOW') === 'true',
+    vision: env('BROWSER_VISION') === 'true',
+    maxSteps: Math.max(5, Number(env('BROWSER_MAX_STEPS', '25')) || 25),
+  },
   computerMode: ['off', 'ask', 'auto'].includes(env('COMPUTER_MODE', 'ask')) ? env('COMPUTER_MODE', 'ask') : 'ask',
 })
 

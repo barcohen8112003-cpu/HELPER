@@ -197,7 +197,16 @@ function render(S) {
       ['MAIL_PASS', 'סיסמת אפליקציה', { secret: true }],
     ], { clear: 'MAIL_PASS' })),
     connector('יומן (iCal)', 'קריאה בלבד מכתובת iCal סודית', Boolean(S.settings.CALENDAR_ICS_URL), form(S, [['CALENDAR_ICS_URL', 'כתובת iCal']])),
-    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })))
+    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })),
+    connector('ארכיון: חיפוש לפי משמעות', 'בלי זה הארכיון מחפש לפי מילים בלבד', Boolean(S.settings.EMBEDDING_MODEL), form(S, [
+      ['EMBEDDING_MODEL', 'מודל embeddings', { placeholder: 'text-embedding-3-small' }],
+      ['EMBEDDING_BASE_URL', 'כתובת הספק', { hint: 'ריק = הספק של הצ\'אט' }],
+      ['EMBEDDING_API_KEY', 'מפתח API', { secret: true, hint: 'ריק = המפתח של הצ\'אט' }],
+    ], { clear: 'EMBEDDING_API_KEY' })),
+    connector('סוכן גלישה', 'דפדפן שהעוזר לוחץ וממלא בו שדות. התחברות לאתר: /browser login בוואטסאפ', true, form(S, [
+      ['BROWSER_SHOW', 'חלון גלוי', { options: [['false', 'ברקע'], ['true', 'חלון גלוי']] }],
+      ['BROWSER_VISION', 'צילומי מסך למודל', { options: [['false', 'כבוי'], ['true', 'פעיל (רק למודל שמקבל תמונות)']] }],
+    ])))
 
   fill($('activeRows'),
     head('מקורות'),

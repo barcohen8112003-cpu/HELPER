@@ -4,7 +4,9 @@ import { randomInt } from 'node:crypto'
 import { config, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
 import { startWhatsApp } from './whatsapp.js'
-import { runTurn, runTask, resetHistory, compact, setSettingsUrl } from './agent.js'
+import { runTurn, runTask, runBackground, record, resetHistory, compact, setSettingsUrl } from './agent.js'
+import { openForLogin, closeLogin, browserOn } from './browser.js'
+import * as archive from './archive.js'
 import { startScheduler } from './scheduler.js'
 import { prepare, speak } from './media.js'
 import { createOutbox } from './outbox.js'
@@ -50,6 +52,8 @@ setTimeout(() => fs.writeFileSync(HEALTHY, ''), 5 * 60000).unref()
 process.on('unhandledRejection', (e) => console.log(`[error] ${e?.message || e}`))
 
 const CONFIRM_TIMEOUT = 5 * 60000
+// Background jobs each hold a model run and maybe a browser, so only a few at once.
+const MAX_BACKGROUND = 3
 const LATE_NOTE = 120
 const APPROVE = ['👍', '✅', '❤️', '👌']
 const DENY = ['👎', '❌']
@@ -58,6 +62,8 @@ const EXAMPLES = `*דברים לנסות*
 • "תעקוב אחרי המחיר של [קישור] ותגיד לי כשהוא מתחת ל-300"
 • "כל בוקר ב-7:30 תגיד לי מה יש לי היום"
 • "מה יש להגיש השבוע?"
+• "איפה הסיכום ששלחתי על המהפכה התעשייתית?"
+• "תבדוק לי ברקע טיסות לרומא באוגוסט ותשלח לי כשתסיים"
 • לשלוח לי תמונה של דף עבודה, PDF או הודעה קולית`
 const HELP = `*פקודות*
 /status - מה מחובר ואחרי מה אני עוקב
@@ -66,6 +72,7 @@ const HELP = `*פקודות*
 /voice on - עונה בהודעה קולית על כל הודעה, /voice off חוזר לטקסט
 /compact - מסכם את השיחה כדי לחסוך
 /model strong - עובר למודל החזק, /model default חוזר
+/browser login <כתובת> - פותח חלון במחשב כדי שתתחבר לאתר פעם אחת, /browser done סוגר
 /unpair - מנתק את הצ'אט הזה
 /help - ההודעה הזאת
 
@@ -137,6 +144,19 @@ const wa = await startWhatsApp(async (m) => {
     save()
     return wa.send(state.owner.jid, state.voiceMode === 'always' ? 'מצב קול פעיל: אני עונה בהודעה קולית על כל הודעה. /voice off מכבה.' : 'מצב קול כבוי: אני עונה בקול רק על הודעה קולית. /voice on מפעיל.')
   }
+  if (text.startsWith('/browser')) {
+    const [, sub, url] = text.split(/\s+/)
+    if (!browserOn()) return wa.send(state.owner.jid, 'לא נמצא דפדפן במחשב. אפשר להגדיר CHROME_PATH בקובץ .env')
+    if (sub === 'done') {
+      await closeLogin()
+      return wa.send(state.owner.jid, 'סגרתי את החלון. ההתחברות נשמרה, ומעכשיו אני גולש באתר הזה כשאתה מחובר.')
+    }
+    if (sub !== 'login' || !/^https?:\/\//i.test(url || '')) return wa.send(state.owner.jid, 'שימוש: /browser login https://... ואחרי שהתחברת /browser done')
+    return openForLogin(url).then(
+      () => wa.send(state.owner.jid, 'פתחתי חלון דפדפן במחשב. התחבר בו לאתר, ואז שלח /browser done. החלון נסגר לבד אחרי רבע שעה.'),
+      (e) => wa.send(state.owner.jid, `⚠️ ${e.message}`)
+    )
+  }
   if (text === '/reset' || text === '/new') {
     resetHistory()
     return wa.send(state.owner.jid, 'השיחה נוקתה. הזיכרון, התזכורות והמעקבים נשארו.')
@@ -162,7 +182,7 @@ const wa = await startWhatsApp(async (m) => {
       const input = await prepare({ text, media: await m.getMedia() })
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
-      const reply = await runTurn(input.text, { confirm, sendMedia, say, react }, input.image)
+      const reply = await runTurn(input.text, { confirm, sendMedia, say, react, background }, input.image)
       // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
       // The text follows only when it has links, or when speech failed.
       const wantsVoice = input.voice || state.voiceMode === 'always'
@@ -220,6 +240,26 @@ function confirm(question) {
   })
 }
 
+// A long job runs beside the chat instead of holding the queue. Its result is sent when ready, and enters the
+// history only between turns, since a turn in progress is still adding its own tool calls there.
+let backgroundRunning = 0
+function background(instruction) {
+  if (backgroundRunning >= MAX_BACKGROUND) return `כבר רצות ${MAX_BACKGROUND} משימות רקע. בצע את זה עכשיו בעצמך, או אמור למשתמש לחכות.`
+  backgroundRunning++
+  runBackground(instruction, { confirm, sendMedia, say })
+    .then(
+      (reply) => reply || 'משימת הרקע הסתיימה בלי תוצאה.',
+      (e) => `⚠️ משימת הרקע "${instruction.slice(0, 60)}" נכשלה: ${e.message}`
+    )
+    .then((reply) => {
+      queue = queue.then(() => record(instruction, reply))
+      return say(reply)
+    })
+    .catch((e) => console.log(`[background] ${e.message}`))
+    .finally(() => backgroundRunning--)
+  return 'המשימה רצה ברקע, והתוצאה תישלח למשתמש לבד כשתהיה מוכנה. אמור לו בקצרה שיצאת לדרך, ואל תחכה לה.'
+}
+
 const outbox = createOutbox((text) => wa.send(state.owner.jid, text))
 // Scheduled tasks wait their turn in the same queue as chat messages, so two model runs never interleave.
 const scheduledTask = (instruction) => {
@@ -252,6 +292,8 @@ function notify(text, urgent = false, key) {
   return Promise.resolve()
 }
 startScheduler(notify, scheduledTask, monitoring)
+// Passages archived before an embedding model was set get their vectors now, quietly.
+archive.backfill().then((n) => n && console.log(`[archive] ${n} קטעים קיבלו חיפוש לפי משמעות`), (e) => console.log(`[archive] ${e.message}`))
 setInterval(outbox.flush, 30000)
 
 if (!state.owner) {
