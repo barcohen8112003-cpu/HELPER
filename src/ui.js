@@ -25,7 +25,10 @@ const PLAIN = [
   'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
   'MAIL_HOST', 'MAIL_USER', 'MAIL_POLL_MINUTES', 'CALENDAR_ICS_URL',
   'EMBEDDING_MODEL', 'EMBEDDING_BASE_URL', 'BROWSER_SHOW', 'BROWSER_VISION',
+  'CHECK_IN_PER_DAY', 'CHECK_IN_EVERY_MINUTES', 'PREP_TIME', 'WEATHER_LOCATION',
 ]
+// Settings the initiative also takes from chat (src/initiative.js), and the field each is kept under there.
+const INITIATIVE_KEYS = { CHECK_IN_PER_DAY: 'perDay', CHECK_IN_EVERY_MINUTES: 'everyMinutes', PREP_TIME: 'prepTime', WEATHER_LOCATION: 'location' }
 // Read once at startup, so a change only takes effect after a restart.
 const NEEDS_RESTART = ['TIMEZONE', 'LLM_LIGHT', 'MAIL_HOST', 'MAIL_USER', 'MAIL_PASS']
 const LISTS = { reminder: 'reminders', task: 'tasks', watcher: 'watchers', memory: 'memory' }
@@ -98,6 +101,9 @@ export function startUi({ connectedSince, restart }) {
       }
       for (const key of body.clear || []) if (SECRETS.includes(key)) updates[key] = ''
       saveSettings(updates)
+      // The same settings can be changed in chat, and a chat change wins; a change made here replaces it.
+      for (const [key, field] of Object.entries(INITIATIVE_KEYS)) if (key in updates && state.initiative) delete state.initiative[field]
+      save()
       return { saved: Object.keys(updates), restart: Object.keys(updates).some((k) => NEEDS_RESTART.includes(k)) }
     }
     if (route === 'google/remove') return await removeAccount(String(body.email)), {}

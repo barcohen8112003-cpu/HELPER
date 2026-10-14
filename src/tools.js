@@ -14,6 +14,8 @@ import { canSpeak } from './media.js'
 import { checkWatcher } from './watchers.js'
 import * as archive from './archive.js'
 import { browse, browserOn } from './browser.js'
+import * as initiative from './initiative.js'
+import { forecast } from './weather.js'
 
 // The computer tools drive PowerShell on the user's own Windows machine. On a server they would act on the
 // server instead, so there they are simply not offered.
@@ -209,6 +211,36 @@ export const tools = [
     run({ instruction }, ctx) {
       if (!ctx.background) return 'אי אפשר להריץ משימת רקע מתוך משימת רקע או משימה מתוזמנת. בצע את זה עכשיו בעצמך.'
       return ctx.background(instruction)
+    },
+  },
+  {
+    name: 'initiative_settings',
+    description:
+      'משנה מתי ועל מה אתה פונה למשתמש ביוזמתך. כשהוא אומר "תפנה אליי יותר/פחות", "תפסיק לכתוב לי לבד", "בלי עדכוני חדשות", "תמיד תזכיר לי לפני מבחנים", "אני גר ב...", "הכנה למחר ב-21:00" - וגם כשהוא מגיב בשלילה להודעה ששלחת ביוזמתך. בלי פרמטרים מחזיר את המצב הנוכחי.',
+    parameters: obj(
+      {
+        per_day: { type: 'number', description: 'כמה פניות ביום לכל היותר, 0 = כבוי, עד 12' },
+        every_minutes: { type: 'number', description: 'מרווח מינימלי בין פניות, בדקות (מינימום 30)' },
+        prep_time: str('שעת ההכנה של הערב לקראת מחר, HH:MM, או off'),
+        location: str('עיר בשביל מזג האוויר'),
+        add_preference: str('העדפה לשמור, מנוסחת כהוראה ברורה, למשל "לא לפנות לגבי חדשות" או "תמיד להזכיר יומיים לפני מבחן"'),
+        remove_preference: { type: 'number', description: 'מספר ההעדפה למחיקה, מהרשימה שמוחזרת' },
+      },
+      []
+    ),
+    run(args) {
+      return initiative.update(args)
+    },
+  },
+  {
+    name: 'get_weather',
+    description: 'תחזית מזג אוויר (Open-Meteo) לעיר: מינימום ומקסימום, סיכוי לגשם, לכמה ימים.',
+    parameters: obj({ place: str('עיר; ריק = המיקום ששמור בהגדרות היוזמה'), days: { type: 'number', description: '1 עד 7 (ברירת מחדל 3)' } }, []),
+    async run({ place, days = 3 }) {
+      const where = place || initiative.settings().location
+      if (!where) return 'לא ידוע איפה. שאל את המשתמש באיזו עיר, ושמור עם initiative_settings(location).'
+      const f = await forecast(where, days)
+      return JSON.stringify({ place: f.place, days: f.daily })
     },
   },
   {
@@ -563,6 +595,8 @@ const BRIEF = {
   schedule_task: 'Run yourself later with an instruction (a real check, not a fixed text). For recurring checks and following up on open things.',
   list_tasks: 'List scheduled tasks.',
   cancel_task: 'Cancel a scheduled task by id.',
+  initiative_settings: 'Change when and about what you message the user on your own: per_day (0 = off), every_minutes, prep_time (HH:MM or off), location, add/remove a preference. Use when he asks for more/less, or reacts badly to such a message. No args = current settings.',
+  get_weather: 'Weather forecast for a city (min/max, rain chance), up to 7 days.',
   voice_mode: 'always = reply as voice notes to everything ("talk to me"); match = voice only when the user sends voice.',
   react: 'Put one emoji on the user\'s last message; can replace a text reply.',
   get_news: 'Recent news headlines (Israel and world) with time and source.',

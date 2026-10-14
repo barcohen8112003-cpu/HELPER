@@ -220,6 +220,18 @@ export async function search(query, { source, days, limit = 6 } = {}) {
     .map(([c]) => ({ source: c.source, title: c.title, date: new Date(c.at).toLocaleDateString('he-IL'), page: c.page, ref: c.ref || undefined, text: c.text }))
 }
 
+// Items archived in the last `hours`, newest first, one line each: what came in lately, for the initiative to weigh.
+export function recent(hours, source = '') {
+  load()
+  const since = Date.now() - hours * 3600000
+  const seen = new Map()
+  for (const c of chunks) {
+    if (Date.parse(c.at) < since) continue
+    if (c.source.startsWith(source) && !seen.has(c.key)) seen.set(c.key, { source: c.source, title: c.title, at: c.at, start: c.text.slice(0, 200) })
+  }
+  return [...seen.values()].sort((a, b) => b.at.localeCompare(a.at))
+}
+
 export function stats() {
   load()
   return { passages: chunks.length, items: keys.size, withMeaning: chunks.filter((c) => c.vec).length }

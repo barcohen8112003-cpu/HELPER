@@ -12,6 +12,7 @@ import { llm, ask, LONG_PATIENCE } from './llm.js'
 import { activeTools, toolDefs } from './tools.js'
 import { canSpeak } from './media.js'
 import * as archive from './archive.js'
+import * as initiative from './initiative.js'
 
 const MAX_HISTORY = 60
 // In light mode the whole request has to fit a few thousand tokens, so history is folded much sooner.
@@ -62,6 +63,7 @@ Working rules:
 - Be economical: every tool call costs time. Use the fewest calls that answer the question, at most 3 for a lookup, then answer with what you have and say what you did not check.
 - Older tool output is shortened after you read it. When a page gives you a fact you need (a price, a date), carry it forward in your own words.
 - Anything from the past (a file he sent, an old mail, an earlier conversation): search with recall before saying you don't know; cite source, date, page.
+- Initiative: ${initiative.settings().perDay ? `you message him on your own up to ${initiative.settings().perDay}x/day.` : 'off; turn on with initiative_settings if he wants you to reach out.'} When he asks for more/less or reacts badly to such a message, update initiative_settings.
 - browse drives a real browser (click, type) when reading a page is not enough. A job longer than a minute goes to background_task; tell him you started.
 - Save lasting facts with remember without asking. A reminder is a fixed text; schedule_task is a real check you run later.
 - Prices and facts: read the page before quoting, always give the link. You never buy or pay.
@@ -96,6 +98,7 @@ ${persona()}
 • לעקוב בשקט - add_watcher בודק דף כל כמה זמן ומעדכן רק כשיש שינוי. מתאים למחירים, מלאי, תוצאות, פרסומים.
 • לזכור הכול לטווח ארוך - כל קובץ שהמשתמש שולח, כל מייל שנכנס ושיחות ישנות נשמרים בארכיון. לשאלה על משהו מהעבר ("איפה הסיכום על...", "מה כתבו לי לגבי...") חפש עם recall לפני שאתה אומר שאתה לא יודע, וציין מקור, תאריך ועמוד. "תשמור את זה" = archive_save.
 • לגלוש באמת - browse מפעיל דפדפן שלוחץ וממלא שדות: תורים פנויים, מלאי אחרי בחירת דגם, טפסי חיפוש, אתרים שהמשתמש מחובר אליהם. כשמספיק לקרוא דף, fetch_page מהיר יותר.
+• ליזום - ${initiative.settings().perDay ? `אתה פונה אליו לבד עד ${initiative.settings().perDay} פעמים ביום כשיש משהו ששווה (הצלבות בין יומן, מטלות, מיילים ומזג אוויר), וכל ערב מכין אותו למחר. הודעות כאלה מסומנות בהיסטוריה "[משימה מתוזמנת רצה: יוזמה...]".` : 'יוזמה כבויה כרגע. אם הוא רוצה שתפנה אליו בעצמך, הפעל עם initiative_settings.'} כשהוא מבקש יותר, פחות, או מגיב בשלילה להודעה יזומה, עדכן initiative_settings.
 • לעבוד ברקע - משימה שתיקח יותר מדקה (מחקר בכמה אתרים, השוואה, גלישה ארוכה) מעבירים ל-background_task: אמור למשתמש שיצאת לדרך, והתוצאה תגיע אליו לבד.
 • לחפש ולהשוות - חפש בכמה מקורות, קרא את הדפים עצמם לפני שאתה מצטט מחיר, ותמיד צרף קישור. אתה לא מבצע רכישות ולא מזין פרטי תשלום - אתה מוצא את הדיל והמשתמש קונה.
 • לעזור בקוד, בכתיבה, בשיעורים ובתכנון טיולים ואירועים.
@@ -236,10 +239,14 @@ const TASK_PROMPT = `[משימה מתוזמנת - המשתמש לא כתב עכ�
 
 // A scheduled task runs outside the chat: it sees memory and the summary but not the recent messages,
 // and only its outcome is added to the history, so the user can reply to it naturally.
-export async function runTask(instruction, ctx) {
-  const reply = (await converse([{ role: 'user', content: TASK_PROMPT + instruction }], ctx)).trim()
+// label: how the run is named in the history (default: the instruction itself).
+// accept(reply): turns the raw answer into what is sent, or '' for nothing; runs before the history is written.
+export async function runTask(instruction, ctx, { label = instruction, accept = (r) => r } = {}) {
+  let reply = (await converse([{ role: 'user', content: TASK_PROMPT + instruction }], ctx)).trim()
   if (!reply || /^SKIP\b/.test(reply)) return ''
-  state.history.push({ role: 'user', content: `[משימה מתוזמנת רצה: ${instruction}]` }, { role: 'assistant', content: reply })
+  reply = accept(reply)
+  if (!reply) return ''
+  state.history.push({ role: 'user', content: `[משימה מתוזמנת רצה: ${label}]` }, { role: 'assistant', content: reply })
   trimHistory()
   save()
   return reply

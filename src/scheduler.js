@@ -4,13 +4,10 @@ import { ask, llm } from './llm.js'
 import { getNews, formatNews } from './news.js'
 import { mailEvent, calendarEvent } from './monitoring/intake.js'
 
-import { inQuietHours } from './outbox.js'
-
 const NEWS_WINDOW = 4 * 60
-const FIRST_CHECK_IN = 3 * 60000
-const startedAt = Date.now()
 import { checkWatcher } from './watchers.js'
 import * as archive from './archive.js'
+import { initiative } from './initiative.js'
 import { mailSince, watchInbox, watchGmail } from './mail.js'
 import { upcomingEvents, listEvents, calendarOn } from './calendar.js'
 import { googleAccounts, googleEnabled, gmailSince, classroomWork, calendarChanges, accessToken } from './google.js'
@@ -251,32 +248,6 @@ export async function newsDigest() {
   return /^SKIP\b/.test(text) ? '' : text
 }
 
-const CHECK_IN = `יוזמה עצמית: המשתמש ביקש שתפנה אליו מדי פעם בעצמך, בלי שיתחיל שיחה. זה אחד הרגעים האלה.
-בדוק מה יש לך ביד: תזכורות ומשימות קרובות (list_reminders, list_tasks), מה שאתה זוכר עליו, ומה שנאמר קודם בשיחה. אפשר גם get_news אם זה מתאים לו.
-שלח הודעה אחת קצרה שיש בה משהו אמיתי: דבר שמתקרב, המשך לנושא שהוא העלה ולא נסגר, משהו שקשור לתחומי העניין שלו, או שאלה קצרה על משהו ספציפי שהוא סיפר. בסגנון הרגיל שלך.
-אסור: "היי מה קורה" ריק, לחזור על משהו שכבר אמרת היום, להמציא עובדות, או להציע פיצ'רים.
-אם באמת אין שום דבר ששווה הודעה, החזר SKIP.`
-
-// The assistant starts a conversation on its own a few times a day, outside quiet hours.
-// The model may still decline with SKIP: an empty hello is worse than silence.
-async function checkIn(notify, runTask) {
-  const { everyMinutes, maxPerDay } = config.proactive
-  if (!maxPerDay || inQuietHours()) return
-  const s = (state.checkIn ??= { date: '', count: 0, lastAt: 0 })
-  const today = new Date().toDateString()
-  if (s.date !== today) Object.assign(s, { date: today, count: 0 })
-  // The first one comes a few minutes after start-up, so it is clear the feature is alive; then at the set pace.
-  const wait = s.lastAt ? everyMinutes * 60000 : FIRST_CHECK_IN
-  if (s.count >= maxPerDay || Date.now() - Math.max(s.lastAt, startedAt) < wait) return
-  s.lastAt = Date.now()
-  save()
-  const reply = await runTask(CHECK_IN)
-  if (!reply) return
-  s.count++
-  save()
-  await notify(reply)
-}
-
 async function news(notify) {
   if (!/^\d{1,2}:\d{2}$/.test(config.newsTime)) return
   const now = new Date()
@@ -308,7 +279,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, mail, calendar, googleCalendar, homework, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, mail, calendar, googleCalendar, homework, news, initiative]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {

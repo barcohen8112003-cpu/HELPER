@@ -7,6 +7,7 @@ import { startWhatsApp } from './whatsapp.js'
 import { runTurn, runTask, runBackground, record, resetHistory, compact, setSettingsUrl } from './agent.js'
 import { openForLogin, closeLogin, browserOn } from './browser.js'
 import * as archive from './archive.js'
+import { describeSettings } from './initiative.js'
 import { startScheduler } from './scheduler.js'
 import { prepare, speak } from './media.js'
 import { createOutbox } from './outbox.js'
@@ -72,6 +73,7 @@ const HELP = `*פקודות*
 /voice on - עונה בהודעה קולית על כל הודעה, /voice off חוזר לטקסט
 /compact - מסכם את השיחה כדי לחסוך
 /model strong - עובר למודל החזק, /model default חוזר
+/initiative - מתי ועל מה אני פונה אליך בעצמי
 /browser login <כתובת> - פותח חלון במחשב כדי שתתחבר לאתר פעם אחת, /browser done סוגר
 /unpair - מנתק את הצ'אט הזה
 /help - ההודעה הזאת
@@ -122,6 +124,7 @@ const wa = await startWhatsApp(async (m) => {
   if (text === '/help') return wa.send(state.owner.jid, HELP)
   // Only a command typed by the owner here reaches the watch registry. Nothing read from mail or the web can.
   if (text === '/watch' || text.startsWith('/watch ')) return wa.send(state.owner.jid, await monitoring.command(text))
+  if (text === '/initiative') return wa.send(state.owner.jid, `${describeSettings()}\n\nאפשר לשנות במילים: "תפנה אליי יותר", "בלי חדשות", "אני גר בחיפה", "הכנה למחר ב-21:00".`)
   if (text === '/status') return wa.send(state.owner.jid, status(wa.connectedSince()))
   if (text === '/compact') {
     const done = await compact(true).catch((e) => (console.log(`[compact] ${e.message}`), false))
@@ -262,8 +265,8 @@ function background(instruction) {
 
 const outbox = createOutbox((text) => wa.send(state.owner.jid, text))
 // Scheduled tasks wait their turn in the same queue as chat messages, so two model runs never interleave.
-const scheduledTask = (instruction) => {
-  const run = queue.then(() => runTask(instruction, { confirm, sendMedia, say, patient: true }))
+const scheduledTask = (instruction, opts) => {
+  const run = queue.then(() => runTask(instruction, { confirm, sendMedia, say, patient: true }, opts))
   queue = run.catch(() => {})
   return run
 }

@@ -5,6 +5,7 @@ import { calendarOn } from './calendar.js'
 import { canHear, canSpeak } from './media.js'
 import { chatModel } from './llm.js'
 import { stats, embeddingsOn } from './archive.js'
+import { settings } from './initiative.js'
 
 function archiveLine() {
   const a = stats()
@@ -55,6 +56,7 @@ export function status(connectedSince) {
     ...state.homework.open.slice(0, 10).map((w) => `• ${w.title} (${w.course}) - ${w.due}`),
     `*זיכרון:* ${state.memory.length} עובדות`,
     `*ארכיון:* ${archiveLine()}`,
+    `*יוזמה:* ${settings().perDay ? `עד ${settings().perDay} ביום, הכנה למחר ${settings().prepTime}${settings().location ? `, מזג אוויר ב${settings().location}` : ''}` : 'כבויה'} (/initiative)`,
   ]
   return lines.filter((l) => l !== false).join('\n')
 }

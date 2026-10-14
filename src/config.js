@@ -69,8 +69,11 @@ const build = () => ({
   // Listen to Google mailboxes live (IMAP IDLE) so new mail is reported the second it lands. false = poll every two minutes.
   liveMail: env('LIVE_MAIL', 'true') !== 'false',
   newsTime: env('NEWS_BRIEF_TIME'),
-  // Self-initiated messages: how many a day at most (0 = never), and the least time between two.
-  proactive: { maxPerDay: Math.max(0, Number(env('CHECK_IN_PER_DAY', '0')) || 0), everyMinutes: Math.max(30, Number(env('CHECK_IN_EVERY_MINUTES', '180')) || 180) },
+  // Self-initiated messages (src/initiative.js): how many a day at most (0 = never), and the least time between two.
+  proactive: { maxPerDay: Math.max(0, Number(env('CHECK_IN_PER_DAY', '4')) || 0), everyMinutes: Math.max(30, Number(env('CHECK_IN_EVERY_MINUTES', '180')) || 180) },
+  // The evening look at tomorrow (HH:MM, or "off"), and the place whose weather counts. Both can also be set in chat.
+  prepTime: env('PREP_TIME'),
+  weatherLocation: env('WEATHER_LOCATION'),
   newsFeeds: env('NEWS_FEEDS', DEFAULT_FEEDS).split(',').map((s) => s.trim()).filter(Boolean),
   tavilyKey: env('TAVILY_API_KEY'),
   // Speech can live on a different provider than the chat model; it defaults to the same one.
