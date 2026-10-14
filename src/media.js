@@ -102,6 +102,13 @@ export async function speak(text) {
   return Buffer.from(await res.arrayBuffer())
 }
 
+// A settings file full of keys (.env, or text with a few API_KEY=... lines) is never read: its contents would go
+// to the model provider and into the archive. The model is only told it arrived, so it can warn the user.
+const SECRET_NAME = /(^|[\\/.])env(\.[a-z]+)?$|\.pem$|\.key$/i
+const SECRET_LINE = /^\s*[A-Z][A-Z0-9_]*(KEY|TOKEN|SECRET|PASS|PASSWORD)\s*=\s*\S{8,}/gm
+export const looksSecret = (name = '', text = '') => SECRET_NAME.test(name) || (text.match(SECRET_LINE) || []).length >= 2
+const SECRET_NOTE = '[המשתמש שלח קובץ שנראה כמו קובץ סודות (מפתחות API או סיסמאות). הוא לא נקרא, לא נשלח אליך ולא נשמר. אמור לו בקצרה שהקובץ לא נקרא, ושכדאי למחוק את ההודעה מהצ\'אט כי יש בה מפתחות. אל תבקש ממנו לשלוח אותו שוב.]'
+
 // Turns an incoming message into what the model gets: text, plus an image data URL if one was sent.
 // `voice` marks a message that was spoken, so the reply can be spoken too.
 export async function prepare({ text, media }) {
@@ -112,6 +119,7 @@ export async function prepare({ text, media }) {
   let content = null
   try {
     const pages = await filePages(media)
+    if (pages && looksSecret(media.name, pages.join('\n'))) return { text: `${text}\n\n${SECRET_NOTE}`.trim() }
     if (pages) {
       archiveFile(media, pages)
       content = pages.filter(Boolean).join('\n\n')
