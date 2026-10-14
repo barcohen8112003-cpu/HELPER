@@ -49,5 +49,21 @@ services:
         value: "08:00"
       - key: NEWS_BRIEF_TIME
         value: "08:00"
+      # Initiative: up to this many self-started messages a day, an evening look at tomorrow, weather for this city.
       - key: CHECK_IN_PER_DAY
-        value: "3"
+        value: "4"
+      - key: PREP_TIME
+        value: "20:00"
+      - key: WEATHER_LOCATION
+        sync: false
+      # Search the archive by meaning, not only by words. Groq has no embeddings, so this is a second provider
+      # (for example https://api.openai.com/v1 with text-embedding-3-small). Leave empty for word search only.
+      - key: EMBEDDING_BASE_URL
+        sync: false
+      - key: EMBEDDING_API_KEY
+        sync: false
+      - key: EMBEDDING_MODEL
+        sync: false
+      # The browsing agent runs the image's Chromium, headless. A server has no screen, so /browser login does not work here.
+      - key: BROWSER_MAX_STEPS
+        value: "20"
