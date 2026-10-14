@@ -1,0 +1,2 @@
+# Shell scripts run on Android/Linux: Windows line endings would break them.
+*.sh text eol=lf
