@@ -46,12 +46,16 @@ const build = () => ({
     strongModel: env('LLM_STRONG_MODEL'),
     // One model or several, comma-separated, tried in this order when the main one is out of budget or failing.
     fallbackModels: env('LLM_FALLBACK_MODEL').split(',').map((s) => s.trim()).filter(Boolean),
+    // A second provider, used only when every model of the first is out of quota or failing.
+    backup: { baseUrl: env('LLM_BACKUP_BASE_URL').replace(/\/+$/, ''), apiKey: env('LLM_BACKUP_API_KEY'), model: env('LLM_BACKUP_MODEL') },
     // Light mode: for providers with a small tokens-per-minute budget (free tiers). Short persona, short history, short tool results.
     light: env('LLM_LIGHT') === 'true',
   },
   botName: env('BOT_NAME', 'Helper'),
   briefTime: env('DAILY_BRIEF_TIME'),
   briefAlways: env('DAILY_BRIEF_ALWAYS') === 'true',
+  // The morning message holds only today: calendar events, tasks and lessons. Night alerts go out separately.
+  briefOnlyToday: env('DAILY_BRIEF_ONLY_TODAY', 'true') !== 'false',
   // Quiet monitoring (src/monitoring). Every default works with nothing set.
   watch: {
     statePath: env('WATCH_STATE_PATH') ? path.resolve(ROOT, env('WATCH_STATE_PATH')) : path.join(DATA_DIR, 'watch-state.json'),
@@ -97,6 +101,59 @@ const build = () => ({
     readOnly: env('GOOGLE_READONLY_ACCOUNTS').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
   },
   githubToken: env('GITHUB_TOKEN'),
+  // Phone calls: the ElevenLabs voice agent, the secret its tool calls carry, and the local port its server listens on.
+  phone: {
+    agentId: env('ELEVENLABS_AGENT_ID'),
+    secret: env('VOICE_SECRET'),
+    port: Number(env('VOICE_PORT', '3211')) || 3211,
+  },
+  // A reminder before each lesson, from the Webtop timetable. LESSON_TIMES: when each lesson starts. At this school
+  // lessons come in pairs that are one unit (1-2: 8:10-9:30 ...), so both lessons of a pair share its start time.
+  lessons: {
+    enabled: env('LESSON_REMINDERS', 'true') !== 'false',
+    beforeMinutes: Number(env('LESSON_REMIND_MINUTES', '10')) || 10,
+    times: env('LESSON_TIMES', '1=08:10,2=08:10,3=09:45,4=09:45,5=11:20,6=11:20,7=13:10,8=13:10,9=14:40,10=14:40,11=16:10,12=16:10'),
+    // When each lesson ends. The reminder for a lesson goes out when the one before it ends; the first lesson of the
+    // day, which has nothing before it, is reminded beforeMinutes ahead.
+    ends: env('LESSON_END_TIMES', '1=09:30,2=09:30,3=11:05,4=11:05,5=12:40,6=12:40,7=14:30,8=14:30,9=16:00,10=16:00,11=17:30,12=17:30'),
+  },
+  // Twilio, used only to place the call out to the owner. TWILIO_FROM is the number the call comes from.
+  twilio: { sid: env('TWILIO_ACCOUNT_SID'), token: env('TWILIO_AUTH_TOKEN'), from: env('TWILIO_FROM', '+17372508034') },
+  // A signed-in browser window kept open on this computer (webtop-browser.bat), for sites that need a login.
+  webtop: {
+    url: env('WEBTOP_URL'),
+    port: Number(env('WEBTOP_DEBUG_PORT', '9223')) || 9223,
+    keepAliveMinutes: Math.max(1, Number(env('WEBTOP_KEEPALIVE_MINUTES', '10')) || 10),
+  },
+  // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
+  // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
+  gemini: {
+    url: env('GEMINI_URL'),
+    port: Number(env('GEMINI_DEBUG_PORT', '9224')) || 9224,
+    timeoutMinutes: Math.max(2, Number(env('GEMINI_TIMEOUT_MINUTES', '15')) || 15),
+  },
+  // The assistant's own browser for errands (run_errand), with its own profile in data/errand-profile. Opened on demand.
+  errand: { port: Number(env('ERRAND_DEBUG_PORT', '9225')) || 9225 },
+  // "תשאל את ג'מיני": Google's Gemini through its official API (key from aistudio.google.com/apikey).
+  geminiApi: { key: env('GEMINI_API_KEY'), model: env('GEMINI_MODEL', 'gemini-2.5-flash') },
+  classroomWork: {
+    mode: ['auto', 'ask', 'off'].includes(env('CLASSROOM_AUTOWORK', 'auto')) ? env('CLASSROOM_AUTOWORK', 'auto') : 'auto',
+    maxMb: Math.max(1, Number(env('CLASSROOM_MAX_MB', '50')) || 50),
+  },
+  // The assistant's own Linux machine in VirtualBox (see src/vm.js).
+  vm: { name: env('VM_NAME', 'helper-box'), port: Number(env('VM_SSH_PORT', '2222')) || 2222, user: env('VM_USER', 'helper') },
+  // Tools that always wait for the user's "yes" in the chat before they run, however they were called.
+  // Typing, key presses and unlocking amount to running commands; the clipboard may hold a password.
+  confirmAlways: env('CONFIRM_ALWAYS', 'pc_type,pc_press_key,pc_unlock,pc_clipboard_get,pc_clipboard_set').split(',').map((s) => s.trim()).filter(Boolean),
+  // Turning the PC on (src/wake.js). mac is the PC's network card; relayTopic and secret pair this program with
+  // home-relay/wake-relay.mjs when it runs somewhere that cannot reach the home network directly.
+  wake: {
+    mac: env('WAKE_MAC'),
+    broadcast: env('WAKE_BROADCAST'),
+    relayTopic: env('WAKE_RELAY_TOPIC'),
+    secret: env('WAKE_SECRET'),
+    relayBase: env('WAKE_RELAY_BASE', 'https://ntfy.sh').replace(/\/+$/, ''),
+  },
   imageModel: env('IMAGE_MODEL'),
   mail: {
     accounts: mailAccounts(),

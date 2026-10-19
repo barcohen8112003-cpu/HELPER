@@ -30,6 +30,26 @@ export function briefMinutes() {
   return inside ? q.to : brief
 }
 
+// The "only today" morning message: calendar events, tasks and lessons, nothing else.
+export function todayText(day, today) {
+  const lines = []
+  if (day.events?.length) lines.push('', 'ביומן:', ...day.events.map((e) => `- ${e.when} ${e.title}`))
+  const todo = [...(day.tasks || []).map((t) => `- ${t.title}${t.overdue ? ' (באיחור)' : ''}`), ...(day.reminders || []).map((r) => `- ${r.time} ${r.text}`)]
+  if (todo.length) lines.push('', 'משימות להיום:', ...todo)
+  if (day.lessons) lines.push('', 'שיעורים:', day.lessons)
+  if (!lines.length) return config.briefAlways ? 'בוקר טוב. אין היום יומן, משימות או שיעורים.' : ''
+  return [`בוקר טוב. היום ${today.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' })}:`, ...lines].join('\n')
+}
+
+// What piled up overnight (important mail and notices held for the morning). Sent as its own message, and only when
+// there is something, so the morning message stays about today.
+export function nightText(s) {
+  const held = s.watches.flatMap((w) => w.pending_batch).filter((item) => !s.delivered.includes(item.event_id))
+  const lines = [...held.map((item) => `- ${sourceLabel(item.source)}: ${item.title}`), ...s.notes.map((n) => `- ${n.text}`)]
+  if (s.suspicious.length) lines.push(...s.suspicious.map((x) => `- זוהה ניסיון דיוג חשוד: "${x.title}" (${x.source}). לא נגעתי בו`))
+  return lines.length ? ['נצבר בלילה:', ...lines].join('\n') : ''
+}
+
 // deps: { send(text) => Promise<messageId>, now() => Date, getDay() => Promise<{ reminders, events, homework }> }
 export function createDelivery(deps) {
   const now = () => deps.now()
@@ -125,6 +145,7 @@ export function createDelivery(deps) {
     const s = load()
     const today = now()
     const day = (await deps.getDay?.().catch(() => null)) || { reminders: [], events: [], homework: [] }
+    if (config.briefOnlyToday) return todayText(day, today)
     const lines = []
     const agenda = [...day.events.map((e) => `- ${e.when} ${e.title}`), ...day.reminders.map((r) => `- ${r.time} ${r.text}`)]
     if (agenda.length) lines.push(`היום (${today.toLocaleDateString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric' })}):`, ...agenda)
@@ -165,6 +186,9 @@ export function createDelivery(deps) {
     const text = await buildBrief()
     s.brief.lastDate = today
     if (text) await sendNow(text, { event_id: `brief:${today}` })
+    // In the only-today mode the night's alerts are not part of that message; they leave on their own, if there are any.
+    const night = config.briefOnlyToday ? nightText(s) : ''
+    if (night) await sendNow(night, { event_id: `night:${today}` })
     for (const w of s.watches) w.pending_batch = []
     s.notes = []
     s.suspicious = []

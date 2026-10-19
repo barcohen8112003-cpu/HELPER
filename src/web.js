@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { config, DATA_DIR } from './config.js'
+import { isSessionUrl, readSessionPage } from './session.js'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 
@@ -76,6 +77,8 @@ async function fetchText(url) {
 // Plain fetch first; if that fails or comes back nearly empty, retry in a real browser.
 export async function fetchPage(url, maxChars = 12000) {
   if (!/^https?:\/\//i.test(url)) throw new Error('רק כתובות http/https')
+  // The site that needs a login is read from the signed-in window, not downloaded anonymously.
+  if (isSessionUrl(url)) return readSessionPage(url, maxChars)
   let text = ''
   let error
   try {

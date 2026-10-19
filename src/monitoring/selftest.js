@@ -13,6 +13,7 @@ Object.assign(process.env, {
   QUIET_HOURS: '22:00-08:00',
   DAILY_BRIEF_TIME: '07:30',
   DAILY_BRIEF_ALWAYS: 'false',
+  DAILY_BRIEF_ONLY_TODAY: 'false', // the sections below test the full brief; the only-today mode has its own scenario
   WATCH_CHECK_TIMEOUT_MS: '400',
   WATCH_OVERRIDE_SOURCE: '',
   WATCH_OVERRIDE_TOPIC: 'בגרויות=interrupt-all',
@@ -217,6 +218,33 @@ for (const n of [80, 81, 82]) await boom.handleEvent(mail(n, `x${n}`))
 assert.equal(watch().state, 'error')
 assert.match(await boom.command('/watch status'), /watch-mail - mail \[שגיאה/)
 ok('watches: local filter needs no model, pause and remove work, an offline send is retried, 3 failures mark the watch as error')
+
+// ---- the only-today mode: today's message, and the night's alerts separately ----
+// Last, on days nothing above uses, so the clock only moves forward.
+config.briefOnlyToday = true
+// A clean slate: the tests above leave watches paused, in error and with queued sends.
+fs.rmSync(config.watch.statePath, { force: true })
+forget()
+mon = start()
+at(6, 0, 21)
+script = () => ({ decision: 'batch', reason: 'טוב לדעת', confidence: 'high', deadline: null, topic: 'מערכת', summary: '' })
+sent = []
+await mon.handleEvent(mail(61, 'עדכון בלוח המבחנים'))
+await mon.tick()
+assert.equal(sent.length, 0, 'quiet hours: nothing leaves at night')
+at(8, 0, 21)
+await mon.tick()
+assert.equal(sent.length, 2, 'two messages: today, then the night alerts')
+assert.match(sent[0], /^בוקר טוב\. היום/)
+assert.match(sent[0], /ביומן:\n- 08:00-09:30 /)
+assert.ok(!sent[0].includes('נצבר בלילה') && !sent[0].includes('חשבונית'), 'the morning message is only about today')
+assert.match(sent[1], /^נצבר בלילה:/)
+assert.ok(sent[1].includes('מייל kid: עדכון בלוח המבחנים'), 'and it carries the overnight alert')
+assert.equal(watch().pending_batch.length, 0, 'the night batch was handed over, not left behind')
+await mon.tick()
+assert.equal(sent.length, 2, 'once a day')
+config.briefOnlyToday = false
+ok('only-today mode: the morning message holds only the day; the night alerts arrive as their own message')
 
 // ---- the file ----
 assert.ok(!fs.existsSync(config.watch.statePath + '.tmp'), 'written by rename, no temp file left behind')

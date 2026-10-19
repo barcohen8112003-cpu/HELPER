@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helper: Personal Assistant</title>
+<meta name="description" content="Helper is a personal assistant used by a single person. Home page and privacy policy.">
+<style>
+  :root { --bg: #ffffff; --text: #1d1b26; --muted: #5d5970; --accent: #7c4dff; --line: #e7e4f0; --card: #f7f5fc; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d0b16; --text: #f1eefa; --muted: #a9a3bf; --accent: #a78bfa; --line: #2a2540; --card: #16132a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 64px; }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+  .orb { width: 44px; height: 44px; border-radius: 50%; flex: none; background: radial-gradient(circle at 38% 34%, #fff 0, #67e8f9 18%, #8b5cf6 62%, #f472b6 100%); box-shadow: 0 0 24px #8b5cf666; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0; }
+  .tagline { color: var(--muted); margin: 6px 0 32px; }
+  h2 { font-size: 21px; margin: 40px 0 10px; padding-top: 18px; border-top: 1px solid var(--line); }
+  h3 { font-size: 17px; margin: 22px 0 6px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 16px 0; }
+  ul { padding-inline-start: 22px; }
+  li { margin: 4px 0; }
+  a { color: var(--accent); }
+  .muted { color: var(--muted); font-size: 14px; }
+  nav a { margin-inline-end: 16px; }
+  [dir="rtl"] { text-align: right; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="orb" aria-hidden="true"></div>
+    <h1>Helper</h1>
+  </header>
+  <p class="tagline">A personal assistant that runs on its owner's own computer and is used by one person only.</p>
+  <nav><a href="#about">About</a><a href="#privacy">Privacy Policy</a><a href="#he">עברית</a></nav>
+
+  <h2 id="about">About</h2>
+  <p>Helper is a private, non-commercial assistant built and used by a single individual for his own accounts. It helps him keep track of his own school assignments, calendar, tasks and email, and sends him reminders through his own WhatsApp chat.</p>
+  <p>Helper is not offered to the public, has no other users, and no one can sign up for it.</p>
+
+  <h2 id="privacy">Privacy Policy</h2>
+  <p class="muted">Effective date: October 19, 2026</p>
+
+  <div class="card">
+    <strong>In short:</strong> Helper only accesses the Google data of its owner, only to help the owner, keeps it on the owner's own computer, and never sells, shares or transfers it to anyone.
+  </div>
+
+  <h3>Who uses this app</h3>
+  <p>The only user of Helper is its developer, who connects his own Google accounts. No data of any other person is collected.</p>
+
+  <h3>Google data the app accesses</h3>
+  <ul>
+    <li><strong>Gmail:</strong> reads messages to notify the owner of important mail, and sends email only after the owner explicitly approves each message.</li>
+    <li><strong>Google Calendar:</strong> reads events and adds events the owner asks for.</li>
+    <li><strong>Google Tasks:</strong> reads and adds the owner's tasks.</li>
+    <li><strong>Google Drive:</strong> read-only access to files the owner asks about.</li>
+    <li><strong>Google Classroom:</strong> read-only access to the owner's courses, assignments and submission status.</li>
+  </ul>
+
+  <h3>How the data is used</h3>
+  <p>The data is used only to provide features to the owner: reminders, summaries, answers to his questions and notifications about his own assignments, events and messages. It is not used for advertising, profiling, or training machine learning models.</p>
+
+  <h3>Where the data is stored</h3>
+  <p>Access tokens and the assistant's working data are stored locally on the owner's own computer. To answer a request, relevant text may be sent to the AI model provider the owner configured, solely to produce that answer.</p>
+
+  <h3>Sharing</h3>
+  <p>Google user data is never sold, rented or shared with third parties, and never transferred except as needed to provide the features above to the owner himself.</p>
+
+  <h3>Limited Use</h3>
+  <p>Helper's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+  <h3>Deleting data and revoking access</h3>
+  <p>Access can be revoked at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>. Removing an account from Helper deletes its stored token from the owner's computer.</p>
+
+  <h3>Contact</h3>
+  <p><a href="mailto:naorkurtz97@gmail.com">naorkurtz97@gmail.com</a></p>
+
+  <h2 id="he" dir="rtl">בעברית</h2>
+  <div dir="rtl">
+    <p>Helper הוא עוזר אישי פרטי, שנבנה ומשמש אדם אחד בלבד, לחשבונות שלו עצמו. הוא לא מוצע לציבור ואין בו משתמשים אחרים.</p>
+    <p>העוזר ניגש רק למידע של הבעלים ב-Google (מייל, יומן, משימות, Drive לקריאה ו-Classroom לקריאה), רק כדי לעזור לו, שומר אותו על המחשב של הבעלים, ולעולם לא מוכר, משתף או מעביר אותו לאיש. מייל נשלח רק אחרי אישור מפורש של הבעלים לכל הודעה.</p>
+    <p>אפשר לבטל את הגישה בכל רגע ב-<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>. יצירת קשר: <a href="mailto:naorkurtz97@gmail.com">naorkurtz97@gmail.com</a></p>
+  </div>
+</main>
+</body>
+</html>

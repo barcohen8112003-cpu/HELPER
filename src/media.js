@@ -41,6 +41,34 @@ async function elevenSpeak(text) {
   return Buffer.from(await res.arrayBuffer())
 }
 
+export async function elevenSpeakMp3(text) {
+  if (!config.elevenlabs.apiKey) throw new Error('חסר ELEVENLABS_API_KEY בקובץ .env')
+  if (!config.elevenlabs.voiceId) throw new Error('חסר ELEVENLABS_VOICE_ID בקובץ .env')
+  const spoken = spokenText(text)
+  const models = [config.elevenlabs.ttsModel, 'eleven_multilingual_v2', 'eleven_turbo_v2_5'].filter(Boolean)
+
+  let lastErr = null
+  for (const model_id of models) {
+    try {
+      const res = await fetch(`${ELEVEN}/text-to-speech/${config.elevenlabs.voiceId}?output_format=mp3_44100_128`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'xi-api-key': config.elevenlabs.apiKey },
+        body: JSON.stringify({ text: spoken, model_id }),
+        signal: AbortSignal.timeout(120000),
+      })
+      if (res.ok) {
+        return Buffer.from(await res.arrayBuffer())
+      }
+      const errText = await res.text()
+      console.error(`[elevenlabs] Model ${model_id} failed (${res.status}): ${errText.slice(0, 150)}`)
+      lastErr = new Error(`ElevenLabs HTTP ${res.status}: ${errText.slice(0, 150)}`)
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  throw lastErr || new Error('ElevenLabs speaking failed')
+}
+
 export const canHear = () => Boolean(config.elevenlabs.apiKey || config.voice.sttModel)
 export const canSpeak = () => Boolean(config.elevenlabs.apiKey || config.voice.ttsModel)
 

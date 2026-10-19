@@ -1,0 +1,23 @@
+# Run Helper 24/7 on a VPS (Oracle Always Free, or any Docker host).
+# Usage on the server:
+#   docker compose up -d --build
+# Logs (pairing code / QR path):
+#   docker compose logs -f
+services:
+  helper:
+    build: .
+    container_name: helper
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HELPER_DATA_DIR: /var/data
+      TIMEZONE: Asia/Jerusalem
+      COMPUTER_MODE: "off"
+      NODE_ENV: production
+    volumes:
+      - helper-data:/var/data
+    # Chromium inside the image needs these for headless page reads.
+    shm_size: "256mb"
+
+volumes:
+  helper-data:

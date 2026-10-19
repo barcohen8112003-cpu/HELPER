@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>לוח בקרה - Helper</title>
+<style>
+:root {
+  --bg0: #0b0e17;
+  --bg1: #141a2b;
+  --glass: rgba(255, 255, 255, 0.06);
+  --glass-strong: rgba(255, 255, 255, 0.1);
+  --line: rgba(255, 255, 255, 0.12);
+  --text: #eef1fa;
+  --muted: #9aa4bf;
+  --accent: #7c9cff;
+  --accent2: #5eead4;
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --radius: 16px;
+  --gutter: 16px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  min-height: 100vh;
+  background: radial-gradient(1100px 600px at 85% -10%, #26356b 0%, transparent 60%), radial-gradient(900px 500px at 0% 110%, #134e4a 0%, transparent 55%), var(--bg0);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", "Arial Hebrew", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: var(--accent); }
+header.top {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px var(--gutter);
+  background: rgba(11, 14, 23, 0.72);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+header.top h1 { font-size: 18px; margin: 0; white-space: nowrap; }
+header.top .spacer { flex: 1; }
+header.top .stamp { color: var(--muted); font-size: 13px; white-space: nowrap; }
+button, input, select {
+  font: inherit; color: inherit;
+}
+button.ghost, .btn {
+  background: var(--glass); border: 1px solid var(--line); color: var(--text);
+  padding: 7px 14px; border-radius: 999px; cursor: pointer;
+}
+button.ghost:hover, .btn:hover { background: var(--glass-strong); }
+nav.tabs {
+  display: flex; gap: 6px; overflow-x: auto; padding: 10px var(--gutter);
+  scrollbar-width: none;
+}
+nav.tabs::-webkit-scrollbar { display: none; }
+nav.tabs a {
+  flex: 0 0 auto; text-decoration: none; color: var(--muted);
+  padding: 8px 16px; border-radius: 999px; border: 1px solid transparent;
+}
+nav.tabs a:hover { color: var(--text); }
+nav.tabs a[aria-current="page"] {
+  color: var(--text); background: var(--glass-strong); border-color: var(--line);
+}
+main { max-width: 1100px; margin: 0 auto; padding: 8px var(--gutter) 60px; }
+h2 { font-size: 22px; margin: 8px 0 14px; }
+h3 { font-size: 16px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.grid.wide { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.card {
+  background: var(--glass); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+  min-width: 0;
+}
+.stat .num { font-size: 34px; font-weight: 700; line-height: 1.1; }
+.stat .lbl { color: var(--muted); font-size: 14px; }
+.stat.a .num { color: var(--accent); }
+.stat.b .num { color: var(--accent2); }
+.stat.c .num { color: var(--warn); }
+.stat.d .num { color: var(--good); }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.row.between { justify-content: space-between; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.pill {
+  display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px;
+  background: var(--glass-strong); border: 1px solid var(--line); color: var(--muted);
+}
+.pill.good { color: var(--good); border-color: rgba(74, 222, 128, 0.4); }
+.pill.warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.4); }
+.pill.bad { color: var(--bad); border-color: rgba(248, 113, 113, 0.4); }
+.pill.tag { cursor: pointer; }
+.pill.tag:hover, .pill.tag.on { color: var(--text); background: rgba(124, 156, 255, 0.25); }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.list li:last-child { border-bottom: 0; }
+.list .name { overflow-wrap: anywhere; }
+.bar { height: 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+.bar.full > i { background: linear-gradient(90deg, #22c55e, var(--good)); }
+.week { display: flex; gap: 4px; }
+.week span { width: 18px; height: 18px; border-radius: 5px; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--line); }
+.week span.on { background: var(--good); border-color: transparent; }
+.week span.today { outline: 2px solid var(--accent); outline-offset: 1px; }
+.search {
+  width: 100%; padding: 11px 16px; border-radius: 12px; border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25); outline: none;
+}
+.search:focus { border-color: var(--accent); }
+select.search { width: auto; min-width: 150px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: start; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 13px; }
+td.n, th.n { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+.note { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+.check { width: 20px; height: 20px; border-radius: 6px; border: 1px solid var(--line); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; }
+.check.on { background: var(--good); color: #052e16; border-color: transparent; }
+.done { text-decoration: line-through; color: var(--muted); }
+.empty { text-align: center; color: var(--muted); padding: 30px 10px; }
+.err { color: var(--bad); }
+.toolname { direction: ltr; unicode-bidi: isolate; font-family: ui-monospace, Consolas, monospace; font-size: 14px; color: var(--accent2); }
+.params { direction: ltr; unicode-bidi: isolate; font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); }
+details.cat { margin-bottom: 12px; }
+details.cat > summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 600; }
+details.cat > summary::-webkit-details-marker { display: none; }
+.tool { padding: 10px 0; border-top: 1px solid var(--line); }
+.tool:first-of-type { margin-top: 10px; }
+svg.chart { width: 100%; height: auto; display: block; }
+svg.chart text { fill: var(--text); font-size: 12px; font-family: inherit; }
+svg.chart .axis { fill: var(--muted); }
+svg.chart .gridline { stroke: rgba(255, 255, 255, 0.1); stroke-width: 1; }
+@media (max-width: 560px) {
+  header.top .stamp { display: none; }
+  .stat .num { font-size: 28px; }
+  h2 { font-size: 20px; }
+  th, td { padding: 8px 5px; font-size: 14px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bar > i { transition: width 0.5s ease; }
+  .card { animation: rise 0.25s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>לוח בקרה</h1>
+  <span class="spacer"></span>
+  <span class="stamp" id="stamp"></span>
+  <button class="ghost" id="refresh" type="button">רענון</button>
+</header>
+<nav class="tabs" id="tabs" aria-label="ניווט"></nav>
+<main id="view" aria-live="polite"></main>
+
+<script>
+'use strict'
+// ------------------------------------------------------------------
+// Safety first: data from Helper is only ever put into the page as text.
+//   esc(s)   escapes a string for the rare place that needs an HTML/attribute-safe string
+//   h(...)   builds DOM nodes; children that are strings become text nodes, never markup
+// No HTML strings are ever parsed anywhere in this file.
+// ------------------------------------------------------------------
+const esc = (s) => String(s ?? '').replace(/[&<>"'`]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' })[c])
+
+const SVG_NS = 'http://www.w3.org/2000/svg'
+const SAFE_ATTR = /^[a-zA-Z][a-zA-Z0-9:_-]*$/
+
+function h(tag, attrs, ...children) {
+  const svg = tag === 'svg' || (attrs && attrs.__svg)
+  const el = svg ? document.createElementNS(SVG_NS, tag) : document.createElement(tag)
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === '__svg' || v === undefined || v === null || v === false) continue
+      if (k === 'class') el.setAttribute('class', String(v))
+      else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v)
+      else if (SAFE_ATTR.test(k) && !/^on/i.test(k) && k !== 'style' && k !== 'href' && k !== 'src') el.setAttribute(k, v === true ? '' : String(v))
+      else if (k === 'href' && typeof v === 'string' && /^#[a-z]+$/.test(v)) el.setAttribute('href', v)
+      else if (k === 'style' && typeof v === 'string' && /^[a-z0-9%.:;\s#-]*$/i.test(v)) el.setAttribute('style', v)
+    }
+  }
+  for (const c of children.flat(Infinity)) {
+    if (c === null || c === undefined || c === false) continue
+    el.appendChild(c instanceof Node ? c : document.createTextNode(String(c)))
+  }
+  return el
+}
+const sv = (tag, attrs, ...kids) => h(tag, { ...(attrs || {}), __svg: true }, ...kids)
+
+const fmtMoney = (n) => new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 }).format(Number(n) || 0) + ' ₪'
+const fmtNum = (n) => new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 }).format(Number(n) || 0)
+const fmtDate = (s) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''))
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : String(s || '')
+}
+const monthName = (m) => {
+  const names = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר']
+  const x = /^(\d{4})-(\d{2})$/.exec(String(m || ''))
+  return x ? `${names[Number(x[2]) - 1] || x[2]} ${x[1]}` : String(m || '')
+}
+const daysText = (n) => (n === 0 ? 'היום' : n === 1 ? 'מחר' : n === -1 ? 'אתמול' : n > 0 ? `בעוד ${n} ימים` : `לפני ${-n} ימים`)
+const daysClass = (n) => (n < 0 ? '' : n <= 3 ? 'bad' : n <= 14 ? 'warn' : 'good')
+const debounce = (fn, ms = 200) => {
+  let t
+  return (...a) => {
+    clearTimeout(t)
+    t = setTimeout(() => fn(...a), ms)
+  }
+}
+
+// ------------------------------------------------------------------
+// data access
+// ------------------------------------------------------------------
+async function api(name, params) {
+  const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString() : ''
+  const res = await fetch('/dash/api/' + name + qs, { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
+  let body = null
+  try { body = await res.json() } catch { /* not json */ }
+  if (!res.ok) throw new Error((body && body.error) || 'שגיאה ' + res.status)
+  return body
+}
+
+// ------------------------------------------------------------------
+// reusable pieces
+// ------------------------------------------------------------------
+function stat(cls, value, label) {
+  return h('div', { class: 'card stat ' + cls }, h('div', { class: 'num' }, value), h('div', { class: 'lbl' }, label))
+}
+function empty(msg) { return h('div', { class: 'empty' }, msg) }
+function progress(percent, label) {
+  const p = Math.max(0, Math.min(100, Number(percent) || 0))
+  return h('div', { class: 'bar' + (p >= 100 ? ' full' : ''), role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': p, 'aria-label': label || '' },
+    h('i', { style: 'width:' + p + '%' }))
+}
+function card(title, ...body) { return h('section', { class: 'card' }, title ? h('h3', null, title) : null, ...body) }
+
+// Horizontal bars drawn as inline SVG. Right-to-left: bars grow from the right edge.
+function barChartSvg(items, valueFmt) {
+  const rowH = 34
+  const W = 640
+  const labelW = 130
+  const valueW = 90
+  const H = Math.max(items.length, 1) * rowH + 24
+  const max = Math.max(...items.map((i) => i.total), 1)
+  const plotW = W - labelW - valueW
+  const palette = ['#7c9cff', '#5eead4', '#fbbf24', '#f472b6', '#a78bfa', '#4ade80', '#fb923c', '#38bdf8']
+  const svg = sv('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'סכום הוצאות לפי קטגוריה' })
+  for (let g = 0; g <= 4; g++) {
+    const x = W - labelW - (plotW * g) / 4
+    svg.appendChild(sv('line', { class: 'gridline', x1: x, x2: x, y1: 4, y2: H - 20 }))
+    svg.appendChild(sv('text', { class: 'axis', x, y: H - 5, 'text-anchor': 'middle' }, valueFmt((max * g) / 4)))
+  }
+  items.forEach((it, i) => {
+    const y = 8 + i * rowH
+    const w = Math.max(2, (it.total / max) * plotW)
+    const color = palette[i % palette.length]
+    const trimmed = it.name.length > 16 ? it.name.slice(0, 15) + '…' : it.name
+    svg.appendChild(sv('text', { x: W - 4, y: y + 15, 'text-anchor': 'start' }, trimmed))
+    svg.appendChild(sv('rect', { x: W - labelW - w, y, width: w, height: 22, rx: 6, fill: color }, sv('title', null, it.name + ': ' + valueFmt(it.total))))
+    svg.appendChild(sv('text', { x: W - labelW - w - 6, y: y + 15, 'text-anchor': 'end' }, valueFmt(it.total)))
+  })
+  return svg
+}
+
+// ------------------------------------------------------------------
+// pages
+// ------------------------------------------------------------------
+const pages = {}
+
+pages.overview = async () => {
+  const d = await api('overview')
+  const c = d.counts
+  const root = h('div')
+  root.appendChild(h('h2', null, 'סקירה'))
+  root.appendChild(h('div', { class: 'grid' },
+    stat('a', c.notes, 'פתקים'),
+    stat('d', c.habits, 'הרגלים במעקב'),
+    stat('b', fmtMoney(d.monthTotal), 'הוצאות ב' + monthName(d.month)),
+    stat('c', c.exams, 'מבחנים קרובים'),
+    stat('a', c.countdowns, 'ספירות לאחור'),
+    stat('b', c.shoppingOpen, 'פריטים לקנייה'),
+  ))
+  root.appendChild(h('div', { class: 'grid wide', style: 'margin-top:14px' },
+    card('רצפי הרגלים', d.topHabits.length ? h('ul', { class: 'list' }, d.topHabits.map((x) =>
+      h('li', null, h('span', { class: 'name' }, x.name), h('span', { class: 'row' }, x.doneToday ? h('span', { class: 'pill good' }, 'בוצע היום') : null, h('span', { class: 'pill' }, x.streak + ' ימים'))))) : empty('אין הרגלים עדיין')),
+    card('מבחנים קרובים', d.nextExams.length ? h('ul', { class: 'list' }, d.nextExams.map((x) =>
+      h('li', null, h('span', { class: 'name' }, x.name, ' ', h('span', { class: 'muted small' }, fmtDate(x.date))), h('span', { class: 'pill ' + daysClass(x.daysLeft) }, daysText(x.daysLeft))))) : empty('אין מבחנים קרובים')),
+    card('ספירה לאחור', d.nextCountdowns.length ? h('ul', { class: 'list' }, d.nextCountdowns.map((x) =>
+      h('li', null, h('span', { class: 'name' }, x.label, ' ', h('span', { class: 'muted small' }, fmtDate(x.date))), h('span', { class: 'pill ' + daysClass(x.daysLeft) }, daysText(x.daysLeft))))) : empty('אין ספירות לאחור')),
+    card('הוצאות לפי קטגוריה', d.topCategories.length ? barChartSvg(d.topCategories, fmtNum) : empty('אין הוצאות החודש')),
+    card('יעדים', d.goals.length ? h('div', null, d.goals.map((g) => goalRow(g))) : empty('אין יעדים')),
+  ))
+  return root
+}
+
+function habitCard(hb, today) {
+  return h('section', { class: 'card' },
+    h('div', { class: 'row between' }, h('strong', null, hb.name), hb.doneToday ? h('span', { class: 'pill good' }, 'בוצע היום') : h('span', { class: 'pill' }, 'טרם היום')),
+    h('div', { class: 'row', style: 'margin:10px 0' },
+      h('span', { class: 'pill warn' }, 'רצף ' + hb.streak),
+      h('span', { class: 'pill' }, 'שיא ' + hb.best),
+      h('span', { class: 'pill' }, 'סה"כ ' + hb.total)),
+    h('div', { class: 'week', role: 'img', 'aria-label': 'שבעת הימים האחרונים' },
+      hb.week.map((w) => h('span', { class: (w.done ? 'on ' : '') + (w.date === today ? 'today' : ''), title: fmtDate(w.date) + (w.done ? ' - בוצע' : '') }))))
+}
+
+pages.habits = async () => {
+  const d = await api('habits')
+  const root = h('div', null, h('h2', null, 'הרגלים'))
+  if (!d.habits.length) { root.appendChild(card(null, empty('עדיין אין הרגלים. אפשר להוסיף בצ\'אט.'))); return root }
+  const sorted = d.habits.slice().sort((a, b) => b.streak - a.streak)
+  root.appendChild(h('div', { class: 'grid wide' }, sorted.map((x) => habitCard(x, d.today))))
+  return root
+}
+
+pages.expenses = async (state) => {
+  const month = state.month || ''
+  const category = state.category || ''
+  const d = await api('expenses', { month, category })
+  const root = h('div', null, h('h2', null, 'הוצאות'))
+  const monthSel = h('select', { class: 'search', 'aria-label': 'חודש', onchange: (e) => { state.month = e.target.value; state.category = ''; render() } },
+    d.months.map((m) => h('option', { value: m, selected: m === d.month }, monthName(m))))
+  const catSel = h('select', { class: 'search', 'aria-label': 'קטגוריה', onchange: (e) => { state.category = e.target.value; render() } },
+    h('option', { value: '' }, 'כל הקטגוריות'),
+    d.categories.map((c) => h('option', { value: c.name, selected: c.name === category }, c.name)))
+  root.appendChild(h('div', { class: 'row', style: 'margin-bottom:14px' }, monthSel, catSel))
+  root.appendChild(h('div', { class: 'grid', style: 'margin-bottom:14px' }, stat('b', fmtMoney(d.total), 'סה"כ ' + monthName(d.month)), stat('a', d.count, 'רשומות מוצגות')))
+  root.appendChild(card('סכום לפי קטגוריה', d.categories.length ? barChartSvg(d.categories, fmtNum) : empty('אין הוצאות בחודש הזה')))
+  const rows = d.rows.length
+    ? h('div', { class: 'tablewrap' }, h('table', null,
+        h('thead', null, h('tr', null, h('th', null, 'תאריך'), h('th', null, 'קטגוריה'), h('th', null, 'הערה'), h('th', { class: 'n' }, 'סכום'))),
+        h('tbody', null, d.rows.map((r) => h('tr', null, h('td', null, fmtDate(r.date)), h('td', null, h('span', { class: 'pill' }, r.category)), h('td', null, r.note), h('td', { class: 'n' }, fmtMoney(r.amount)))))))
+    : empty('אין הוצאות להצגה')
+  root.appendChild(h('div', { style: 'margin-top:14px' }, card('רשימת הוצאות', rows)))
+  return root
+}
+
+pages.notes = async (state) => {
+  const q = state.q || ''
+  const tag = state.tag || ''
+  const root = h('div', null, h('h2', null, 'פתקים'))
+  const input = h('input', { class: 'search', type: 'search', placeholder: 'חיפוש בפתקים', value: q, 'aria-label': 'חיפוש בפתקים' })
+  const results = h('div', { style: 'margin-top:14px' })
+  const tagBox = h('div', { class: 'row', style: 'margin-top:10px' })
+  root.append(input, tagBox, results)
+  async function load() {
+    const d = await api('notes', { q: state.q, tag: state.tag })
+    tagBox.replaceChildren(...d.tags.slice(0, 30).map((t) => h('span', { class: 'pill tag' + (t.name === state.tag ? ' on' : ''), onclick: () => { state.tag = state.tag === t.name ? '' : t.name; render() } }, '#' + t.name + ' ' + t.count)))
+    results.replaceChildren(h('div', { class: 'muted small', style: 'margin-bottom:8px' }, d.matched + ' מתוך ' + d.total),
+      d.rows.length ? h('div', { class: 'grid wide' }, d.rows.map((n) => h('article', { class: 'card' },
+        h('div', { class: 'row between' }, h('span', { class: 'muted small' }, fmtDate(n.date)), h('span', { class: 'muted small' }, '#' + n.id)),
+        h('p', { class: 'note' }, n.text),
+        n.tags.length ? h('div', { class: 'row' }, n.tags.map((t) => h('span', { class: 'pill' }, t))) : null))) : card(null, empty('לא נמצאו פתקים')))
+  }
+  input.addEventListener('input', debounce(() => { state.q = input.value; load().catch(showError) }, 250))
+  await load()
+  return root
+}
+
+pages.shopping = async () => {
+  const d = await api('shopping')
+  const root = h('div', null, h('h2', null, 'קניות'))
+  root.appendChild(h('div', { class: 'grid', style: 'margin-bottom:14px' }, stat('c', d.open, 'נשארו לקנות'), stat('d', d.done, 'סומנו כנקנו')))
+  const item = (x) => h('li', null, h('span', { class: 'row' }, h('span', { class: 'check' + (x.checked ? ' on' : ''), 'aria-hidden': 'true' }, x.checked ? '✓' : ''), h('span', { class: 'name' + (x.checked ? ' done' : '') }, x.name)), x.quantity ? h('span', { class: 'pill' }, x.quantity) : null)
+  root.appendChild(card('רשימת קניות', d.items.length ? h('ul', { class: 'list' }, d.items.slice().sort((a, b) => Number(a.checked) - Number(b.checked)).map(item)) : empty('רשימת הקניות ריקה')))
+  if (d.lists.length) {
+    root.appendChild(h('h2', { style: 'margin-top:22px' }, 'רשימות נוספות'))
+    root.appendChild(h('div', { class: 'grid wide' }, d.lists.map((l) => card(l.name + ' (' + l.open + ' פתוחים)',
+      h('ul', { class: 'list' }, l.items.map((i) => h('li', null, h('span', { class: 'row' }, h('span', { class: 'check' + (i.done ? ' on' : ''), 'aria-hidden': 'true' }, i.done ? '✓' : ''), h('span', { class: 'name' + (i.done ? ' done' : '') }, i.text)))))))))
+  }
+  return root
+}
+
+function goalRow(g) {
+  const label = g.name || g.title
+  return h('div', { style: 'margin-bottom:14px' },
+    h('div', { class: 'row between', style: 'margin-bottom:6px' }, h('span', null, label), h('span', { class: 'muted small' }, fmtNum(g.current) + ' / ' + fmtNum(g.target) + (g.unit ? ' ' + g.unit : '') + ' (' + g.percent + '%)')),
+    progress(g.percent, label))
+}
+
+pages.goals = async () => {
+  const d = await api('goals')
+  const x = await api('exams')
+  const root = h('div', null, h('h2', null, 'יעדים'))
+  root.appendChild(card('יעדים אישיים', d.goals.length ? h('div', null, d.goals.map(goalRow)) : empty('אין יעדים. אפשר להגדיר בצ\'אט.')))
+  if (d.okrs.length) {
+    root.appendChild(h('h2', { style: 'margin-top:22px' }, 'OKR'))
+    root.appendChild(h('div', { class: 'grid wide' }, d.okrs.map((o) => card(o.title + ' - ' + o.percent + '%',
+      progress(o.percent, o.title), h('div', { style: 'margin-top:14px' }, o.krs.map((k) => goalRow(k)))))))
+  }
+  root.appendChild(h('h2', { style: 'margin-top:22px' }, 'מבחנים וספירה לאחור'))
+  const dl = (list, key) => (list.length ? h('ul', { class: 'list' }, list.map((e) => h('li', null,
+    h('span', { class: 'name' }, e[key], ' ', h('span', { class: 'muted small' }, fmtDate(e.date))),
+    h('span', { class: 'pill ' + daysClass(e.daysLeft) }, daysText(e.daysLeft))))) : empty('אין נתונים'))
+  root.appendChild(h('div', { class: 'grid wide' }, card('מבחנים', dl(x.exams, 'name')), card('ספירה לאחור', dl(x.countdowns, 'label'))))
+  return root
+}
+
+pages.tools = async (state) => {
+  const root = h('div', null, h('h2', null, 'קטלוג כלים'))
+  const input = h('input', { class: 'search', type: 'search', placeholder: 'חיפוש כלי לפי שם או תיאור', value: state.q || '', 'aria-label': 'חיפוש כלי' })
+  const box = h('div', { style: 'margin-top:14px' })
+  root.append(input, box)
+  async function load() {
+    const d = await api('tools', { q: state.q })
+    if (d.error) { box.replaceChildren(card(null, h('div', { class: 'err' }, d.error))); return }
+    box.replaceChildren(h('div', { class: 'muted small', style: 'margin-bottom:8px' }, d.total + ' כלים ב-' + d.groups.length + ' קטגוריות'),
+      ...(d.groups.length ? d.groups.map((g) => h('details', { class: 'card cat', open: !!state.q },
+        h('summary', null, h('span', null, g.category, ' ', h('span', { class: 'muted small' }, g.blurb)), h('span', { class: 'pill' }, g.count)),
+        g.tools.map((t) => h('div', { class: 'tool' },
+          h('div', { class: 'row' }, h('span', { class: 'toolname' }, t.name), t.write ? h('span', { class: 'pill warn' }, 'דורש אישור') : null, t.network ? h('span', { class: 'pill' }, 'רשת') : null),
+          h('div', null, t.description),
+          t.params.length ? h('div', { class: 'params' }, t.params.join(', ')) : null)))) : [card(null, empty('לא נמצאו כלים'))]))
+  }
+  input.addEventListener('input', debounce(() => { state.q = input.value; load().catch(showError) }, 250))
+  await load()
+  return root
+}
+
+// ------------------------------------------------------------------
+// router
+// ------------------------------------------------------------------
+const TABS = [
+  ['overview', 'סקירה'],
+  ['habits', 'הרגלים'],
+  ['expenses', 'הוצאות'],
+  ['notes', 'פתקים'],
+  ['shopping', 'קניות'],
+  ['goals', 'יעדים'],
+  ['tools', 'כלים'],
+]
+const view = document.getElementById('view')
+const tabs = document.getElementById('tabs')
+const stamp = document.getElementById('stamp')
+const pageState = {}
+let renderToken = 0
+
+const current = () => {
+  const name = location.hash.replace(/^#/, '')
+  return Object.hasOwn(pages, name) ? name : 'overview'
+}
+
+function showError(e) {
+  view.replaceChildren(card(null, h('div', { class: 'err' }, 'שגיאה: ' + (e && e.message ? e.message : e)), h('p', { class: 'muted small' }, 'אם הדף לא נטען, פתחו אותו מחדש מהכתובת שמופיעה בחלון של העוזר.')))
+}
+
+async function render() {
+  const name = current()
+  const mine = ++renderToken
+  tabs.replaceChildren(...TABS.map(([id, label]) => h('a', { href: '#' + id, 'aria-current': id === name ? 'page' : null }, label)))
+  document.title = 'לוח בקרה - ' + (TABS.find((t) => t[0] === name) || ['', ''])[1]
+  try {
+    const node = await pages[name](pageState[name] ||= {})
+    if (mine !== renderToken) return
+    view.replaceChildren(node)
+    stamp.textContent = 'עודכן ' + new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
+  } catch (e) {
+    if (mine === renderToken) showError(e)
+  }
+}
+
+document.getElementById('refresh').addEventListener('click', render)
+window.addEventListener('hashchange', render)
+render()
+</script>
+</body>
+</html>

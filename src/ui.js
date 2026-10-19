@@ -4,13 +4,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import os from 'node:os'
+import QRCode from 'qrcode'
 import { config, saveSettings, mailEnabled, ROOT, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
 import { calendarOn } from './calendar.js'
-import { canHear, canSpeak } from './media.js'
+import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
 import { chatModel } from './llm.js'
 import { ago } from './status.js'
+import { handleDashboard } from './dashboard/api.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const SENT_LOG = path.join(DATA_DIR, 'sent.log')
@@ -18,9 +21,9 @@ const COOKIE = 'helper_session'
 const MAX_BODY = 100000
 
 // Values that are never sent back to the page. The page only learns whether each one is set.
-const SECRETS = ['LLM_API_KEY', 'ELEVENLABS_API_KEY', 'GITHUB_TOKEN', 'GOOGLE_CLIENT_SECRET', 'MAIL_PASS', 'TAVILY_API_KEY', 'VOICE_API_KEY']
+const SECRETS = ['LLM_API_KEY', 'LLM_BACKUP_API_KEY', 'ELEVENLABS_API_KEY', 'GITHUB_TOKEN', 'GOOGLE_CLIENT_SECRET', 'MAIL_PASS', 'TAVILY_API_KEY', 'VOICE_API_KEY']
 const PLAIN = [
-  'LLM_BASE_URL', 'LLM_MODEL', 'LLM_CHEAP_MODEL', 'LLM_STRONG_MODEL', 'LLM_FALLBACK_MODEL', 'LLM_LIGHT', 'IMAGE_MODEL',
+  'LLM_BASE_URL', 'LLM_MODEL', 'LLM_BACKUP_BASE_URL', 'LLM_BACKUP_MODEL', 'LLM_CHEAP_MODEL', 'LLM_STRONG_MODEL', 'LLM_FALLBACK_MODEL', 'LLM_LIGHT', 'IMAGE_MODEL',
   'BOT_NAME', 'QUIET_HOURS', 'DAILY_BRIEF_TIME', 'NEWS_BRIEF_TIME', 'NEWS_FEEDS', 'TIMEZONE', 'COMPUTER_MODE',
   'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
   'MAIL_HOST', 'MAIL_USER', 'MAIL_POLL_MINUTES', 'CALENDAR_ICS_URL',
@@ -32,13 +35,45 @@ const LISTS = { reminder: 'reminders', task: 'tasks', watcher: 'watchers', memor
 const same = (a, b) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 const time = (iso) => new Date(iso).toLocaleString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
 
-function snapshot(connectedSince) {
+function getNetworkIp() {
+  const interfaces = os.networkInterfaces();
+  let tailscaleIp = null;
+  let localIp = null;
+
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      const isIPv4 = iface.family === 'IPv4' || iface.family === 4;
+      if (isIPv4 && !iface.internal) {
+        if (name.toLowerCase().includes('tailscale') || iface.address.startsWith('100.')) {
+          tailscaleIp = iface.address;
+        } else if (!localIp) {
+          localIp = iface.address;
+        }
+      }
+    }
+  }
+
+  return { ip: tailscaleIp || localIp, isTailscale: Boolean(tailscaleIp) };
+}
+
+async function snapshot(connectedSince) {
   const health = (label, key) => {
     const h = state.health[key]
     // ok is null until the first check has run: not yet known is different from broken.
     return { label, ok: h ? !h.down : null, checked: h ? ago(h.lastOk) : 'עוד לא נבדק' }
   }
   const google = googleAccounts()
+  const { ip, isTailscale } = getNetworkIp()
+  let appQrDataUrl = ''
+  if (ip) {
+    try {
+      const qrData = JSON.stringify({ url: `http://${ip}:3210`, token: state.bridgeToken })
+      appQrDataUrl = await QRCode.toDataURL(qrData)
+    } catch (e) {
+      console.error('[ui] QR generation failed:', e)
+    }
+  }
+
   return {
     botName: config.botName,
     whatsapp: { connected: Boolean(connectedSince), since: connectedSince ? ago(connectedSince).replace('לפני ', '') : '', paired: Boolean(state.owner) },
@@ -58,12 +93,17 @@ function snapshot(connectedSince) {
     homework: state.homework.open,
     waiting: state.outbox.length,
     sent: fs.existsSync(SENT_LOG) ? fs.readFileSync(SENT_LOG, 'utf8').trim().split('\n').slice(-40).reverse() : [],
+    appQrDataUrl,
+    appIp: ip,
+    isTailscale
   }
 }
 
 // { connectedSince(): number, restart(): void }
-export function startUi({ connectedSince, restart }) {
+// agent(text, { voice, source }) => Promise<string>: optional; enables the bridge for other local programs.
+export function startUi({ connectedSince, restart, agent }) {
   const token = (state.uiToken ||= randomBytes(24).toString('hex'))
+  const bridgeToken = (state.bridgeToken ||= randomBytes(24).toString('hex'))
   save()
   const port = config.uiPort
   const origin = `http://127.0.0.1:${port}`
@@ -120,10 +160,67 @@ export function startUi({ connectedSince, restart }) {
 
   const server = http.createServer(async (req, res) => {
     try {
-      // Only requests addressed to this machine by its loopback name: closes the door on DNS-rebinding tricks.
-      if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host)) return send(res, 403, note('גישה נדחתה'))
       const url = new URL(req.url, origin)
 
+      // Bridge endpoints use bearer token authentication and can be accessed from network interfaces (Tailscale/LAN).
+      if (req.method === 'POST' && url.pathname === '/bridge/pull') {
+        const given = (req.headers.authorization || '').replace(/^Bearer /, '')
+        if (!same(given, bridgeToken)) return send(res, 403, { error: 'bridge token missing or wrong' })
+        const items = state.discordOutbox
+        const firstContact = !state.bridgeSeenAt
+        state.bridgeSeenAt = Date.now()
+        if (items.length || firstContact) {
+          state.discordOutbox = []
+          save()
+        }
+        return send(res, 200, { items })
+      }
+      if (req.method === 'POST' && url.pathname === '/bridge/ask') {
+        state.bridgeSeenAt = Date.now()
+        const given = (req.headers.authorization || '').replace(/^Bearer /, '')
+        if (!agent || !same(given, bridgeToken)) return send(res, 403, { error: 'bridge token missing or wrong' })
+        const body = await readJson(req)
+        const text = String(body.text || '').trim().slice(0, 4000)
+        if (!text) return send(res, 400, { error: 'empty text' })
+        const reply = await agent(text, { voice: Boolean(body.voice), source: String(body.source || 'discord').slice(0, 30) })
+        // Speech costs ElevenLabs credits, so a client that only shows text (the app's chat) asks for none: "audio": false.
+        let audio = null
+        if (body.audio !== false) {
+          try {
+            const audioBuffer = await elevenSpeakMp3(reply)
+            if (audioBuffer) audio = audioBuffer.toString('base64')
+          } catch (e) {
+            console.error('[ui] ElevenLabs audio generation failed:', e.message)
+          }
+        }
+        return send(res, 200, { reply, audio })
+      }
+      if (req.method === 'POST' && url.pathname === '/bridge/tts') {
+        state.bridgeSeenAt = Date.now()
+        const given = (req.headers.authorization || '').replace(/^Bearer /, '')
+        if (!same(given, bridgeToken)) return send(res, 403, { error: 'bridge token missing or wrong' })
+        const body = await readJson(req)
+        const text = String(body.text || '').trim().slice(0, 2000)
+        if (!text) return send(res, 400, { error: 'empty text' })
+        try {
+          const mp3 = await elevenSpeakMp3(text)
+          res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': mp3.length })
+          return res.end(mp3)
+        } catch (e) {
+          return send(res, 500, { error: e.message })
+        }
+      }
+
+      // Web settings UI is loopback/localhost only for security against DNS-rebinding
+      const host = req.headers.host || ''
+      const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`]
+      const { ip: networkIp } = getNetworkIp()
+      if (networkIp) allowedHosts.push(`${networkIp}:${port}`)
+
+      if (!allowedHosts.includes(host)) return send(res, 403, note('גישה נדחתה'))
+
+      // Google sends the browser back here after the account was approved. It comes before the sign-in check on
+      // purpose: the one-time `state` was issued only to a signed-in page, so it is what proves the request is ours.
       if (url.pathname === '/google/callback') {
         const oauthState = url.searchParams.get('state') || ''
         if (!oauthStates.delete(oauthState)) return send(res, 403, note('הבקשה פגה. חזור לאתר ההגדרות ונסה שוב.'))
@@ -143,9 +240,11 @@ export function startUi({ connectedSince, restart }) {
         return send(res, 302, '', { Location: '/', 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` })
       }
       if (!signedIn(req)) return send(res, 403, note('כדי להיכנס, פתח את הכתובת שמופיעה בחלון של העוזר.'))
+      // The dashboard (/dash) is read-only and uses the same sign-in as everything below.
+      if (await handleDashboard(req, res, url, signedIn)) return
 
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'))
-      if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, snapshot(connectedSince()))
+      if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, await snapshot(connectedSince()))
       if (req.method === 'GET' && url.pathname === '/google/connect') {
         if (!config.google.clientId || !config.google.clientSecret) return send(res, 200, note('קודם צריך לשמור Client ID ו-Client secret.'))
         const oauthState = randomBytes(16).toString('hex')
@@ -164,6 +263,6 @@ export function startUi({ connectedSince, restart }) {
   })
 
   server.on('error', (e) => console.log(`[ui] אתר ההגדרות לא עלה: ${e.code === 'EADDRINUSE' ? `הפורט ${port} תפוס. אפשר לשנות UI_PORT בקובץ .env` : e.message}`))
-  server.listen(port, '127.0.0.1')
+  server.listen(port, '0.0.0.0')
   return `${origin}/?t=${token}`
 }

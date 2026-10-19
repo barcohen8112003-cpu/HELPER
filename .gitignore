@@ -1,3 +1,5 @@
 node_modules/
 data/
 .env
+.env.before-openrouter
+home-relay/config.json

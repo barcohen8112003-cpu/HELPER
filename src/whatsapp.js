@@ -21,7 +21,7 @@ const BOT_MARK = '​'
 const MAX_MEDIA = 15 * 1024 * 1024
 const logger = pino({ level: 'silent' })
 
-// onMessage({ jids, fromMe, selfChat, key, lateSeconds, text, getMedia, reaction? })
+// onMessage({ jids, fromMe, selfChat, key, lateSeconds, text, getMedia, reaction?, location? })
 // onReady({ jid, lid }): the linked account's own ids, each time the connection opens.
 export async function startWhatsApp(onMessage, onReady = () => {}) {
   const bootedAt = Math.floor(Date.now() / 1000)
@@ -76,6 +76,22 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
     sock.ev.on('creds.update', saveCreds)
     let codeAsked = false
 
+    // Names for numbers, from the address book WhatsApp syncs and from the names people give themselves.
+    // A saved name wins over a self-given one.
+    const learn = (list, saved = true) => {
+      let changed = false
+      for (const c of list || []) {
+        const id = c.id && jidNormalizedUser(c.id)
+        const name = (saved && (c.name || c.verifiedName)) || c.notify
+        if (!id || !name || !id.endsWith('@s.whatsapp.net') || (!saved && store.contacts[id])) continue
+        if (store.contacts[id] !== name) (store.contacts[id] = name), (changed = true)
+      }
+      if (changed) save()
+    }
+    sock.ev.on('contacts.upsert', (list) => learn(list))
+    sock.ev.on('contacts.update', (list) => learn(list))
+    sock.ev.on('messaging-history.set', ({ contacts }) => learn(contacts))
+
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
       if (qr) {
         // Nobody is scanning: stop instead of printing codes forever. Exit code 2 tells start.bat not to restart.
@@ -111,6 +127,17 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
         fs.rmSync(QR_FILE, { force: true })
         fs.rmSync(CODE_FILE, { force: true })
         console.log('מחובר לוואטסאפ ✔')
+        // The address book arrives only with the first sync after linking. A link made before names were collected
+        // asks for that part again, once: the saved version is dropped so the whole list comes back.
+        if (!store.wa.contactsSynced) {
+          store.wa.contactsSynced = true
+          save()
+          sock.authState.keys
+            .set({ 'app-state-sync-version': { critical_unblock_low: null } })
+            .then(() => sock.resyncAppState(['critical_unblock_low'], true))
+            .then(() => console.log(`[whatsapp] אנשי קשר: ${Object.keys(store.contacts).length}`))
+            .catch((e) => console.log(`[whatsapp] אנשי קשר: ${e.message}`))
+        }
         // Deferred a tick so the caller already holds the returned handle when this runs.
         setTimeout(() => Promise.resolve(onReady({ jid: ownIds()[0], lid: ownIds()[1] || null })).catch((e) => console.log(`[whatsapp] ${e.message}`)))
       }
@@ -131,6 +158,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
       for (const msg of messages) {
         const jid = msg.key?.remoteJid
         if (!jid || !msg.message || jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) continue
+        if (!msg.key.fromMe && msg.pushName) learn([{ id: msg.key.senderPn || jid, notify: msg.pushName }], false)
         const sentAt = Number(msg.messageTimestamp)
         if (sentAt < since || seen.has(msg.key.id)) continue
         remember(msg.key.id, sentAt)
@@ -147,9 +175,14 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
           if (reaction) Promise.resolve(onMessage({ ...base(), text: '', reaction, getMedia: async () => null })).catch((e) => console.log(`[whatsapp] ${e.message}`))
           continue
         }
+        // A shared 📍 or live location. Live location keeps sending updates; they arrive here the same way.
+        const pin = content?.locationMessage || content?.liveLocationMessage
+        const location = pin && Number.isFinite(pin.degreesLatitude) && Number.isFinite(pin.degreesLongitude)
+          ? { lat: pin.degreesLatitude, lng: pin.degreesLongitude, name: pin.name || '', address: pin.address || '', live: Boolean(content.liveLocationMessage || pin.isLive) }
+          : null
         const part = content?.imageMessage || content?.audioMessage || content?.documentMessage
-        const text = content?.conversation || content?.extendedTextMessage?.text || part?.caption || ''
-        if ((!text && !part) || text.startsWith(BOT_MARK)) continue
+        const text = content?.conversation || content?.extendedTextMessage?.text || part?.caption || pin?.comment || pin?.caption || ''
+        if ((!text && !part && !location) || text.startsWith(BOT_MARK)) continue
         // Downloaded lazily, so media from chats the bot ignores is never fetched.
         const getMedia = async () => {
           if (!part) return null
@@ -157,7 +190,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
           const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage })
           return { kind: content.imageMessage ? 'image' : content.audioMessage ? 'audio' : 'file', buffer, mime: part.mimetype || '', name: part.fileName || '' }
         }
-        Promise.resolve(onMessage({ ...base(), text, getMedia })).catch((e) =>
+        Promise.resolve(onMessage({ ...base(), text, getMedia, ...(location && { location }) })).catch((e) =>
           console.log(`[whatsapp] ${e.message}`)
         )
       }
@@ -193,6 +226,31 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
     // Puts an emoji on the message with this key; an empty string takes it off again.
     react(jid, key, emoji) {
       return sendTracked(jid, { react: { text: emoji, key } })
+    },
+    // A message to someone else, in the owner's name, exactly as written (no invisible bot mark).
+    sendAs(jid, text) {
+      return sendTracked(jid, { text })
+    },
+    // "דני" or "050-1234567" -> { jid, name, number }, { matches: [...] } when the name is ambiguous, or { error }.
+    async findContact(query) {
+      if (!ready) return { error: 'וואטסאפ לא מחובר כרגע' }
+      const q = String(query || '').trim()
+      let digits = q.replace(/\D/g, '')
+      if (digits.length >= 9) {
+        if (digits.startsWith('0')) digits = '972' + digits.slice(1)
+        const [hit] = await sock.onWhatsApp(`${digits}@s.whatsapp.net`).catch(() => [])
+        if (!hit?.exists) return { error: `למספר +${digits} אין וואטסאפ` }
+        const jid = jidNormalizedUser(hit.jid)
+        return { jid, number: `+${digits}`, name: store.contacts[jid] || `+${digits}` }
+      }
+      const lower = q.toLowerCase()
+      const all = Object.entries(store.contacts).filter(([jid]) => !ownIds().includes(jid))
+      const exact = all.filter(([, name]) => name.toLowerCase() === lower)
+      const partial = exact.length ? exact : all.filter(([, name]) => name.toLowerCase().includes(lower))
+      if (!partial.length) return { error: `לא מצאתי איש קשר בשם "${q}". צריך את המספר שלו.` }
+      if (partial.length > 1) return { matches: partial.slice(0, 6).map(([jid, name]) => `${name} (+${jid.split('@')[0]})`) }
+      const [jid, name] = partial[0]
+      return { jid, name, number: `+${jid.split('@')[0]}` }
     },
     // When the current connection opened, or 0 while disconnected.
     connectedSince: () => (ready ? openedAt : 0),

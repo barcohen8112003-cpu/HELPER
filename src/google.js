@@ -241,7 +241,7 @@ export async function classroomWork(email, days) {
         const d = w.dueDate
         // Due date and time arrive in UTC; a date without a time means end of that day.
         const due = d ? new Date(Date.UTC(d.year, d.month - 1, d.day, w.dueTime ? w.dueTime.hours || 0 : 23, w.dueTime ? w.dueTime.minutes || 0 : 59)) : null
-        return { id: w.id, account: email, course: course.name, title: w.title, due, submitted: done.has(w.id), link: w.alternateLink, updated: Date.parse(w.updateTime) }
+        return { id: w.id, courseId: course.id, account: email, course: course.name, title: w.title, due, submitted: done.has(w.id), link: w.alternateLink, updated: Date.parse(w.updateTime) }
       })
     })
   )
@@ -251,7 +251,67 @@ export async function classroomWork(email, days) {
     .sort((a, b) => (a.due || Infinity) - (b.due || Infinity))
 }
 
+// One assignment in full: the instructions and what is attached to it. Read only.
+// materials: [{ kind: 'drive', id, title, link } | { kind: 'link' | 'youtube' | 'form', title, link }]
+export async function classroomAssignment(email, courseId, workId) {
+  const base = `${CLASSROOM}/${encodeURIComponent(courseId)}`
+  const [course, w] = await Promise.all([api(email, base), api(email, `${base}/courseWork/${encodeURIComponent(workId)}`)])
+  const d = w.dueDate
+  const due = d ? new Date(Date.UTC(d.year, d.month - 1, d.day, w.dueTime ? w.dueTime.hours || 0 : 23, w.dueTime ? w.dueTime.minutes || 0 : 59)) : null
+  const materials = (w.materials || []).map((m) => {
+    if (m.driveFile) return { kind: 'drive', id: m.driveFile.driveFile.id, title: m.driveFile.driveFile.title || '', link: m.driveFile.driveFile.alternateLink || '' }
+    if (m.youtubeVideo) return { kind: 'youtube', title: m.youtubeVideo.title || '', link: m.youtubeVideo.alternateLink || '' }
+    if (m.form) return { kind: 'form', title: m.form.title || '', link: m.form.formUrl || '' }
+    if (m.link) return { kind: 'link', title: m.link.title || '', link: m.link.url || '' }
+    return { kind: 'other', title: '', link: '' }
+  })
+  return {
+    id: w.id,
+    courseId,
+    account: email,
+    course: course.name || '',
+    title: w.title || '',
+    description: w.description || '',
+    due,
+    maxPoints: w.maxPoints ?? null,
+    link: w.alternateLink || '',
+    materials,
+  }
+}
+
 // ---- Drive ----
+
+// Google's own formats are exported to their Office equivalent; everything else is downloaded as it is.
+export const OFFICE_EXPORT = {
+  'application/vnd.google-apps.document': { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: '.docx' },
+  'application/vnd.google-apps.presentation': { mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext: '.pptx' },
+  'application/vnd.google-apps.spreadsheet': { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: '.xlsx' },
+}
+// Drive refuses to export a file bigger than this.
+export const EXPORT_LIMIT = 10 * 1024 * 1024
+
+// A Drive file as bytes, for the assignment folder. Refuses (with a reason, never a partial file) when the file is
+// larger than maxBytes, when Drive cannot export it, or when it is a Google type with no download (Forms, sites).
+// Returns { name, mime, buffer }.
+export async function driveDownload(email, id, { maxBytes = Infinity } = {}) {
+  const file = `${DRIVE}/${encodeURIComponent(id)}`
+  const meta = await api(email, `${file}?fields=name,mimeType,size&supportsAllDrives=true`)
+  const office = OFFICE_EXPORT[meta.mimeType]
+  if (!office && meta.mimeType.startsWith('application/vnd.google-apps.')) throw Object.assign(new Error(`סוג קובץ של Google שאי אפשר להוריד (${meta.mimeType.replace('application/vnd.google-apps.', '')})`), { code: 'unsupported' })
+  const size = Number(meta.size || 0)
+  if (size && size > maxBytes) throw Object.assign(new Error('הקובץ גדול מהתקרה'), { code: 'too-big', size })
+  const url = office ? `${file}/export?mimeType=${encodeURIComponent(office.mime)}` : `${file}?alt=media&supportsAllDrives=true`
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${await accessToken(email)}` }, signal: AbortSignal.timeout(120000) })
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 300)
+    if (office && /exportSizeLimitExceeded|too large/i.test(body)) throw Object.assign(new Error('Drive לא מייצא קבצים מעל 10MB'), { code: 'export-limit' })
+    throw new Error(`Google HTTP ${res.status}`)
+  }
+  const buffer = Buffer.from(await res.arrayBuffer())
+  if (buffer.length > maxBytes) throw Object.assign(new Error('הקובץ גדול מהתקרה'), { code: 'too-big', size: buffer.length })
+  const name = office && !meta.name.toLowerCase().endsWith(office.ext) ? meta.name + office.ext : meta.name
+  return { name, mime: office ? office.mime : meta.mimeType, buffer }
+}
 
 export async function driveSearch(email, query) {
   const q = `fullText contains '${String(query).replace(/['\\]/g, ' ')}' and trashed = false`

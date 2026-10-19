@@ -65,6 +65,7 @@
   <main>
     <div id="banner"><span class="grow">חלק מהשינויים ייכנסו לתוקף רק אחרי הפעלה מחדש.</span><button class="primary" id="restart">הפעל מחדש</button></div>
     <section id="connect"><h2>חיבורים</h2><p class="sub">החשבונות והשירותים שהעוזר יכול להשתמש בהם</p><div class="rows" id="connectors"></div></section>
+    <section id="app-connect"><h2>חיבור לאפליקציה</h2><p class="sub">סרוק את הקוד באפליקציית האנדרואיד כדי להתחבר</p><div class="rows" id="appQrRows"></div></section>
     <section id="active"><h2>מה פעיל</h2><p class="sub">מקורות, תזכורות, משימות ומעקבים</p><div class="rows" id="activeRows"></div></section>
     <section id="memory"><h2>זיכרון</h2><p class="sub">מה שהעוזר זוכר עליך. אפשר למחוק כל פריט בנפרד</p><div class="rows" id="memoryRows"></div></section>
     <section id="prefs"><h2>העדפות</h2><p class="sub">שם, שעות ותזמונים</p><div class="rows" id="prefRows"></div></section>
@@ -181,6 +182,9 @@ function render(S) {
       ['LLM_CHEAP_MODEL', 'מודל לרקע', { hint: 'סינון מיילים, מעקבים וסיכומים' }],
       ['LLM_STRONG_MODEL', 'מודל חזק', { hint: 'מופעל בצ׳אט עם /model strong' }],
       ['LLM_FALLBACK_MODEL', 'מודל גיבוי'],
+      ['LLM_BACKUP_BASE_URL', 'ספק גיבוי: כתובת', { hint: 'נכנס לפעולה רק כשהמכסה של הספק הראשי נגמרת. Gemini: https://generativelanguage.googleapis.com/v1beta/openai' }],
+      ['LLM_BACKUP_API_KEY', 'ספק גיבוי: מפתח', { secret: true }],
+      ['LLM_BACKUP_MODEL', 'ספק גיבוי: מודל'],
       ['LLM_LIGHT', 'מצב קל', { options: [['false', 'כבוי'], ['true', 'פעיל (לחבילות חינמיות עם מכסה קטנה)']] }],
     ])),
     connector('ElevenLabs', 'הודעות קוליות: מבין ועונה בקול. גם אפקטים ומוזיקה', S.settings.ELEVENLABS_API_KEY.set, form(S, [
@@ -224,6 +228,17 @@ function render(S) {
   ])))
 
   fill($('sent'), (S.sent.length ? S.sent.map((line) => h('div', {}, line)) : [h('div', {}, 'עוד לא נשלח כלום')]))
+
+  if (S.appQrDataUrl) {
+    fill($('appQrRows'),
+      h('div', { class: 'row block', style: 'text-align:center' },
+        h('img', { src: S.appQrDataUrl, style: 'width:250px;height:250px;margin:16px auto;display:block;border-radius:12px' }),
+        h('div', { class: 'small' }, S.isTailscale ? 'כתובת Tailscale: ' + S.appIp : 'כתובת רשת מקומית: ' + S.appIp)
+      )
+    )
+  } else {
+    fill($('appQrRows'), h('div', { class: 'row small' }, 'לא נמצאה כתובת רשת זמינה לחיבור.'))
+  }
 }
 
 async function load() {

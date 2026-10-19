@@ -5,6 +5,8 @@ import { getNews, formatNews } from './news.js'
 import { mailEvent, calendarEvent } from './monitoring/intake.js'
 
 import { inQuietHours } from './outbox.js'
+import { sessionEnabled, sessionKeepAlive } from './session.js'
+import { lessonReminders } from './lessons.js'
 
 const NEWS_WINDOW = 4 * 60
 const FIRST_CHECK_IN = 3 * 60000
@@ -82,8 +84,19 @@ async function track(notify, key, label, error) {
   console.log(`[${key}] ${error.message}`)
   if (++h.fails !== DOWN_AFTER) return
   h.down = true
-  const fix = error.message.includes('npm run google') ? 'צריך לחבר את החשבון מחדש (npm run google).' : 'אני ממשיך לנסות.'
+  const fix = error.hint || (error.message.includes('npm run google') ? 'צריך לחבר את החשבון מחדש (npm run google).' : 'אני ממשיך לנסות.')
   await notify(`⚠️ ${label} לא עובד כרגע, אז אני לא רואה משם דברים חדשים. ${fix}`)
+}
+
+// The signed-in Webtop window is reloaded every few minutes so the session never times out. While it is failing
+// (closed, or signed out) it is retried every minute, so the person hears about it fast and it recovers fast.
+let webtopLast = 0
+async function webtop(notify) {
+  if (!sessionEnabled()) return
+  const failing = state.health.webtop?.fails > 0
+  if (Date.now() - webtopLast < (failing ? 60000 : config.webtop.keepAliveMinutes * 60000)) return
+  webtopLast = Date.now()
+  await track(notify, 'webtop', 'Webtop', await sessionKeepAlive().then(() => null, (e) => e))
 }
 
 async function watchers(notify) {
@@ -302,7 +315,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, mail, calendar, googleCalendar, homework, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, webtop, lessonReminders, mail, calendar, googleCalendar, homework, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {
