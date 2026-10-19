@@ -12,7 +12,8 @@
     "check:memory": "node src/memory-selftest.js",
     "check:errand": "node src/errand-selftest.js",
     "test:watch": "node src/monitoring/selftest.js",
-    "check:pc-bridge": "node src/pc-bridge-selftest.js"
+    "check:pc-bridge": "node src/pc-bridge-selftest.js",
+    "check:webtop": "node src/webtop-selftest.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "~6.7.24",

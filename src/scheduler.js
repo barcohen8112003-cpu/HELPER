@@ -5,7 +5,7 @@ import { getNews, formatNews } from './news.js'
 import { mailEvent, calendarEvent } from './monitoring/intake.js'
 
 import { inQuietHours } from './outbox.js'
-import { sessionEnabled, sessionKeepAlive } from './session.js'
+import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice } from './session.js'
 import { lessonReminders } from './lessons.js'
 
 const NEWS_WINDOW = 4 * 60
@@ -96,7 +96,27 @@ async function webtop(notify) {
   const failing = state.health.webtop?.fails > 0
   if (Date.now() - webtopLast < (failing ? 60000 : config.webtop.keepAliveMinutes * 60000)) return
   webtopLast = Date.now()
-  await track(notify, 'webtop', 'Webtop', await sessionKeepAlive().then(() => null, (e) => e))
+  try {
+    await sessionKeepAlive()
+    clearWebtopLoginNotice(state)
+    save()
+    await track(notify, 'webtop', 'Webtop', null)
+  } catch (e) {
+    if (!isWebtopLoginError(e)) {
+      await track(notify, 'webtop', 'Webtop', e)
+      return
+    }
+    const text = planWebtopLoginNotice(state)
+    if (text) {
+      save()
+      await notify(text, true)
+    }
+    const h = (state.health.webtop ??= { fails: 0, down: false })
+    if (!h.down) console.log(`[webtop] ${e.message}`)
+    h.fails = DOWN_AFTER
+    h.down = true
+    save()
+  }
 }
 
 async function watchers(notify) {

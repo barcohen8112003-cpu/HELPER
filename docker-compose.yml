@@ -13,14 +13,17 @@ services:
       HELPER_DATA_DIR: /var/data
       TIMEZONE: Asia/Jerusalem
       # Computer actions stay off until .env sets COMPUTER_MODE=ask (or auto) and PC_BRIDGE_SECRET.
-      # The port is the only thing published: the home PC dials out to it. Nothing at home is exposed.
+      # 3212 is the home bridge (the PC dials out). 3210 is the settings page. Nothing at home is exposed.
       PC_BRIDGE_LISTEN: "1"
       PC_BRIDGE_PORT: "3212"
       NODE_ENV: production
     ports:
+      - "3210:3210"
       - "3212:3212"
     volumes:
       - helper-data:/var/data
+      # Settings saved in the UI rewrite this file. Mounting it keeps them on the host across restarts.
+      - ./.env:/app/.env
     # Chromium inside the image needs these for headless page reads.
     shm_size: "256mb"
 
