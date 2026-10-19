@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { WebSocket, WebSocketServer } from 'ws'
 import { config } from './config.js'
@@ -442,14 +443,29 @@ export async function homeHandlers() {
   return handlers
 }
 
-function bridgeConfig() {
-  const dir = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'home-relay')
-  const file = process.env.PC_BRIDGE_CONFIG || path.join(dir, 'pc-bridge.config.json')
+// import.meta.url on Windows is file:///C:/Users/.../src/pc-bridge.js.
+// URL.pathname keeps a leading slash ("/C:/Users/..."), and path.win32 then
+// joins a root folder literally named "C:" — so the config next to home-relay
+// is never found. fileURLToPath returns "C:\Users\..." on Windows. On any other
+// platform Node leaves a Windows file URL as "/C:/..." (the drive rule is
+// win32-only), so a leftover "/X:" prefix is removed here. A real POSIX path
+// never matches that shape.
+function moduleFilePath(moduleUrl) {
+  const fromUrl = fileURLToPath(moduleUrl)
+  return /^\/[A-Za-z]:[\\/]/.test(fromUrl) ? fromUrl.slice(1) : fromUrl
+}
+
+export function homeRelayDir(moduleUrl = import.meta.url, pathImpl = path) {
+  return pathImpl.normalize(pathImpl.join(pathImpl.dirname(moduleFilePath(moduleUrl)), '..', 'home-relay'))
+}
+
+export function bridgeConfig(env = process.env, moduleUrl = import.meta.url, pathImpl = path) {
+  const file = env.PC_BRIDGE_CONFIG || pathImpl.join(homeRelayDir(moduleUrl, pathImpl), 'pc-bridge.config.json')
   let fromFile = {}
   if (fs.existsSync(file)) fromFile = JSON.parse(fs.readFileSync(file, 'utf8'))
   return {
-    url: process.env.PC_BRIDGE_URL || fromFile.url || '',
-    secret: process.env.PC_BRIDGE_SECRET || fromFile.secret || '',
+    url: env.PC_BRIDGE_URL || fromFile.url || '',
+    secret: env.PC_BRIDGE_SECRET || fromFile.secret || '',
   }
 }
 
