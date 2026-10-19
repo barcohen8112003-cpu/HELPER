@@ -17,7 +17,11 @@ COPY persona.md persona.short.md ./
 ENV HELPER_DATA_DIR=/var/data \
     TIMEZONE=Asia/Jerusalem \
     COMPUTER_MODE=off \
+    PC_BRIDGE_LISTEN=1 \
+    PC_BRIDGE_PORT=3212 \
     NODE_ENV=production
+
+EXPOSE 3212
 
 # tini passes signals on, so a stop from the platform closes the WhatsApp connection cleanly.
 ENTRYPOINT ["/usr/bin/tini", "--"]

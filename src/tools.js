@@ -1,6 +1,5 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFile } from 'node:child_process'
 import { config, mailEnabled } from './config.js'
 import { state, save, newId } from './store.js'
 import { webSearch, fetchPage } from './web.js'
@@ -26,12 +25,12 @@ import { addFact, removeFact, CATEGORIES } from './memory.js'
 import { memoryTools } from './memory-tools.js'
 import { askGemini, geminiApiEnabled } from './gemini-api.js'
 
-// The computer tools drive PowerShell on the user's own Windows machine. On a server they would act on the
-// server instead, so there they are simply not offered.
+// The computer tools drive the user's own Windows machine. Locally that is this process. In the cloud
+// (see src/pc-bridge.js) the same calls are forwarded to the home bridge, and only when COMPUTER_MODE is on.
 // The Discord bot counts as linked once it has called the bridge within the last day.
 const discordLinked = () => Date.now() - (state.bridgeSeenAt || 0) < 24 * 3600000
 
-const computerEnabled = () => config.computerMode !== 'off' && process.platform === 'win32'
+const computerEnabled = () => config.computerMode !== 'off' && pc.pcEnabled()
 // Each scheduled task is a full model run, so the list is kept short.
 const MAX_TASKS = 20
 
@@ -73,20 +72,6 @@ export async function firstYouTubeVideo(query) {
   if (m) return { id: m[1], title: JSON.parse(`"${m[2]}"`) }
   const id = html.match(/"videoId":"([\w-]{11})"/)
   return id ? { id: id[1], title: '' } : null
-}
-
-function runPowerShell(command) {
-  return new Promise((resolve) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + command],
-      { timeout: 60000, maxBuffer: 1024 * 1024, windowsHide: true },
-      (err, stdout, stderr) => {
-        const out = [stdout, stderr && `STDERR: ${stderr}`, err && !stderr && `ERROR: ${err.message}`].filter(Boolean).join('\n')
-        resolve((out || '(אין פלט)').slice(0, 4000))
-      }
-    )
-  })
 }
 
 // Read tools cover every connected Google account unless one is named; write tools default to the first (primary) one.
@@ -597,7 +582,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'open',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'פותח משהו על המסך במחשב של המשתמש, מיד ובלי לבקש אישור: כתובת אינטרנט (https://...) או אחת מהאפליקציות: ' + Object.keys(APPS).join(', ') + '. ל"תפתח יוטיוב" / "תפתח לי את האתר של...". לחיפוש ביוטיוב בלי להפעיל: https://www.youtube.com/results?search_query=... כדי להפעיל שיר או סרטון יש play_youtube.',
     parameters: obj({ target: str('כתובת https מלאה, או שם אפליקציה מהרשימה') }),
     async run({ target }) {
@@ -605,20 +590,20 @@ ${await askGemini(question)}`
       // Only a web address or a name from the fixed list gets through. Nothing here can run a command.
       const isUrl = /^https?:\/\/[^\s"'<>|&^]+$/i.test(what)
       if (!isUrl && !Object.values(APPS).includes(what)) return `אפשר לפתוח רק כתובת אינטרנט או אחת מאלה: ${Object.keys(APPS).join(', ')}. לכל דבר אחר יש run_command.`
-      await new Promise((resolve, reject) => execFile('rundll32.exe', ['url.dll,FileProtocolHandler', what], { windowsHide: true }, (err) => (err ? reject(err) : resolve())))
+      await pc.openOnScreen(what)
       return `נפתח: ${what}`
     },
   },
   {
     name: 'play_youtube',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מחפש ביוטיוב ומפעיל מיד את הסרטון הראשון בתוצאות, על המסך של המשתמש, בלי לבקש אישור. ל"תפעיל/תשים לי ביוטיוב X", "תפתח יוטיוב ותחפש X ותפעיל", שיר, זמר, קליפ. אם הוא רק רוצה לראות תוצאות בלי להפעיל, יש open עם כתובת חיפוש.',
     parameters: obj({ query: str('מה לחפש: שם שיר, זמר, סרטון') }),
     async run({ query }) {
       const found = await firstYouTubeVideo(query)
       // No video found: the results page is still better than nothing.
       const url = found ? `https://www.youtube.com/watch?v=${found.id}` : `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`
-      await new Promise((resolve, reject) => execFile('rundll32.exe', ['url.dll,FileProtocolHandler', url], { windowsHide: true }, (err) => (err ? reject(err) : resolve())))
+      await pc.openOnScreen(url)
       return found ? `מתנגן: ${found.title || query} (${url})` : `לא מצאתי סרטון להפעלה, פתחתי את תוצאות החיפוש: ${url}`
     },
   },
@@ -629,7 +614,7 @@ ${await askGemini(question)}`
     parameters: obj({ command: str('פקודת PowerShell') }),
     async run({ command }, ctx) {
       if (!(await approved(ctx, `להריץ את הפקודה?\n\`\`\`${command}\`\`\``))) return 'המשתמש לא אישר את הפקודה'
-      return runPowerShell(command)
+      return pc.runCommand(command)
     },
   },
   {
@@ -638,9 +623,9 @@ ${await askGemini(question)}`
     description: 'קורא קובץ טקסט מהמחשב של המשתמש.',
     parameters: obj({ path: str('נתיב מלא לקובץ') }),
     async run({ path: p }, ctx) {
-      const full = path.resolve(p)
-      if (!(await approved(ctx, `לקרוא את הקובץ ${full}?`))) return 'המשתמש לא אישר'
-      return fs.readFileSync(full, 'utf8').slice(0, 12000)
+      const shown = process.platform === 'win32' ? path.resolve(p) : p
+      if (!(await approved(ctx, `לקרוא את הקובץ ${shown}?`))) return 'המשתמש לא אישר'
+      return pc.readTextFile(p)
     },
   },
   {
@@ -649,17 +634,15 @@ ${await askGemini(question)}`
     description: 'כותב קובץ טקסט במחשב של המשתמש (דורס קובץ קיים).',
     parameters: obj({ path: str('נתיב מלא לקובץ'), content: str('תוכן הקובץ') }),
     async run({ path: p, content }, ctx) {
-      const full = path.resolve(p)
-      const exists = fs.existsSync(full)
-      if (!(await approved(ctx, `${exists ? 'לדרוס' : 'ליצור'} את הקובץ ${full}? (${content.length} תווים)`))) return 'המשתמש לא אישר'
-      fs.mkdirSync(path.dirname(full), { recursive: true })
-      fs.writeFileSync(full, content)
-      return 'נכתב'
+      const where = pc.pcEnabled() && process.platform !== 'win32' ? p : path.resolve(p)
+      const exists = process.platform === 'win32' && fs.existsSync(where)
+      if (!(await approved(ctx, `${exists ? 'לדרוס' : 'ליצור'} את הקובץ ${where}? (${content.length} תווים)`))) return 'המשתמש לא אישר'
+      return pc.writeTextFile(p, content)
     },
   },
   {
     name: 'pc_media',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'שליטה במדיה ובווליום במחשב: ניגון/עצירה, שיר הבא, שיר קודם, השתקה, הגברה/הנמכה, או קביעת ווליום באחוזים (0-100). ל"תעצור", "שיר הבא", "תגביר", "ווליום 30", "השתק".',
     parameters: obj(
       {
@@ -674,7 +657,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_screenshot',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מצלם את מסך המחשב ושולח את התמונה למשתמש בוואטסאפ. ל"מה פתוח לי על המסך?", "תצלם את המסך".',
     parameters: obj({ caption: str('כיתוב שיופיע עם התמונה בוואטסאפ (אופציונלי)') }, []),
     async run({ caption = 'צילום מסך מהמחשב' }, ctx) {
@@ -691,7 +674,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'play_spotify',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מחפש ומפעיל שיר, אמן או פלייליסט בספוטיפיי במחשב. ל"תשים בספוטיפיי X", "תנגן בספוטיפיי עומר אדם".',
     parameters: obj({ query: str('שם השיר, האמן או הפלייליסט') }),
     async run({ query }) {
@@ -700,7 +683,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_launch_app',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'פותח כל אפליקציה או תוכנה המותקנת במחשב לפי שם. ל"תפתח דיסקורד", "תפתח VS Code", "תפתח כרום".',
     parameters: obj({ name: str('שם האפליקציה או התוכנה') }),
     async run({ name }) {
@@ -720,7 +703,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_lock',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'נועל את מסך המחשב מיד (Lock Workstation). ל"תנעל את המחשב".',
     parameters: obj({}),
     async run() {
@@ -730,7 +713,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_unlock',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מבטל את נעילת המחשב: מדליק/מעיר את המסך, מעלה את מסך הנעילה לחלון הזנת הסיסמה ומקליד את הסיסמה (ברירת מחדל: naorkk132) עם Enter. ל"תבטל נעילה", "תבטל את הנעילה", "תפתח את המחשב", "תפתח את הנעילה".',
     parameters: obj({ password: str('הסיסמה להקלדה (ברירת מחדל: naorkk132). כדי לפתוח רק את המסך בלי להזין סיסמה העבר "none"') }, []),
     async run({ password = 'naorkk132' } = {}) {
@@ -739,7 +722,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_display_off',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מכבה את מסכי המחשב מיד (שולח את המסכים למצב שינה / Standby מבלי לכבות או להרדים את המחשב עצמו). מתבצע מיד ללא שום בקשת אישור! ל"תכבה מסכים", "תכבה את המסך", "כיבוי מסכים", "לילה טוב".',
     parameters: obj({
       lock: { type: 'boolean', description: 'האם לנעול את מסך המחשב במקביל לכיבוי המסך (ברירת מחדל: false)' },
@@ -751,7 +734,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_display_on',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מדליק/מעיר את מסכי המחשב ממצב כיבוי או שינה. ל"תדליק מסכים", "תדליק את המסך", "הדלקת מסכים".',
     parameters: obj({}),
     async run() {
@@ -760,7 +743,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_type',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מקליד טקסט, קוד PIN או סיסמה במחשב (בשדה הפעיל, במסך הנעילה, במסמך או בחיפוש). ל"תקליד 1234", "תקליד במחשב ...", "תקליד את הקוד ...".',
     parameters: obj(
       {
@@ -775,7 +758,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_press_key',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'לוחץ על מקש או צירוף מקשים במקלדת של המחשב. מקשים אפשריים: enter, esc, tab, space, backspace, up, down, left, right, f1-f12, ctrl+c, ctrl+v, alt+f4. ל"תלחץ אנטר", "תלחץ Enter", "תלחץ esc".',
     parameters: obj({ key: str('שם המקש או הצירוף (למשל enter, esc, tab, space)') }),
     async run({ key }) {
@@ -784,7 +767,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_status',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מציג את נתוני המחשב: אחוז שימוש במעבד, זיכרון RAM, סוללה, מקום פנוי בכוננים, והתוכנות שצורכות הכי הרבה משאבים. ל"מה מצב המחשב?", "למה המחשב איטי?".',
     parameters: obj({}),
     async run() {
@@ -793,7 +776,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_speak',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מקריא טקסט בקול ברמקולים של המחשב (בקול של ElevenLabs אם מוגדר, או בקול של Windows). ל"תגיד במחשב שהאוכל מוכן".',
     parameters: obj({ text: str('הטקסט להקראה ברמקולים') }),
     async run({ text }) {
@@ -802,7 +785,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_timer',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מציג חלון טיימר ספירה לאחור מרחף על מסך המחשב שמשמיע צליל ומתריע בסיום. ל"טיימר 25 דקות ללמידה".',
     parameters: obj(
       {
@@ -817,7 +800,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_clipboard_get',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'קורא את הטקסט שנמצא כרגע בלוח ההעתקה (Clipboard) של המחשב.',
     parameters: obj({}),
     async run() {
@@ -827,7 +810,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_clipboard_set',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מעתיק טקסט ללוח ההעתקה (Clipboard) של המחשב. ל"תעתיק לי את הקישור הזה".',
     parameters: obj({ text: str('הטקסט להעתקה ללוח') }),
     async run({ text }) {
@@ -857,7 +840,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_find_files',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מחפש קבצים במחשב (שולחן עבודה, הורדות, מסמכים, תמונות וכו\') לפי שם או סיומת.',
     parameters: obj({ query: str('שם הקובץ או חלק ממנו'), folder: str('נתיב תיקייה ספציפית לחיפוש (אופציונלי)') }, ['query']),
     async run({ query, folder }) {
@@ -926,33 +909,22 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_send_file',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'שולח קובץ מהמחשב (מתיקיית Downloads, Desktop, Documents או נתיב ספציפי) ישירות אל המשתמש בוואטסאפ (מסמכי PDF, תמונות, שירים, סרטונים, קבצי טקסט או ארכיונים). ל"שלח לי את הקובץ X", "תשלח לי לווצאפ את ה-PDF שהורדתי".',
     parameters: obj({ path: str('נתיב מלא לקובץ או שם הקובץ לחיפוש במחשב'), caption: str('כיתוב שיופיע עם הקובץ בוואטסאפ (אופציונלי)') }, ['path']),
     async run({ path: filePath, caption }, ctx) {
       if (!ctx.sendMedia) return 'אין יכולת לשלוח מדיה בשיחה הזאת'
-      const resolved = pc.resolveFile(filePath)
-      if (!resolved) return `לא נמצא קובץ מתאים בשם "${filePath}" בתיקיות המשתמש`
-      const st = fs.statSync(resolved, { throwIfNoEntry: false })
-      if (!st?.isFile()) return `הנתיב "${resolved}" אינו קובץ`
-      if (st.size > 50 * 1024 * 1024) return `הקובץ גדול מדי לשליחה בוואטסאפ (${(st.size / (1024 * 1024)).toFixed(1)} MB, מקסימום 50MB)`
-      const ext = path.extname(resolved).slice(1).toLowerCase()
-      const mime = {
-        pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
-        mp4: 'video/mp4', mkv: 'video/x-matroska', mov: 'video/quicktime', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
-        zip: 'application/zip', rar: 'application/x-rar-compressed', '7z': 'application/x-7z-compressed', txt: 'text/plain; charset=utf-8',
-        csv: 'text/csv; charset=utf-8', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      }[ext] || 'application/octet-stream'
-      const buffer = fs.readFileSync(resolved)
-      const baseName = path.basename(resolved)
-      await ctx.sendMedia({ buffer, mime, caption: caption || baseName, name: baseName })
-      return `הקובץ "${baseName}" (${(st.size / (1024 * 1024)).toFixed(2)} MB) נשלח בהצלחה לווצאפ!`
+      const got = await pc.readUserFile(filePath)
+      if (!got || got.error === 'missing') return `לא נמצא קובץ מתאים בשם "${filePath}" בתיקיות המשתמש`
+      if (got.error === 'notfile') return `הנתיב "${got.path}" אינו קובץ`
+      if (got.error === 'toobig') return `הקובץ גדול מדי לשליחה בוואטסאפ (${(got.size / (1024 * 1024)).toFixed(1)} MB, מקסימום 50MB)`
+      await ctx.sendMedia({ buffer: got.data, mime: got.mime, caption: caption || got.name, name: got.name })
+      return `הקובץ "${got.name}" (${(got.size / (1024 * 1024)).toFixed(2)} MB) נשלח בהצלחה לווצאפ!`
     },
   },
   {
     name: 'pc_webcam_snap',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מצלם תמונה בזמן אמת ממצלמת הרשת של המחשב (Webcam) ושולח אותה למשתמש בוואטסאפ. מאפשר בדיקת אבטחה בחדר כשהמשתמש רחוק מהמחשב. ל"תצלם מהמצלמת רשת", "צלם לי את החדר מהמחשב".',
     parameters: obj({ caption: str('כיתוב שיופיע עם התמונה (אופציונלי)'), device: str('שם מצלמה ספציפי אם יש יותר מאחת (אופציונלי)') }, []),
     async run({ caption = 'תמונה ממצלמת הרשת במחשב', device }, ctx) {
@@ -969,7 +941,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_screen_record',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מקליט סרטון קצר מהמסך (2 עד 6 שניות) ושולח אותו כקובץ וידאו MP4 למשתמש בוואטסאפ. ל"תקליט לי את המסך לכמה שניות", "תראה לי מה קורה במסך בווידאו".',
     parameters: obj({ seconds: { type: 'number', description: 'מספר שניות להקלטה (2 עד 6, ברירת מחדל 3)' }, caption: str('כיתוב לווידאו (אופציונלי)') }, []),
     async run({ seconds = 3, caption = 'הקלטת מסך מהמחשב' }, ctx) {
@@ -986,7 +958,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_top_processes',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'מציג את התהליכים והתוכנות שצורכים הכי הרבה זיכרון (RAM) ומעבד (CPU) במחשב, עם אפשרות לסגור תהליך סורר. ל"מי טוחן לי את המחשב?", "אילו תוכנות לוקחות הכי הרבה RAM?", "תסגור את תהליך מספר X".',
     parameters: obj(
       {
@@ -1038,7 +1010,7 @@ ${await askGemini(question)}`
   },
   {
     name: 'pc_browser_tabs',
-    enabled: () => process.platform === 'win32',
+    enabled: () => pc.pcEnabled(),
     description: 'ניהול לשוניות בדפדפן (Chrome, Edge וכו\'): הצגת רשימת הלשוניות הפתוחות עם קישורים ישירים לטלפון, פתיחת לשונית חדשה, סגירת לשונית (או הלשונית הפעילה), מעבר בין לשוניות ושחזור לשונית שנסגרה. ל"איזה טאבים פתוחים לי במחשב?", "תסגור את הלשונית של יוטיוב", "פתח לשונית חדשה".',
     parameters: obj(
       {

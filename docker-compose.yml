@@ -12,8 +12,13 @@ services:
     environment:
       HELPER_DATA_DIR: /var/data
       TIMEZONE: Asia/Jerusalem
-      COMPUTER_MODE: "off"
+      # Computer actions stay off until .env sets COMPUTER_MODE=ask (or auto) and PC_BRIDGE_SECRET.
+      # The port is the only thing published: the home PC dials out to it. Nothing at home is exposed.
+      PC_BRIDGE_LISTEN: "1"
+      PC_BRIDGE_PORT: "3212"
       NODE_ENV: production
+    ports:
+      - "3212:3212"
     volumes:
       - helper-data:/var/data
     # Chromium inside the image needs these for headless page reads.

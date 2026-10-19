@@ -1,0 +1,4 @@
+{
+  "url": "ws://YOUR_SERVER:3212/pc",
+  "secret": "paste-the-same-PC_BRIDGE_SECRET"
+}

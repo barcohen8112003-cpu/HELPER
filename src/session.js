@@ -3,6 +3,7 @@
 // to it, reads pages from the live session, and reloads the page every few minutes so the school's timeout never hits.
 import WebSocket from 'ws'
 import { config } from './config.js'
+import { remoteActive, remoteCall } from './pc-bridge.js'
 
 const SETTLE_MS = 2500
 const LOAD_TIMEOUT = 25000
@@ -99,6 +100,7 @@ const sameAddress = (a, b) => a.split('#')[0].replace(/\/$/, '') === b.split('#'
 
 // Text of a page in the signed-in window. Opens the address first when the tab is somewhere else.
 export function readSessionPage(url, maxChars = 12000) {
+  if (remoteActive()) return remoteCall('readSessionPage', [url, maxChars])
   return withTab(async ({ call, once }) => {
     await call('Page.enable')
     const { result } = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true })
@@ -152,6 +154,7 @@ const GRID = `(async () => {
 })()`
 
 export function readTimetable() {
+  if (remoteActive()) return remoteCall('readTimetable', [])
   return withTab(async ({ call, once }) => {
     await call('Page.enable')
     const loaded = once('Page.loadEventFired')
@@ -168,6 +171,7 @@ export function readTimetable() {
 
 // Reload so the session stays alive, then confirm it is still signed in. Throws when it is not.
 export function sessionKeepAlive() {
+  if (remoteActive()) return remoteCall('sessionKeepAlive', [])
   return withTab(async ({ call, once }) => {
     await call('Page.enable')
     const loaded = once('Page.loadEventFired')

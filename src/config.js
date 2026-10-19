@@ -161,6 +161,12 @@ const build = () => ({
   },
   calendarUrl: env('CALENDAR_ICS_URL'),
   computerMode: ['off', 'ask', 'auto'].includes(env('COMPUTER_MODE', 'ask')) ? env('COMPUTER_MODE', 'ask') : 'ask',
+  // Home PC bridge (src/pc-bridge.js). The cloud listens; the Windows PC dials out. Empty secret = computer tools stay local-only.
+  pcBridge: {
+    secret: env('PC_BRIDGE_SECRET'),
+    port: Number(env('PC_BRIDGE_PORT', '0')) || 0,
+    url: env('PC_BRIDGE_URL'),
+  },
 })
 
 export const config = build()
