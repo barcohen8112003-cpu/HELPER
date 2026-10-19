@@ -180,9 +180,16 @@ function render(S) {
       : 'החלון רץ על המחשב בבית (webtop-browser.bat). בענן אפשר להעביר אותו לכאן עם WEBTOP_CLOUD=1.'),
     W.cloud && h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/webtop' }, 'התחברות ל-Webtop')),
     W.url ? h('div', { class: 'small', style: 'direction:ltr;text-align:right' }, W.url) : '')
+  const GH = S.googleHome || { cloud: false }
+  const googleHomeBody = h('div', {},
+    h('p', { class: 'small' }, GH.cloud
+      ? 'דפדפן נפרד בענן, מחובר לחשבון Google של הבית. נכנסים פעם אחת מכאן. אם Google חוסם דפדפן אוטומטי, החלון רץ על מסך וירטואלי כדי שאפשר יהיה להיכנס ידנית. הסיסמה לא נשמרת אצל העוזר.'
+      : 'בלי GOOGLE_HOME_CLOUD השליטה עוברת לחלון Google Home שבמחשב הביתי, דרך הגשר.'),
+    GH.cloud && h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/google-home' }, 'התחברות ל-Google Home')))
 
   fill($('connectors'),
     connector('Webtop', 'ציונים, מערכת שעות, שיעורי בית והודעות. קריאה בלבד', Boolean(W.enabled), webtopBody),
+    connector('Google Home', 'אורות, רמקולים ושאר מכשירי הבית', GH.cloud, googleHomeBody),
     connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.length > 0, googleBody),
     connector('מודל AI', S.model, S.settings.LLM_API_KEY.set, form(S, [
       ['LLM_BASE_URL', 'כתובת הספק', { hint: 'כל ספק תואם OpenAI. Groq: https://api.groq.com/openai/v1' }],

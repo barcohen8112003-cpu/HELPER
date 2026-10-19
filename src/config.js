@@ -148,6 +148,13 @@ const build = () => ({
     // 1: Chromium inside this process (the container), profile on the data volume. Unset: the home window, via the bridge when this is the cloud.
     cloud: ['1', 'true', 'yes'].includes(env('WEBTOP_CLOUD').toLowerCase()),
   },
+  // A second Chromium in the container, signed in to the personal Google account, for Google Home tiles.
+  // Separate from Webtop so a school login and a home login do not share a profile.
+  googleHome: {
+    cloud: ['1', 'true', 'yes'].includes(env('GOOGLE_HOME_CLOUD').toLowerCase()),
+    port: Number(env('GOOGLE_HOME_DEBUG_PORT', '9226')) || 9226,
+    keepAliveMinutes: Math.max(1, Number(env('GOOGLE_HOME_KEEPALIVE_MINUTES', '10')) || 10),
+  },
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
   gemini: {

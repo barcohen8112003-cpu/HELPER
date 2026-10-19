@@ -13,6 +13,9 @@
   a { color:var(--ink); }
   .note { color:var(--muted); margin:0 22px 12px; max-width:920px; }
   #status { margin-inline-start:auto; color:var(--muted); font-size:13px; }
+  .pick { display:flex; gap:8px; margin:0 22px 12px; }
+  .pick button { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px; padding:7px 14px; cursor:pointer; }
+  .pick button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
   #stage { margin:0 22px 28px; background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; outline:none; max-width:1100px; cursor:pointer; }
   #stage:focus { box-shadow:0 0 0 2px var(--accent); }
   img { display:block; width:100%; height:auto; background:#111; }
@@ -25,7 +28,11 @@
   <a href="/">חזרה להגדרות</a>
   <span id="status">מתחבר…</span>
 </header>
-<p class="note">זה החלון של Webtop שרץ בענן. נכנסים כאן פעם אחת, כולל סיסמה או קוד SMS. הסיסמה לא נשמרת אצל העוזר, רק עוגיות הדפדפן עצמו.</p>
+<div class="pick">
+  <button type="button" data-site="webtop">Webtop</button>
+  <button type="button" data-site="google-home">Google Home</button>
+</div>
+<p class="note" id="note"></p>
 <div id="stage" tabindex="0">
   <img id="view" alt="חלון Webtop">
 </div>
@@ -34,7 +41,28 @@
 const stage = document.getElementById('stage')
 const img = document.getElementById('view')
 const status = document.getElementById('status')
+const title = document.querySelector('h1')
+const note = document.getElementById('note')
+const SITES = {
+  webtop: {
+    title: 'התחברות ל-Webtop',
+    note: 'זה החלון של Webtop שרץ בענן. נכנסים כאן פעם אחת, כולל סיסמה או קוד SMS. הסיסמה לא נשמרת אצל העוזר, רק עוגיות הדפדפן עצמו.',
+  },
+  'google-home': {
+    title: 'התחברות ל-Google Home',
+    note: 'זה החלון של Google Home בענן, חשבון Google נפרד מ-Webtop. נכנסים פעם אחת. אם Google חוסם דפדפן אוטומטי, החלון רץ על מסך וירטואלי כדי שאפשר יהיה להיכנס ידנית. הסיסמה לא נשמרת אצל העוזר.',
+  },
+}
+let site = location.pathname === '/google-home' || new URLSearchParams(location.search).get('site') === 'google-home' ? 'google-home' : 'webtop'
 let url = ''
+function showSite() {
+  title.textContent = SITES[site].title
+  note.textContent = SITES[site].note
+  document.title = SITES[site].title
+  for (const b of document.querySelectorAll('.pick button')) b.classList.toggle('on', b.dataset.site === site)
+}
+for (const b of document.querySelectorAll('.pick button')) b.addEventListener('click', () => { site = b.dataset.site; showSite(); tick() })
+showSite()
 function point(e) {
   const r = img.getBoundingClientRect()
   const sx = img.naturalWidth && r.width ? img.naturalWidth / r.width : 1
@@ -42,7 +70,7 @@ function point(e) {
   return { x: Math.round((e.clientX - r.left) * sx), y: Math.round((e.clientY - r.top) * sy) }
 }
 async function send(body) {
-  const res = await fetch('/api/webtop/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const res = await fetch('/api/webtop/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, site }) })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     status.textContent = data.error || 'הפעולה נכשלה'
@@ -50,7 +78,7 @@ async function send(body) {
 }
 async function tick() {
   try {
-    const res = await fetch('/api/webtop/frame', { cache: 'no-store' })
+    const res = await fetch('/api/webtop/frame?site=' + encodeURIComponent(site), { cache: 'no-store' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       status.textContent = data.error || 'אין תמונה'

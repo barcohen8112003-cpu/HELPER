@@ -22,6 +22,8 @@ const defaults = {
   lessons: { fetchedAt: 0, week: [] }, // the Webtop timetable: [{ day, lesson, subject, teacher, room, cancelled }]
   webtopLoginOpen: false, // a re-login notice was already sent for the current signed-out stretch
   webtopLoginNotifiedAt: 0, // last WhatsApp notice, so a flapping session cannot send another inside the gap
+  googleHomeLoginOpen: false,
+  googleHomeLoginNotifiedAt: 0,
   contacts: {}, // { [jid]: name }: WhatsApp contacts, so "send Dani..." can find Dani's number
   wa: { seen: [], lastAt: 0 }, // WhatsApp message ids already handled, and the time of the newest one
   outbox: [], // { text, urgent } waiting for WhatsApp to be connected or for quiet hours to end
