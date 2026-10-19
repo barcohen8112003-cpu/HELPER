@@ -8,6 +8,8 @@ import os from 'node:os'
 import QRCode from 'qrcode'
 import { config, saveSettings, mailEnabled, ROOT, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
+import { setWebtopLoginUrl } from './session.js'
+import { captureFrame, webtopInput } from './webtop-browser.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
@@ -16,6 +18,7 @@ import { ago } from './status.js'
 import { handleDashboard } from './dashboard/api.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
+const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
 const SENT_LOG = path.join(DATA_DIR, 'sent.log')
 const COOKIE = 'helper_session'
 const MAX_BODY = 100000
@@ -95,8 +98,22 @@ async function snapshot(connectedSince) {
     sent: fs.existsSync(SENT_LOG) ? fs.readFileSync(SENT_LOG, 'utf8').trim().split('\n').slice(-40).reverse() : [],
     appQrDataUrl,
     appIp: ip,
-    isTailscale
+    isTailscale,
+    webtop: { enabled: Boolean(config.webtop.url), cloud: config.webtop.cloud, url: config.webtop.url, loginPath: '/webtop' },
   }
+}
+
+// Host and Origin allow-lists. UI_PUBLIC_HOST (for example "37.60.240.231:3210") is added only when set.
+// Loopback stays allowed either way. extraHosts is the machine's own LAN address, same as before.
+export function uiPolicy(port = config.uiPort, env = process.env, extraHosts = []) {
+  const pub = String(env.UI_PUBLIC_HOST || '').trim()
+  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`, ...extraHosts.filter(Boolean)]
+  const origins = [`http://127.0.0.1:${port}`, `http://localhost:${port}`]
+  if (pub) {
+    hosts.push(pub)
+    origins.push(`http://${pub}`)
+  }
+  return { hosts, origins, publicBase: pub ? `http://${pub}` : `http://127.0.0.1:${port}` }
 }
 
 // { connectedSince(): number, restart(): void }
@@ -106,8 +123,13 @@ export function startUi({ connectedSince, restart, agent }) {
   const bridgeToken = (state.bridgeToken ||= randomBytes(24).toString('hex'))
   save()
   const port = config.uiPort
+  const policy = () => {
+    const { ip: networkIp } = getNetworkIp()
+    return uiPolicy(port, process.env, networkIp ? [`${networkIp}:${port}`] : [])
+  }
   const origin = `http://127.0.0.1:${port}`
   const oauthStates = new Set()
+  setWebtopLoginUrl(() => `${policy().publicBase}/webtop?t=${token}`)
 
   const send = (res, status, body, headers = {}) => {
     const json = typeof body !== 'string'
@@ -155,6 +177,7 @@ export function startUi({ connectedSince, restart, agent }) {
       return {}
     }
     if (route === 'restart') return setTimeout(restart, 300), {}
+    if (route === 'webtop/input') return await webtopInput(body)
     throw Object.assign(new Error('לא נמצא'), { status: 404 })
   }
 
@@ -211,13 +234,11 @@ export function startUi({ connectedSince, restart, agent }) {
         }
       }
 
-      // Web settings UI is loopback/localhost only for security against DNS-rebinding
+      // Web settings UI is loopback, this machine's own address, or UI_PUBLIC_HOST. Anything else is rejected
+      // so a DNS-rebinding page cannot call the API.
+      const access = policy()
       const host = req.headers.host || ''
-      const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`]
-      const { ip: networkIp } = getNetworkIp()
-      if (networkIp) allowedHosts.push(`${networkIp}:${port}`)
-
-      if (!allowedHosts.includes(host)) return send(res, 403, note('גישה נדחתה'))
+      if (!access.hosts.includes(host)) return send(res, 403, note('גישה נדחתה'))
 
       // Google sends the browser back here after the account was approved. It comes before the sign-in check on
       // purpose: the one-time `state` was issued only to a signed-in page, so it is what proves the request is ours.
@@ -226,7 +247,7 @@ export function startUi({ connectedSince, restart, agent }) {
         if (!oauthStates.delete(oauthState)) return send(res, 403, note('הבקשה פגה. חזור לאתר ההגדרות ונסה שוב.'))
         if (url.searchParams.has('error')) return send(res, 200, note(`החיבור בוטל: ${url.searchParams.get('error')}`))
         try {
-          const email = await connectWithCode(url.searchParams.get('code'), `${origin}/google/callback`)
+          const email = await connectWithCode(url.searchParams.get('code'), `${access.publicBase}/google/callback`)
           console.log(`[ui] חשבון Google חובר: ${email}`)
           return send(res, 302, '', { Location: '/?connected=' + encodeURIComponent(email) })
         } catch (e) {
@@ -235,25 +256,37 @@ export function startUi({ connectedSince, restart, agent }) {
       }
 
       // First visit carries the token in the address; it is swapped for a cookie and dropped from the URL.
-      if (url.pathname === '/' && url.searchParams.has('t')) {
+      // The Webtop login link from WhatsApp lands on /webtop?t= and comes back to that page signed in.
+      if ((url.pathname === '/' || url.pathname === '/webtop') && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
-        return send(res, 302, '', { Location: '/', 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` })
+        const dest = url.pathname === '/webtop' ? '/webtop' : '/'
+        return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` })
       }
       if (!signedIn(req)) return send(res, 403, note('כדי להיכנס, פתח את הכתובת שמופיעה בחלון של העוזר.'))
       // The dashboard (/dash) is read-only and uses the same sign-in as everything below.
       if (await handleDashboard(req, res, url, signedIn)) return
 
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'))
+      if (req.method === 'GET' && url.pathname === '/webtop') return send(res, 200, fs.readFileSync(WEBTOP_PAGE, 'utf8'))
+      if (req.method === 'GET' && url.pathname === '/api/webtop/frame') {
+        try {
+          const frame = await captureFrame()
+          res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'Content-Length': frame.jpeg.length })
+          return res.end(frame.jpeg)
+        } catch (e) {
+          return send(res, 503, { error: e.message })
+        }
+      }
       if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, await snapshot(connectedSince()))
       if (req.method === 'GET' && url.pathname === '/google/connect') {
         if (!config.google.clientId || !config.google.clientSecret) return send(res, 200, note('קודם צריך לשמור Client ID ו-Client secret.'))
         const oauthState = randomBytes(16).toString('hex')
         oauthStates.add(oauthState)
-        return send(res, 302, '', { Location: authUrl(`${origin}/google/callback`, oauthState) })
+        return send(res, 302, '', { Location: authUrl(`${access.publicBase}/google/callback`, oauthState) })
       }
       if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
         // Changes are accepted only from this page itself, never from another site open in the same browser.
-        if (req.headers.origin && ![origin, `http://localhost:${port}`].includes(req.headers.origin)) return send(res, 403, { error: 'מקור לא מורשה' })
+        if (req.headers.origin && !access.origins.includes(req.headers.origin)) return send(res, 403, { error: 'מקור לא מורשה' })
         return send(res, 200, await api(url.pathname.slice(5), await readJson(req)))
       }
       send(res, 404, note('לא נמצא'))
@@ -264,5 +297,5 @@ export function startUi({ connectedSince, restart, agent }) {
 
   server.on('error', (e) => console.log(`[ui] אתר ההגדרות לא עלה: ${e.code === 'EADDRINUSE' ? `הפורט ${port} תפוס. אפשר לשנות UI_PORT בקובץ .env` : e.message}`))
   server.listen(port, '0.0.0.0')
-  return `${origin}/?t=${token}`
+  return `${policy().publicBase}/?t=${token}`
 }

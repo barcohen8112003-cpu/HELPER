@@ -173,7 +173,16 @@ function render(S) {
         h('li', {}, 'ב-Credentials יוצרים OAuth client ID מסוג Desktop app, ומדביקים כאן את שני הערכים.')),
       form(S, [['GOOGLE_CLIENT_ID', 'Client ID'], ['GOOGLE_CLIENT_SECRET', 'Client secret', { secret: true }]])))
 
+  const W = S.webtop || { enabled: false, cloud: false, url: '' }
+  const webtopBody = h('div', {},
+    h('p', { class: 'small' }, W.cloud
+      ? 'הדפדפן רץ בענן, גם כשהמחשב בבית כבוי. נכנסים פעם אחת מכאן, מהטלפון או מהמחשב, כולל קוד SMS. הסיסמה לא נשמרת אצל העוזר.'
+      : 'החלון רץ על המחשב בבית (webtop-browser.bat). בענן אפשר להעביר אותו לכאן עם WEBTOP_CLOUD=1.'),
+    W.cloud && h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/webtop' }, 'התחברות ל-Webtop')),
+    W.url ? h('div', { class: 'small', style: 'direction:ltr;text-align:right' }, W.url) : '')
+
   fill($('connectors'),
+    connector('Webtop', 'ציונים, מערכת שעות, שיעורי בית והודעות. קריאה בלבד', Boolean(W.enabled), webtopBody),
     connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.length > 0, googleBody),
     connector('מודל AI', S.model, S.settings.LLM_API_KEY.set, form(S, [
       ['LLM_BASE_URL', 'כתובת הספק', { hint: 'כל ספק תואם OpenAI. Groq: https://api.groq.com/openai/v1' }],

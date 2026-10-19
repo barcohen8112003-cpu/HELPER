@@ -8,8 +8,29 @@ export const DATA_DIR = process.env.HELPER_DATA_DIR || path.join(ROOT, 'data')
 fs.mkdirSync(DATA_DIR, { recursive: true })
 
 // HELPER_ENV_FILE, like HELPER_DATA_DIR, points tests at a throwaway copy.
+// Resolved before the file is applied, so a test can point at its own file.
 export const ENV_FILE = process.env.HELPER_ENV_FILE || path.join(ROOT, '.env')
-if (fs.existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE)
+
+// File values win over process env. Docker injects env_file once, when the container is created, and a later
+// `docker restart` keeps those stale values. The settings page writes the mounted .env, so the file is the copy
+// that must be read on every start. Keys absent from the file are left as the process set them.
+export function applyEnvFile(file = ENV_FILE) {
+  if (!file || !fs.existsSync(file)) return
+  for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
+    const trimmed = raw.replace(/\r$/, '').trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const body = trimmed.startsWith('export ') ? trimmed.slice(7).trim() : trimmed
+    const eq = body.indexOf('=')
+    if (eq <= 0) continue
+    const key = body.slice(0, eq).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    let value = body.slice(eq + 1).trim()
+    const quoted = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))
+    if (quoted && value.length >= 2) value = value.slice(1, -1)
+    process.env[key] = value
+  }
+}
+applyEnvFile()
 
 // An empty line in .env ("KEY=") counts as unset, so the default applies.
 const env = (k, d = '') => (process.env[k] || d).trim()
@@ -124,6 +145,8 @@ const build = () => ({
     url: env('WEBTOP_URL'),
     port: Number(env('WEBTOP_DEBUG_PORT', '9223')) || 9223,
     keepAliveMinutes: Math.max(1, Number(env('WEBTOP_KEEPALIVE_MINUTES', '10')) || 10),
+    // 1: Chromium inside this process (the container), profile on the data volume. Unset: the home window, via the bridge when this is the cloud.
+    cloud: ['1', 'true', 'yes'].includes(env('WEBTOP_CLOUD').toLowerCase()),
   },
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
