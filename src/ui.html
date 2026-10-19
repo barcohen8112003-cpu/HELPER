@@ -135,11 +135,12 @@ function form(S, fields, { clear } = {}) {
     clear && S.settings[clear].set && h('button', { class: 'danger', type: 'button', onclick: () => confirm('לנתק?') && act('settings', { clear: [clear] }, 'נותק') }, 'נתק')))
   return el
 }
-function connector(title, desc, on, body) {
+function connector(title, desc, on, body, notice) {
   return h('div', { class: 'row block' },
     h('div', { style: 'display:flex;gap:16px;align-items:center' },
       h('div', { class: 'grow' }, h('b', {}, title), h('div', { class: 'small' }, desc)),
       h('span', { class: 'pill ' + (on ? 'ok' : '') }, on ? 'מחובר' : 'לא מחובר')),
+    notice || '',
     h('details', { style: 'margin-top:10px' }, h('summary', {}, on ? 'עריכה' : 'חיבור'), body))
 }
 function item(text, sub, onDelete, pill) {
@@ -188,7 +189,8 @@ function render(S) {
     GH.cloud && h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/google-home' }, 'התחברות ל-Google Home')))
 
   fill($('connectors'),
-    connector('Webtop', 'ציונים, מערכת שעות, שיעורי בית והודעות. קריאה בלבד', Boolean(W.enabled), webtopBody),
+    connector('Webtop', 'ציונים, מערכת שעות, שיעורי בית והודעות. קריאה בלבד', Boolean(W.enabled), webtopBody,
+      W.blocked && h('p', { class: 'small', style: 'margin:10px 0 0' }, W.blockedStatus || 'וובטופ חוסם את כתובת השרת, משתמשים במחשב הביתי')),
     connector('Google Home', 'אורות, רמקולים ושאר מכשירי הבית', GH.cloud, googleHomeBody),
     connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.length > 0, googleBody),
     connector('מודל AI', S.model, S.settings.LLM_API_KEY.set, form(S, [

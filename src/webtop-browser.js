@@ -43,6 +43,23 @@ const SITES = {
 
 export const cloudWebtopOn = () => config.webtop.cloud
 export const cloudGoogleHomeOn = () => config.googleHome.cloud
+
+// Shared with the session reader so a CloudFront block is recognized in the same words from a live-view frame.
+export const PAGE_SNAPSHOT = `JSON.stringify({ href: location.href, login: !!document.querySelector('input[type=password]'), text: document.body ? document.body.innerText : '' })`
+
+let pageTextObserver = () => {}
+export function onWebtopPageText(fn) {
+  pageTextObserver = typeof fn === 'function' ? fn : () => {}
+}
+
+// Chromium's --proxy-server. Only a proxy URL is accepted, so the value cannot smuggle extra flags.
+export function webtopProxySwitch(proxy = config.webtop.proxy) {
+  const v = String(proxy ?? '').trim()
+  if (!v || /[\s"'`]/.test(v) || v.startsWith('-')) return ''
+  if (/^(https?|socks5h?|socks4):\/\//i.test(v)) return `--proxy-server=${v}`
+  if (/^[A-Za-z0-9.-]+:\d{1,5}$/.test(v)) return `--proxy-server=${v}`
+  return ''
+}
 export const webtopProfileDir = () => SITES.webtop.profile()
 export const googleHomeProfileDir = () => SITES['google-home'].profile()
 export const webtopCdpBase = () => `http://127.0.0.1:${config.webtop.port}`
@@ -75,14 +92,10 @@ async function portOpen(site) {
   }
 }
 
-function launch(site) {
+export function browserLaunchArgs(site = 'webtop') {
+  site = browserSite(site)
   const spec = SITES[site]
-  const exe = chromiumPath()
-  if (!exe) throw new Error(`לא מצאתי Chromium בקונטיינר. הדפדפן של ${spec.label} לא עלה.`)
-  const profile = spec.profile()
-  fs.mkdirSync(profile, { recursive: true })
-  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(profile, name), { force: true })
-  const headed = spec.headed && xvfbPath()
+  const headed = Boolean(spec.headed && xvfbPath())
   const args = [
     '--disable-gpu',
     '--no-first-run',
@@ -93,14 +106,31 @@ function launch(site) {
     `--remote-debugging-address=127.0.0.1`,
     `--remote-debugging-port=${spec.port()}`,
     '--remote-allow-origins=*',
-    `--user-data-dir=${profile}`,
+    `--user-data-dir=${spec.profile()}`,
     `--window-size=${VIEW.width},${VIEW.height}`,
     '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
     ...(spec.headed ? ['--disable-blink-features=AutomationControlled'] : []),
     ...(headed ? [] : ['--headless=new']),
-    spec.url(),
   ]
+  // The proxy is for Webtop only. Google Home signs in directly and must not inherit an Israeli school proxy.
+  if (site === 'webtop') {
+    const proxy = webtopProxySwitch()
+    if (proxy) args.push(proxy)
+  }
+  args.push(spec.url())
+  return args
+}
+
+function launch(site) {
+  const spec = SITES[site]
+  const exe = chromiumPath()
+  if (!exe) throw new Error(`לא מצאתי Chromium בקונטיינר. הדפדפן של ${spec.label} לא עלה.`)
+  const profile = spec.profile()
+  fs.mkdirSync(profile, { recursive: true })
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(profile, name), { force: true })
+  const headed = spec.headed && xvfbPath()
+  const args = browserLaunchArgs(site)
   const child = headed
     ? spawn(xvfbPath(), ['-a', '-s', `-screen 0 ${VIEW.width}x${VIEW.height}x24`, exe, ...args], { detached: true, stdio: 'ignore' })
     : spawn(exe, args, { detached: true, stdio: 'ignore' })
@@ -210,7 +240,17 @@ async function shot(call) {
 
 // Live JPEG of the tab the person is signing in to. Nothing here is written to disk.
 export function captureFrame(site = 'webtop') {
-  return withCloudPage(site, shot)
+  return withCloudPage(site, async (call) => {
+    if (browserSite(site) === 'webtop') {
+      try {
+        const { result } = await call('Runtime.evaluate', { expression: PAGE_SNAPSHOT, returnByValue: true })
+        if (result?.value) pageTextObserver(JSON.parse(result.value))
+      } catch {
+        // A screenshot is still useful when the page text cannot be read.
+      }
+    }
+    return shot(call)
+  })
 }
 
 const KEYS = {

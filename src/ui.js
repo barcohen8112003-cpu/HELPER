@@ -8,7 +8,7 @@ import os from 'node:os'
 import QRCode from 'qrcode'
 import { config, saveSettings, mailEnabled, ROOT, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
-import { setWebtopLoginUrl } from './session.js'
+import { setWebtopLoginUrl, webtopCloudBlockedNow, WEBTOP_BLOCKED_STATUS } from './session.js'
 import { setGoogleHomeLoginUrl } from './google-home.js'
 import { captureFrame, webtopInput } from './webtop-browser.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
@@ -100,7 +100,14 @@ async function snapshot(connectedSince) {
     appQrDataUrl,
     appIp: ip,
     isTailscale,
-    webtop: { enabled: Boolean(config.webtop.url), cloud: config.webtop.cloud, url: config.webtop.url, loginPath: '/webtop' },
+    webtop: {
+      enabled: Boolean(config.webtop.url),
+      cloud: config.webtop.cloud,
+      url: config.webtop.url,
+      loginPath: '/webtop',
+      blocked: webtopCloudBlockedNow(),
+      blockedStatus: WEBTOP_BLOCKED_STATUS,
+    },
     googleHome: { cloud: config.googleHome.cloud, loginPath: '/google-home' },
   }
 }

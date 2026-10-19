@@ -5,7 +5,7 @@ import { getNews, formatNews } from './news.js'
 import { mailEvent, calendarEvent } from './monitoring/intake.js'
 
 import { inQuietHours } from './outbox.js'
-import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice } from './session.js'
+import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice, webtopKeepAliveFailure } from './session.js'
 import { googleHomeKeepAlive, isGoogleHomeLoginError, planGoogleHomeLoginNotice, clearGoogleHomeLoginNotice } from './google-home.js'
 import { lessonReminders } from './lessons.js'
 
@@ -103,6 +103,14 @@ async function webtop(notify) {
     save()
     await track(notify, 'webtop', 'Webtop', null)
   } catch (e) {
+    // A CloudFront block is shown on the settings page and falls back to the home PC. It is not a WhatsApp event.
+    if (webtopKeepAliveFailure(e) === 'silent') {
+      const h = (state.health.webtop ??= { fails: 0, down: false })
+      if (!h.blocked) console.log(`[webtop] ${e.message}`)
+      h.blocked = true
+      save()
+      return
+    }
     if (!isWebtopLoginError(e)) {
       await track(notify, 'webtop', 'Webtop', e)
       return

@@ -20,6 +20,7 @@
   #stage:focus { box-shadow:0 0 0 2px var(--accent); }
   img { display:block; width:100%; height:auto; background:#111; }
   .hint { margin:8px 22px 0; color:var(--muted); font-size:13px; }
+  #blocked { color:#8a3b12; font-weight:600; }
 </style>
 </head>
 <body>
@@ -33,6 +34,7 @@
   <button type="button" data-site="google-home">Google Home</button>
 </div>
 <p class="note" id="note"></p>
+<p class="note" id="blocked" hidden>וובטופ חוסם את כתובת השרת, משתמשים במחשב הביתי</p>
 <div id="stage" tabindex="0">
   <img id="view" alt="חלון Webtop">
 </div>
@@ -43,6 +45,9 @@ const img = document.getElementById('view')
 const status = document.getElementById('status')
 const title = document.querySelector('h1')
 const note = document.getElementById('note')
+const blocked = document.getElementById('blocked')
+const BLOCKED_TEXT = 'וובטופ חוסם את כתובת השרת, משתמשים במחשב הביתי'
+let cloudBlocked = false
 const SITES = {
   webtop: {
     title: 'התחברות ל-Webtop',
@@ -63,6 +68,19 @@ function showSite() {
 }
 for (const b of document.querySelectorAll('.pick button')) b.addEventListener('click', () => { site = b.dataset.site; showSite(); tick() })
 showSite()
+async function refreshBlocked() {
+  if (site !== 'webtop') { cloudBlocked = false; blocked.hidden = true; return }
+  try {
+    const res = await fetch('/api/state', { cache: 'no-store' })
+    if (!res.ok) return
+    const data = await res.json()
+    cloudBlocked = Boolean(data.webtop && data.webtop.blocked)
+    blocked.hidden = !cloudBlocked
+    if (cloudBlocked) blocked.textContent = data.webtop.blockedStatus || BLOCKED_TEXT
+  } catch {
+    // The frame poll still runs when the status request fails.
+  }
+}
 function point(e) {
   const r = img.getBoundingClientRect()
   const sx = img.naturalWidth && r.width ? img.naturalWidth / r.width : 1
@@ -77,21 +95,24 @@ async function send(body) {
   }
 }
 async function tick() {
+  let frameNote = ''
   try {
     const res = await fetch('/api/webtop/frame?site=' + encodeURIComponent(site), { cache: 'no-store' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
-      status.textContent = data.error || 'אין תמונה'
-      return
+      frameNote = data.error || 'אין תמונה'
+    } else {
+      const blob = await res.blob()
+      const next = URL.createObjectURL(blob)
+      img.onload = () => { if (url) URL.revokeObjectURL(url); url = next }
+      img.src = next
+      frameNote = 'החלון פעיל'
     }
-    const blob = await res.blob()
-    const next = URL.createObjectURL(blob)
-    img.onload = () => { if (url) URL.revokeObjectURL(url); url = next }
-    img.src = next
-    status.textContent = 'החלון פעיל'
   } catch {
-    status.textContent = 'התצוגה נקטעה'
+    frameNote = 'התצוגה נקטעה'
   }
+  await refreshBlocked()
+  status.textContent = site === 'webtop' && cloudBlocked ? BLOCKED_TEXT : frameNote
 }
 stage.addEventListener('click', (e) => { stage.focus(); send({ type: 'click', ...point(e) }) })
 stage.addEventListener('wheel', (e) => { e.preventDefault(); send({ type: 'scroll', ...point(e), deltaY: e.deltaY }) }, { passive: false })

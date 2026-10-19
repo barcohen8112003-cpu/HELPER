@@ -147,6 +147,8 @@ const build = () => ({
     keepAliveMinutes: Math.max(1, Number(env('WEBTOP_KEEPALIVE_MINUTES', '10')) || 10),
     // 1: Chromium inside this process (the container), profile on the data volume. Unset: the home window, via the bridge when this is the cloud.
     cloud: ['1', 'true', 'yes'].includes(env('WEBTOP_CLOUD').toLowerCase()),
+    // Optional proxy for that Chromium only (http:// or socks5://). A server outside Israel is blocked by Webtop's CloudFront.
+    proxy: env('WEBTOP_PROXY'),
   },
   // A second Chromium in the container, signed in to the personal Google account, for Google Home tiles.
   // Separate from Webtop so a school login and a home login do not share a profile.
