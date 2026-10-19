@@ -4,6 +4,8 @@
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
+import winPath from 'node:path/win32'
+import { pathToFileURL } from 'node:url'
 import { WebSocket } from 'ws'
 
 process.env.HELPER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-pc-bridge-'))
@@ -34,6 +36,48 @@ function ok(cond, name) {
 }
 const tool = (name) => tools.find((t) => t.name === name)
 const SECRET = config.pcBridge.secret
+
+// ── config path: home-relay/pc-bridge.config.json, including Windows ────────
+{
+  const realDir = bridge.homeRelayDir()
+  ok(fs.existsSync(path.join(realDir, 'pc-bridge.mjs')), 'home-relay is resolved beside the bridge module')
+  ok(fs.existsSync(path.join(realDir, 'pc-bridge.config.example.json')), 'the example config is in the resolved home-relay directory')
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-bridge-cfg-'))
+  try {
+    const home = path.join(root, 'home-relay')
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true })
+    fs.mkdirSync(home)
+    fs.writeFileSync(path.join(home, 'pc-bridge.config.json'), JSON.stringify({
+      url: 'ws://cloud.example:3212/pc',
+      secret: 'from-file-secret',
+    }))
+    const moduleUrl = pathToFileURL(path.join(root, 'src', 'pc-bridge.js')).href
+    const found = bridge.bridgeConfig({}, moduleUrl)
+    ok(found.url === 'ws://cloud.example:3212/pc' && found.secret === 'from-file-secret', 'a config file next to home-relay is found')
+    const absent = bridge.bridgeConfig({}, pathToFileURL(path.join(root, 'missing', 'src', 'pc-bridge.js')).href)
+    ok(absent.url === '' && absent.secret === '', 'a missing config file does not invent url or secret')
+    const over = bridge.bridgeConfig({ PC_BRIDGE_URL: 'ws://from-env/pc', PC_BRIDGE_SECRET: 'env-secret' }, moduleUrl)
+    ok(over.url === 'ws://from-env/pc' && over.secret === 'env-secret', 'PC_BRIDGE_URL and PC_BRIDGE_SECRET override the file')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+
+  const winModule = 'file:///C:/Users/yokos/OneDrive/Desktop/HELPER/src/pc-bridge.js'
+  const cfgPath = winPath.join(bridge.homeRelayDir(winModule, winPath), 'pc-bridge.config.json')
+  ok(
+    winPath.normalize(cfgPath) === winPath.normalize('C:\\Users\\yokos\\OneDrive\\Desktop\\HELPER\\home-relay\\pc-bridge.config.json'),
+    'a Windows module URL resolves to home-relay/pc-bridge.config.json',
+  )
+  const spaced = 'file:///C:/Users/yokos/OneDrive/Desktop/My%20HELPER/src/pc-bridge.js'
+  ok(
+    winPath.normalize(winPath.join(bridge.homeRelayDir(spaced, winPath), 'pc-bridge.config.json')) ===
+      winPath.normalize('C:\\Users\\yokos\\OneDrive\\Desktop\\My HELPER\\home-relay\\pc-bridge.config.json'),
+    'a Windows path with a space still resolves beside home-relay',
+  )
+  const broken = winPath.normalize(winPath.join(winPath.dirname(new URL(winModule).pathname), '..', 'home-relay', 'pc-bridge.config.json'))
+  ok(broken !== winPath.normalize(cfgPath) && broken.startsWith('\\C:\\'), 'URL.pathname would look beside a root folder named C:')
+}
 
 // ── signature, encryption, replay ───────────────────────────────────────────
 {
