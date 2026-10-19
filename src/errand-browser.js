@@ -10,6 +10,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import WebSocket from 'ws'
 import { config, DATA_DIR } from './config.js'
+import { bridgeReady, remoteActive, remoteCall } from './pc-bridge.js'
 
 const PROFILE = path.join(DATA_DIR, 'errand-profile')
 const VIEW = { width: 1280, height: 860 }
@@ -26,7 +27,7 @@ const BROWSERS = [
   `${process.env.ProgramFiles}\\Microsoft\\Edge\\Application\\msedge.exe`,
 ]
 
-export const errandBrowserEnabled = () => process.platform === 'win32' && config.computerMode !== 'off'
+export const errandBrowserEnabled = () => config.computerMode !== 'off' && (process.platform === 'win32' || bridgeReady())
 
 async function targets() {
   return (await fetch(`${base()}/json`, { signal: AbortSignal.timeout(3000) })).json()
@@ -136,6 +137,7 @@ async function withTab(run) {
 
 // -> { image: data URL, width, height, scale: 1, left: 0, top: 0, url, title }
 export function browserScreenshot() {
+  if (remoteActive()) return remoteCall('browserScreenshot', [])
   return withTab(async (call, page) => {
     // A hidden tab may produce no frame to capture, so it is made the visible one first (inside its own window).
     await call('Page.bringToFront').catch(() => {})
@@ -149,6 +151,7 @@ export function browserScreenshot() {
 }
 
 export function browserAct(a) {
+  if (remoteActive()) return remoteCall('browserAct', [a])
   return withTab(async (call) => {
     const x = Math.round(a.x), y = Math.round(a.y)
     if (a.type === 'click') return mouse(call, x, y, 'left', 1)
@@ -182,6 +185,7 @@ const PROBE = (x, y) => `(() => {
 })()`
 
 export function browserProbe(a) {
+  if (remoteActive()) return remoteCall('browserProbe', [a])
   return withTab(async (call) => {
     const pos = ['click', 'double_click'].includes(a.type) ? [Math.round(a.x), Math.round(a.y)] : [NaN, NaN]
     const { result } = await call('Runtime.evaluate', { expression: PROBE(...pos), returnByValue: true })

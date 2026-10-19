@@ -1,12 +1,17 @@
-# Render Blueprint: one always-on background worker with a persistent disk.
+# Render Blueprint: one always-on Starter web service with a persistent disk.
 # A free web service will not do: it sleeps when idle and loses its files on every restart,
 # which would log the assistant out of WhatsApp each time.
+# Starter web (not a background worker) stays awake and has a public address the home PC can dial.
 services:
-  - type: worker
+  # Web, not a background worker: same Starter plan and disk, but the home PC can dial out to the
+  # public HTTPS address. A worker has no address, so the bridge would have nowhere to connect.
+  # Computer control stays off until COMPUTER_MODE=ask and PC_BRIDGE_SECRET are set in the dashboard.
+  - type: web
     name: helper
     runtime: docker
     plan: starter
     autoDeploy: false
+    healthCheckPath: /pc/health
     disk:
       name: helper-data
       mountPath: /var/data
@@ -51,3 +56,10 @@ services:
         value: "08:00"
       - key: CHECK_IN_PER_DAY
         value: "3"
+      - key: COMPUTER_MODE
+        value: "off"
+      - key: PC_BRIDGE_ON_PORT
+        value: "1"
+      # Same value as on the home PC (home-relay/pc-bridge.config.json). Empty keeps computer tools off.
+      - key: PC_BRIDGE_SECRET
+        sync: false

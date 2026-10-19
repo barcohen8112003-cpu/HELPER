@@ -14,6 +14,7 @@ import { parseCommand } from './commands.js'
 import { status } from './status.js'
 import { startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
+import { startPcBridgeServer, bridgeLabel } from './pc-bridge.js'
 import { startVoice } from './voice.js'
 import { createMonitoring } from './monitoring/index.js'
 import { inQuietHours } from './outbox.js'
@@ -28,6 +29,8 @@ if (!config.llm.apiKey || !config.llm.model) {
   // 2 tells start.bat this is a setup problem, not a crash worth restarting for.
   process.exit(2)
 }
+// Open the bridge port before WhatsApp connects, so a platform health check is not waiting on the login.
+startPcBridgeServer()
 
 // One assistant per data folder: two would share the WhatsApp session and answer every message twice.
 const LOCK = path.join(DATA_DIR, 'helper.lock')
@@ -301,7 +304,7 @@ if (!state.owner) {
   if (state.manualPair) announcePairing()
   else console.log('אחרי סריקת הקוד העוזר יתחבר לבד לצ\'אט שלך עם עצמך ("הודעה לעצמך").')
 }
-console.log(`${config.botName} רץ. מודל: ${config.llm.model} | שליטה במחשב: ${config.computerMode}`)
+console.log(`${config.botName} רץ. מודל: ${config.llm.model} | שליטה במחשב: ${config.computerMode}${bridgeLabel()}`)
 
 // Exit code 3 asks start.bat for an immediate restart, with no crash delay.
 // A message that came in through the bridge (Discord) takes its turn in the same queue as WhatsApp, with the same

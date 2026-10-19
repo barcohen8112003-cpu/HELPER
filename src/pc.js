@@ -6,8 +6,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import { config } from './config.js'
+import { remoteActive, remoteCall } from './pc-bridge.js'
 
-export const pcEnabled = () => process.platform === 'win32'
+// On the cloud, the same functions run on the home PC. On Windows they stay local.
+export const pcEnabled = () => process.platform === 'win32' || (remoteActive() && config.computerMode !== 'off')
 
 // Runs a PowerShell script. -EncodedCommand carries any text (Hebrew, quotes) without quoting trouble.
 export function ps(script, timeoutMs = 60000) {
@@ -75,6 +77,7 @@ public static class U {
 const MEDIA = { play_pause: 0xb3, next: 0xb0, previous: 0xb1, mute: 0xad, volume_down: 0xae, volume_up: 0xaf }
 
 export async function media(action, level) {
+  if (remoteActive()) return remoteCall('media', [action, level])
   if (action === 'set_volume') {
     // Windows exposes no simple "set volume" call; fifty steps down reach zero, then each step up adds 2%.
     const steps = Math.round(Math.min(100, Math.max(0, Number(level) || 0)) / 2)
@@ -93,6 +96,7 @@ export async function media(action, level) {
 // Captures the primary screen to a PNG. maxWidth scales it down (for the model); 0 keeps full size.
 // Returns { file, width, height, scale, left, top } where scale converts image pixels back to screen pixels.
 export async function screenshot(maxWidth = 0) {
+  if (remoteActive()) return remoteCall('screenshot', [maxWidth])
   const file = path.join(os.tmpdir(), `helper-screen-${Date.now()}.png`)
   const out = await ps(`${INPUT}
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -116,6 +120,7 @@ $bmp.Dispose()`)
 
 // Installed apps whose name contains the query, best match first. Get-StartApps covers ordinary programs and Store apps.
 export async function findApps(query) {
+  if (remoteActive()) return remoteCall('findApps', [query])
   const out = await ps(`Get-StartApps | Where-Object { $_.Name -like ${lit(`*${query}*`)} } | Select-Object -First 15 Name, AppID | ConvertTo-Json -Compress`)
   const list = out ? [].concat(JSON.parse(out)) : []
   const q = String(query).toLowerCase()
@@ -124,6 +129,7 @@ export async function findApps(query) {
 }
 
 export async function launchApp(query) {
+  if (remoteActive()) return remoteCall('launchApp', [query])
   const apps = await findApps(query)
   if (!apps.length) return null
   await ps(`Start-Process explorer.exe -ArgumentList ${lit(`shell:AppsFolder\\${apps[0].AppID}`)}`)
@@ -131,6 +137,7 @@ export async function launchApp(query) {
 }
 
 export async function playSpotify(query) {
+  if (remoteActive()) return remoteCall('playSpotify', [query])
   const uri = `spotify:search:${encodeURIComponent(query)}`
   try {
     await ps(`Start-Process ${lit(uri)} -ErrorAction Stop`)
@@ -145,6 +152,7 @@ export async function playSpotify(query) {
 
 // Closes an app politely (as if its window were closed), and forcibly only if it is still running after a few seconds.
 export async function closeApp(name) {
+  if (remoteActive()) return remoteCall('closeApp', [name])
   const proc = String(name).replace(/\.exe$/i, '')
   return ps(`$p = Get-Process -Name ${lit(proc)} -ErrorAction SilentlyContinue
 if (-not $p) { 'not running'; return }
@@ -157,6 +165,7 @@ if ($left) { $left | Stop-Process -Force; 'closed (forced)' } else { 'closed' }`
 // ---- status ----
 
 export async function status() {
+  if (remoteActive()) return remoteCall('status', [])
   return ps(`$os = Get-CimInstance Win32_OperatingSystem
 $cpu = (Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average
 $bat = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -174,10 +183,14 @@ $bat = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Obje
 
 // ---- small things ----
 
-export const lock = () => ps('rundll32.exe user32.dll,LockWorkStation')
+export function lock() {
+  if (remoteActive()) return remoteCall('lock', [])
+  return ps('rundll32.exe user32.dll,LockWorkStation')
+}
 
 // Puts monitors into sleep/standby mode immediately without sleeping the PC.
 export async function sleepMonitors() {
+  if (remoteActive()) return remoteCall('sleepMonitors', [])
   await ps(`${INPUT}
 [U]::SleepMonitor()
 `)
@@ -186,6 +199,7 @@ export async function sleepMonitors() {
 
 // Wakes monitors from sleep/standby mode.
 export async function wakeMonitors() {
+  if (remoteActive()) return remoteCall('wakeMonitors', [])
   await ps(`${INPUT}
 [U]::WakeMonitor()
 `)
@@ -194,6 +208,7 @@ export async function wakeMonitors() {
 
 // Wakes the monitor, wiggles mouse, dismisses lock screen wallpaper, and enters the password/PIN.
 export async function unlock(password = process.env.PC_UNLOCK_PASSWORD || 'naorkk132') {
+  if (remoteActive()) return remoteCall('unlock', [password])
   await ps(`${INPUT}
 [U]::WakeMonitor()
 Start-Sleep -Milliseconds 250
@@ -212,6 +227,7 @@ Start-Sleep -Milliseconds 250
 
 // Types text or a PIN into the active window or lock screen.
 export async function typeText(text, pressEnter = false) {
+  if (remoteActive()) return remoteCall('typeText', [text, pressEnter])
   const str = String(text ?? '')
   if (!str) return 'לא נמסר טקסט להקלדה'
 
@@ -237,14 +253,22 @@ ${pressEnter ? 'Start-Sleep -Milliseconds 80; [U]::Tap(0x0D)' : ''}
 }
 
 export async function pressKey(keys) {
+  if (remoteActive()) return remoteCall('pressKey', [keys])
   await act({ type: 'key', keys })
   return `נלחץ המקש: ${keys}`
 }
-export const setClipboard = (text) => ps(`Set-Clipboard -Value ${lit(text)}`)
-export const getClipboard = () => ps('Get-Clipboard -Raw')
+export function setClipboard(text) {
+  if (remoteActive()) return remoteCall('setClipboard', [text])
+  return ps(`Set-Clipboard -Value ${lit(text)}`)
+}
+export function getClipboard() {
+  if (remoteActive()) return remoteCall('getClipboard', [])
+  return ps('Get-Clipboard -Raw')
+}
 
 // A window that stays on top until dismissed, plus a sound. Not waited for, so it never holds anything up.
 export function popup(text, title = 'Helper') {
+  if (remoteActive()) return remoteCall('popup', [text, title])
   const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Media.SystemSounds]::Exclamation.Play()
 $f = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }
 [System.Windows.Forms.MessageBox]::Show($f, ${lit(text)}, ${lit(title)}) | Out-Null`
@@ -254,6 +278,7 @@ $f = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }
 
 // Floating countdown timer on top of the screen that rings and alerts when finished.
 export function startTimer(minutes, label = 'טיימר') {
+  if (remoteActive()) return remoteCall('startTimer', [minutes, label])
   const mins = Math.max(0.1, Number(minutes) || 1)
   const totalSeconds = Math.round(mins * 60)
   const titleText = lit(String(label).trim() || 'טיימר')
@@ -312,6 +337,7 @@ $timer.Start()
 
 // Says text out loud on the PC's speakers, in the assistant's ElevenLabs voice, or Windows' own voice without a key.
 export async function speakOnPc(text) {
+  if (remoteActive()) return remoteCall('speakOnPc', [text])
   const { apiKey, voiceId, ttsModel } = config.elevenlabs
   if (apiKey && voiceId) {
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_64`, {
@@ -338,6 +364,7 @@ $p.Play(); Start-Sleep -Milliseconds ([int]$p.NaturalDuration.TimeSpan.TotalMill
 // ---- power ----
 
 export function power(action, minutes = 0) {
+  if (remoteActive()) return remoteCall('power', [action, minutes], { timeoutMs: (Math.max(0, Number(minutes) || 0) * 60 + 45) * 1000 })
   const seconds = Math.max(0, Math.round(Number(minutes) * 60))
   const note = lit('Helper: המחשב ייכבה. לביטול: כתוב לעוזר "תבטל כיבוי"')
   if (action === 'cancel') return ps('shutdown.exe /a').then(() => 'הכיבוי בוטל', () => 'לא היה כיבוי מתוזמן')
@@ -353,6 +380,7 @@ const HOME = os.homedir()
 const SEARCH_ROOTS = ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'OneDrive'].map((d) => path.join(HOME, d)).filter((d) => fs.existsSync(d))
 
 export async function findFiles(query, folder) {
+  if (remoteActive()) return remoteCall('findFiles', [query, folder])
   const roots = folder ? [folder] : SEARCH_ROOTS
   const out = await ps(`$r = @(); foreach ($d in @(${roots.map(lit).join(',')})) { $r += Get-ChildItem -LiteralPath $d -Recurse -Filter ${lit(`*${query}*`)} -ErrorAction SilentlyContinue -Depth 6 | Select-Object -First 25 FullName, Length, LastWriteTime }
 $r | Sort-Object LastWriteTime -Descending | Select-Object -First 25 | ForEach-Object { "$($_.LastWriteTime.ToString('dd/MM/yy HH:mm'))  $([math]::Round($_.Length / 1KB)) KB  $($_.FullName)" }`, 90000)
@@ -371,6 +399,7 @@ const KINDS = {
 // Moves the loose files in Downloads into folders by kind. Folders are left alone, and so is anything changed in the
 // last ten minutes, which may still be downloading.
 export function organizeDownloads() {
+  if (remoteActive()) return remoteCall('organizeDownloads', [])
   const dir = path.join(HOME, 'Downloads')
   const moved = {}
   for (const name of fs.readdirSync(dir)) {
@@ -391,8 +420,14 @@ export function organizeDownloads() {
 
 // ---- installs ----
 
-export const wingetSearch = (query) => ps(`winget search ${lit(query)} --accept-source-agreements --disable-interactivity | Select-Object -First 14 | Out-String -Width 160`, 90000)
-export const wingetInstall = (id) => ps(`winget install -e --id ${lit(id)} --silent --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | Select-Object -Last 6 | Out-String -Width 160`, 600000)
+export function wingetSearch(query) {
+  if (remoteActive()) return remoteCall('wingetSearch', [query])
+  return ps(`winget search ${lit(query)} --accept-source-agreements --disable-interactivity | Select-Object -First 14 | Out-String -Width 160`, 90000)
+}
+export function wingetInstall(id) {
+  if (remoteActive()) return remoteCall('wingetInstall', [id])
+  return ps(`winget install -e --id ${lit(id)} --silent --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | Select-Object -Last 6 | Out-String -Width 160`, 600000)
+}
 
 // ---- mouse and keyboard ----
 
@@ -406,6 +441,7 @@ const keyCode = (k) => VK[k] ?? (/^[a-z0-9]$/.test(k) ? k.toUpperCase().charCode
 
 // Runs one action on the real screen. x and y are screen pixels.
 export async function act(action) {
+  if (remoteActive()) return remoteCall('act', [action])
   const { type, x, y, text, keys, amount } = action
   const at = Number.isFinite(x) && Number.isFinite(y) ? `[U]::SetCursorPos(${Math.round(x)}, ${Math.round(y)}) | Out-Null; Start-Sleep -Milliseconds 80; ` : ''
   if (type === 'click') return ps(`${INPUT} ${at}[U]::mouse_event(2,0,0,0,[UIntPtr]::Zero); [U]::mouse_event(4,0,0,0,[UIntPtr]::Zero)`)
@@ -429,6 +465,7 @@ export async function act(action) {
 // ---- security, webcam & screen recording ----
 
 export async function webcamSnap(deviceName) {
+  if (remoteActive()) return remoteCall('webcamSnap', [deviceName])
   const tmpFile = path.join(os.tmpdir(), `helper-webcam-${Date.now()}.jpg`)
   const cam = deviceName || 'Logitech Webcam C925e'
   return new Promise((resolve, reject) => {
@@ -442,6 +479,7 @@ export async function webcamSnap(deviceName) {
 }
 
 export async function screenRecord(seconds = 3, maxWidth = 1000) {
+  if (remoteActive()) return remoteCall('screenRecord', [seconds, maxWidth])
   const sec = Math.min(10, Math.max(1, Number(seconds) || 3))
   const dir = path.join(os.tmpdir(), `helper-rec-${Date.now()}`)
   fs.mkdirSync(dir, { recursive: true })
@@ -468,6 +506,7 @@ export async function screenRecord(seconds = 3, maxWidth = 1000) {
 }
 
 export async function topProcesses(count = 10) {
+  if (remoteActive()) return remoteCall('topProcesses', [count])
   const c = Math.min(30, Math.max(1, Number(count) || 10))
   const json = await ps(`Get-Process | Where-Object { $_.WorkingSet64 -gt 20MB } | Sort-Object WorkingSet64 -Descending | Select-Object -First ${c} Id, ProcessName, @{N='MemoryMB';E={[math]::Round($_.WorkingSet64 / 1MB)}}, @{N='CpuSeconds';E={[math]::Round($_.CPU, 1)}}, MainWindowTitle | ConvertTo-Json -Compress`)
   const list = json ? [].concat(JSON.parse(json)) : []
@@ -475,6 +514,7 @@ export async function topProcesses(count = 10) {
 }
 
 export async function killProcess(idOrName) {
+  if (remoteActive()) return remoteCall('killProcess', [idOrName])
   const val = String(idOrName).trim()
   if (/^\d+$/.test(val)) {
     await ps(`Stop-Process -Id ${val} -Force -ErrorAction Stop`)
@@ -522,6 +562,7 @@ export function resolveFile(query) {
 const BROWSER_DEBUG_PORTS = [9222, 9223]
 
 export async function getBrowserTabs() {
+  if (remoteActive()) return remoteCall('getBrowserTabs', [])
   const tabs = []
   for (const port of BROWSER_DEBUG_PORTS) {
     try {
@@ -544,6 +585,7 @@ export async function getBrowserTabs() {
 }
 
 export async function closeBrowserTab(idOrQuery) {
+  if (remoteActive()) return remoteCall('closeBrowserTab', [idOrQuery])
   const q = String(idOrQuery || '').trim().toLowerCase()
   if (q) {
     const tabs = await getBrowserTabs()
@@ -558,6 +600,7 @@ export async function closeBrowserTab(idOrQuery) {
 }
 
 export async function openBrowserTab(url) {
+  if (remoteActive()) return remoteCall('openBrowserTab', [url])
   const u = String(url || 'https://www.google.com').trim()
   for (const port of BROWSER_DEBUG_PORTS) {
     try {
@@ -571,7 +614,62 @@ export async function openBrowserTab(url) {
   return `נפתח בדפדפן: ${u}`
 }
 
+const FILE_MIME = {
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  mp4: 'video/mp4', mkv: 'video/x-matroska', mov: 'video/quicktime', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+  zip: 'application/zip', rar: 'application/x-rar-compressed', '7z': 'application/x-7z-compressed', txt: 'text/plain; charset=utf-8',
+  csv: 'text/csv; charset=utf-8', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
+
+// A web address or a Windows URI, opened on this PC's screen.
+export function openOnScreen(target) {
+  if (remoteActive()) return remoteCall('openOnScreen', [target])
+  return new Promise((resolve, reject) => execFile('rundll32.exe', ['url.dll,FileProtocolHandler', target], { windowsHide: true }, (err) => (err ? reject(err) : resolve())))
+}
+
+export function runCommand(command) {
+  if (remoteActive()) return remoteCall('runCommand', [command])
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + command],
+      { timeout: 60000, maxBuffer: 1024 * 1024, windowsHide: true },
+      (err, stdout, stderr) => {
+        const out = [stdout, stderr && `STDERR: ${stderr}`, err && !stderr && `ERROR: ${err.message}`].filter(Boolean).join('\n')
+        resolve((out || '(אין פלט)').slice(0, 4000))
+      }
+    )
+  })
+}
+
+export async function readTextFile(p) {
+  if (remoteActive()) return remoteCall('readTextFile', [p])
+  return fs.readFileSync(path.resolve(p), 'utf8').slice(0, 12000)
+}
+
+export async function writeTextFile(p, content) {
+  if (remoteActive()) return remoteCall('writeTextFile', [p, content])
+  const full = path.resolve(p)
+  fs.mkdirSync(path.dirname(full), { recursive: true })
+  fs.writeFileSync(full, content)
+  return 'נכתב'
+}
+
+// The bytes of a file on this PC, for sending to WhatsApp. The path is resolved here, not on the cloud.
+export async function readUserFile(query) {
+  if (remoteActive()) return remoteCall('readUserFile', [query])
+  const resolved = resolveFile(query)
+  if (!resolved) return { error: 'missing' }
+  const st = fs.statSync(resolved, { throwIfNoEntry: false })
+  if (!st?.isFile()) return { error: 'notfile', path: resolved }
+  if (st.size > 50 * 1024 * 1024) return { error: 'toobig', size: st.size, path: resolved }
+  const ext = path.extname(resolved).slice(1).toLowerCase()
+  return { name: path.basename(resolved), path: resolved, size: st.size, mime: FILE_MIME[ext] || 'application/octet-stream', data: fs.readFileSync(resolved) }
+}
+
 export async function activateBrowserTab(idOrQuery) {
+  if (remoteActive()) return remoteCall('activateBrowserTab', [idOrQuery])
   const q = String(idOrQuery || '').trim().toLowerCase()
   const tabs = await getBrowserTabs()
   const match = tabs.find((t) => t.id === q || t.title.toLowerCase().includes(q) || t.url.toLowerCase().includes(q))
