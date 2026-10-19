@@ -15,6 +15,7 @@ process.env.COMPUTER_MODE = 'ask'
 process.env.PC_BRIDGE_PORT = '0'
 delete process.env.PC_BRIDGE_EXECUTOR
 delete process.env.WEBTOP_CLOUD
+delete process.env.GOOGLE_HOME_CLOUD
 delete process.env.PC_BRIDGE_ON_PORT
 delete process.env.PORT
 delete process.env.WAKE_MAC

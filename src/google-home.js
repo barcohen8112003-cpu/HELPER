@@ -1,9 +1,88 @@
-// Integration with Google Home via the open Chrome tab on the Webtop port.
-// Connects over CDP to read device states and control smart home devices (lights, speakers, etc.)
-// using native CDP mouse events (required for Angular Material interactive tiles).
+// Google Home via a signed-in Chrome tab. At home that tab lives in the Webtop window (port 9223).
+// In the cloud, GOOGLE_HOME_CLOUD=1 uses a separate Chromium profile (data/google-home-profile) so the
+// school Webtop tab is never navigated away. If that session is on Google's sign-in page and the home
+// bridge is up, the call runs on the home window instead.
+// Clicks are native CDP mouse events: Angular Material tiles ignore synthetic DOM clicks.
 import WebSocket from 'ws'
+import { config } from './config.js'
+import { bridgeConnected, remoteActive, remoteCall } from './pc-bridge.js'
+import { withCloudPage } from './webtop-browser.js'
 
+const HOME_URL = 'https://home.google.com/'
 const CDP_PORT = 9223
+const LOGIN_NOTIFY_MS = 12 * 60 * 60 * 1000
+
+let loginUrl = () => ''
+export function setGoogleHomeLoginUrl(fn) {
+  loginUrl = typeof fn === 'function' ? fn : () => ''
+}
+export const googleHomeLoginUrl = () => loginUrl()
+
+export function googleHomeSignedOut(url, hasPassword = false) {
+  const u = String(url || '')
+  if (hasPassword) return true
+  if (/accounts\.google\.com|ServiceLogin|\/signin/i.test(u)) return true
+  return false
+}
+
+export function isGoogleHomeLoginError(err) {
+  return Boolean(err && (err.code === 'google-home-login' || err.message === 'Google Home לא מחובר.'))
+}
+
+function signedOutError() {
+  const link = loginUrl()
+  const hint = link
+    ? `צריך להיכנס שוב ל-Google Home. הקישור: ${link}`
+    : 'צריך להיכנס שוב ל-Google Home בדף ההתחברות שבהגדרות.'
+  return Object.assign(new Error('Google Home לא מחובר.'), { hint, code: 'google-home-login' })
+}
+
+// One notice per signed-out stretch, and never twice inside 12 hours even if the session flaps.
+export function planGoogleHomeLoginNotice(box, now = Date.now()) {
+  if (box.googleHomeLoginOpen) return ''
+  const last = Number(box.googleHomeLoginNotifiedAt) || 0
+  if (last && now - last < LOGIN_NOTIFY_MS) return ''
+  box.googleHomeLoginOpen = true
+  box.googleHomeLoginNotifiedAt = now
+  const link = loginUrl()
+  return link
+    ? `Google Home צריך התחברות מחדש. נכנסים מכאן: ${link}`
+    : 'Google Home צריך התחברות מחדש. נכנסים מדף Google Home באתר ההגדרות.'
+}
+
+export function clearGoogleHomeLoginNotice(box) {
+  box.googleHomeLoginOpen = false
+}
+
+export const GOOGLE_HOME_LOGIN_NOTIFY_MS = LOGIN_NOTIFY_MS
+
+// Cloud Chromium first. Home is only the fallback when that session is on the sign-in page and the bridge is up.
+// With the cloud flag off, a server that has no local window uses the bridge directly.
+export function googleHomeTransport(opts = {}) {
+  const cloud = opts.cloud ?? config.googleHome.cloud
+  const remote = opts.remote ?? remoteActive()
+  const bridgeUp = opts.bridgeUp ?? bridgeConnected()
+  if (cloud) return { primary: 'cloud', fallback: bridgeUp ? 'home' : null }
+  if (remote) return { primary: 'home', fallback: null }
+  return { primary: 'local', fallback: null }
+}
+
+export async function runGoogleHome(local, home, route) {
+  if (route.primary === 'home') return home()
+  if (route.primary === 'local') return local()
+  try {
+    return await local()
+  } catch (e) {
+    if (route.fallback === 'home' && isGoogleHomeLoginError(e)) {
+      try {
+        return await home()
+      } catch {
+        // The home window is not a usable signed-in session. The cloud answer stands.
+      }
+    }
+    throw e
+  }
+}
 
 async function getHomeTab() {
   let list
@@ -18,6 +97,40 @@ async function getHomeTab() {
     throw new Error('לשונית Google Home לא נמצאה פתוחה בחלון הדפדפן (פורט 9223).')
   }
   return tab
+}
+
+async function hrefOf(send) {
+  const res = await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true })
+  return String(res?.result?.value || '')
+}
+
+async function passwordOnPage(send) {
+  const res = await send('Runtime.evaluate', { expression: '!!document.querySelector("input[type=password]")', returnByValue: true })
+  return Boolean(res?.result?.value)
+}
+
+async function assertHome(send) {
+  const href = await hrefOf(send)
+  if (googleHomeSignedOut(href, await passwordOnPage(send)) || !/home\.google\.com/i.test(href)) throw signedOutError()
+}
+
+// Keeps the cloud Google session warm. A sign-in page is left as it is, so a code being typed is not reloaded away.
+export function googleHomeKeepAlive() {
+  if (!config.googleHome.cloud) return Promise.resolve(null)
+  return withCloudPage('google-home', async (send) => {
+    await send('Page.enable').catch(() => {})
+    let href = await hrefOf(send)
+    if (googleHomeSignedOut(href, await passwordOnPage(send))) throw signedOutError()
+    if (!/home\.google\.com/i.test(href)) {
+      await send('Page.navigate', { url: HOME_URL })
+      await new Promise((r) => setTimeout(r, 2500))
+      await assertHome(send)
+      return
+    }
+    await send('Page.reload').catch(() => {})
+    await new Promise((r) => setTimeout(r, 2500))
+    await assertHome(send)
+  })
 }
 
 async function withHomeSession(fn) {
@@ -49,7 +162,14 @@ async function withHomeSession(fn) {
     })
 
   try {
-    // If any group is collapsed, expand it so all individual device tiles are exposed and clickable
+    return await runOnTab(send, fn)
+  } finally {
+    ws.close()
+  }
+}
+
+async function runOnTab(send, fn) {
+  // If any group is collapsed, expand it so all individual device tiles are exposed and clickable
     const expandRes = await send('Runtime.evaluate', {
       expression: `
         (() => {
@@ -71,10 +191,26 @@ async function withHomeSession(fn) {
       await new Promise((r) => setTimeout(r, 600))
     }
 
-    return await fn(send)
-  } finally {
-    ws.close()
-  }
+  return await fn(send)
+}
+
+async function cloudSession(fn) {
+  return withCloudPage('google-home', async (send) => {
+    await send('Page.enable').catch(() => {})
+    let href = await hrefOf(send)
+    if (!/home\.google\.com/i.test(href) && !googleHomeSignedOut(href, await passwordOnPage(send))) {
+      await send('Page.navigate', { url: HOME_URL })
+      await new Promise((r) => setTimeout(r, 2500))
+      href = await hrefOf(send)
+    }
+    if (googleHomeSignedOut(href, await passwordOnPage(send)) || !/home\.google\.com/i.test(href)) throw signedOutError()
+    return runOnTab(send, fn)
+  })
+}
+
+function localCall(fn) {
+  if (config.googleHome.cloud) return cloudSession(fn)
+  return withHomeSession(fn)
 }
 
 const PARSE_EXPR = `
@@ -110,8 +246,8 @@ async function getParsedDevices(send) {
   return res?.result?.value || []
 }
 
-export async function getHomeDevices() {
-  return withHomeSession(async (send) => {
+export function getHomeDevices() {
+  const read = async (send) => {
     const all = await getParsedDevices(send)
     // Exclude redundant meta group tiles when individual items exist
     const hasIndividuals = all.some((d) => !d.isGroup && d.type === 'אורות')
@@ -125,17 +261,22 @@ export async function getHomeDevices() {
       lines.push(`• ${icon} *${d.name}* (${d.type}): ${stIcon} ${d.status}`)
     }
     return lines.join('\n')
-  })
+  }
+  return runGoogleHome(
+    () => localCall(read),
+    () => remoteCall('getHomeDevices', []),
+    googleHomeTransport(),
+  )
 }
 
-export async function controlHomeDevice(deviceQuery, action = 'toggle') {
+export function controlHomeDevice(deviceQuery, action = 'toggle') {
   const q = String(deviceQuery || '').trim().toLowerCase()
   let act = String(action || 'toggle').toLowerCase()
   if (['on', 'הדלק', 'להדליק', 'דלוק', 'הדלקה'].includes(act)) act = 'on'
   else if (['off', 'כבה', 'לכבות', 'כבוי', 'כיבוי'].includes(act)) act = 'off'
   else act = 'toggle'
 
-  return withHomeSession(async (send) => {
+  const run = async (send) => {
     const all = await getParsedDevices(send)
     if (!all.length) return 'לא זוהו מכשירים בעמוד Google Home.'
 
@@ -239,5 +380,10 @@ export async function controlHomeDevice(deviceQuery, action = 'toggle') {
     lines.push(...unchanged)
     lines.push(...offline)
     return lines.join('\n')
-  })
+  }
+  return runGoogleHome(
+    () => localCall(run),
+    () => remoteCall('controlHomeDevice', [deviceQuery, action]),
+    googleHomeTransport(),
+  )
 }

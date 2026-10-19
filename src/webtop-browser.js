@@ -1,13 +1,13 @@
-// The cloud Webtop browser. One persistent Chromium inside the container, with its own profile on the data
-// volume, debugging only on 127.0.0.1. The person signs in once through the settings page; the profile keeps the
-// cookies. HELPER does not store the password. Home webtop-browser.bat is unchanged and is used when this is off.
+// Persistent Chromium processes inside the container. Each site has its own profile on the data volume and its
+// own debugging port, bound to 127.0.0.1 only. Webtop and Google Home do not share a browser: Webtop navigates
+// and reloads its tab, and Google Home has to stay on home.google.com so those clicks are not wiped.
+// The person signs in once through the settings page. HELPER does not store the password.
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import WebSocket from 'ws'
 import { config, DATA_DIR } from './config.js'
 
-const PROFILE = path.join(DATA_DIR, 'webtop-profile')
 const VIEW = { width: 1280, height: 900 }
 const START_WAIT = 20000
 const CALL_TIMEOUT = 20000
@@ -20,33 +20,70 @@ const CANDIDATES = [
   '/usr/bin/google-chrome-stable',
 ]
 
+// Google Home is headed on Xvfb when that exists. A headless window is often rejected by Google's sign-in
+// ("this browser may not be secure"). The user still drives it from the settings page. Webtop stays headless.
+const SITES = {
+  webtop: {
+    label: 'Webtop',
+    headed: false,
+    profile: () => path.join(DATA_DIR, 'webtop-profile'),
+    port: () => config.webtop.port,
+    url: () => config.webtop.url || 'about:blank',
+    enabled: () => config.webtop.cloud,
+  },
+  'google-home': {
+    label: 'Google Home',
+    headed: true,
+    profile: () => path.join(DATA_DIR, 'google-home-profile'),
+    port: () => config.googleHome.port,
+    url: () => 'https://home.google.com/',
+    enabled: () => config.googleHome.cloud,
+  },
+}
+
 export const cloudWebtopOn = () => config.webtop.cloud
-export const webtopProfileDir = () => PROFILE
+export const cloudGoogleHomeOn = () => config.googleHome.cloud
+export const webtopProfileDir = () => SITES.webtop.profile()
+export const googleHomeProfileDir = () => SITES['google-home'].profile()
 export const webtopCdpBase = () => `http://127.0.0.1:${config.webtop.port}`
+
+export function browserSite(name) {
+  const site = SITES[name] ? name : 'webtop'
+  return site
+}
 
 export function chromiumPath() {
   return CANDIDATES.filter(Boolean).find((p) => fs.existsSync(p)) || ''
 }
 
-let launching = null
+export function xvfbPath() {
+  return fs.existsSync('/usr/bin/xvfb-run') ? '/usr/bin/xvfb-run' : ''
+}
 
-async function portOpen() {
+const launching = new Map()
+
+function base(site) {
+  return `http://127.0.0.1:${SITES[site].port()}`
+}
+
+async function portOpen(site) {
   try {
-    const res = await fetch(`${webtopCdpBase()}/json/version`, { signal: AbortSignal.timeout(1500) })
+    const res = await fetch(`${base(site)}/json/version`, { signal: AbortSignal.timeout(1500) })
     return res.ok
   } catch {
     return false
   }
 }
 
-function launch() {
+function launch(site) {
+  const spec = SITES[site]
   const exe = chromiumPath()
-  if (!exe) throw new Error('לא מצאתי Chromium בקונטיינר. הדפדפן של Webtop לא עלה.')
-  fs.mkdirSync(PROFILE, { recursive: true })
-  // A previous crash leaves the profile locked, and the next Chromium would exit at once.
-  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(PROFILE, name), { force: true })
+  if (!exe) throw new Error(`לא מצאתי Chromium בקונטיינר. הדפדפן של ${spec.label} לא עלה.`)
+  const profile = spec.profile()
+  fs.mkdirSync(profile, { recursive: true })
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(profile, name), { force: true })
+  const headed = spec.headed && xvfbPath()
   const args = [
-    '--headless=new',
     '--disable-gpu',
     '--no-first-run',
     '--no-default-browser-check',
@@ -54,60 +91,69 @@ function launch() {
     '--disable-extensions',
     '--mute-audio',
     `--remote-debugging-address=127.0.0.1`,
-    `--remote-debugging-port=${config.webtop.port}`,
+    `--remote-debugging-port=${spec.port()}`,
     '--remote-allow-origins=*',
-    `--user-data-dir=${PROFILE}`,
+    `--user-data-dir=${profile}`,
     `--window-size=${VIEW.width},${VIEW.height}`,
     '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
-    config.webtop.url || 'about:blank',
+    ...(spec.headed ? ['--disable-blink-features=AutomationControlled'] : []),
+    ...(headed ? [] : ['--headless=new']),
+    spec.url(),
   ]
-  const child = spawn(exe, args, { detached: true, stdio: 'ignore' })
+  const child = headed
+    ? spawn(xvfbPath(), ['-a', '-s', `-screen 0 ${VIEW.width}x${VIEW.height}x24`, exe, ...args], { detached: true, stdio: 'ignore' })
+    : spawn(exe, args, { detached: true, stdio: 'ignore' })
   child.unref()
   child.on('error', () => {})
 }
 
-// Starts the browser if the debugging port is down. Safe to call often: one launch at a time.
-export function ensureCloudWebtop() {
-  if (!config.webtop.cloud) return Promise.resolve(false)
-  if (!launching) {
-    launching = (async () => {
-      if (await portOpen()) return true
-      launch()
+// Starts one site's browser if its debugging port is down. One launch per site at a time.
+export function ensureCloudBrowser(site = 'webtop') {
+  site = browserSite(site)
+  const spec = SITES[site]
+  if (!spec.enabled()) return Promise.resolve(false)
+  if (!launching.has(site)) {
+    const job = (async () => {
+      if (await portOpen(site)) return true
+      launch(site)
       const deadline = Date.now() + START_WAIT
       while (Date.now() < deadline) {
-        if (await portOpen()) return true
+        if (await portOpen(site)) return true
         await new Promise((r) => setTimeout(r, 400))
       }
-      throw new Error('דפדפן ה-Webtop בענן לא עלה.')
-    })().finally(() => {
-      launching = null
-    })
+      throw new Error(`דפדפן ${spec.label} בענן לא עלה.`)
+    })().finally(() => launching.delete(site))
+    launching.set(site, job)
   }
-  return launching
+  return launching.get(site)
 }
 
-async function targets() {
-  const res = await fetch(`${webtopCdpBase()}/json`, { signal: AbortSignal.timeout(5000) })
-  if (!res.ok) throw new Error('דפדפן ה-Webtop בענן לא ענה.')
+export const ensureCloudWebtop = () => ensureCloudBrowser('webtop')
+
+async function targets(site) {
+  const res = await fetch(`${base(site)}/json`, { signal: AbortSignal.timeout(5000) })
+  if (!res.ok) throw new Error(`דפדפן ${SITES[site].label} בענן לא ענה.`)
   return res.json()
 }
 
-async function pageTarget() {
-  await ensureCloudWebtop()
-  let list = await targets()
+async function pageTarget(site) {
+  await ensureCloudBrowser(site)
+  let list = await targets(site)
   let page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
+  if (site === 'google-home') {
+    page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl && /home\.google\.com|accounts\.google\.com/.test(t.url || '')) || page
+  }
   if (!page) {
-    const url = config.webtop.url || 'about:blank'
-    await fetch(`${webtopCdpBase()}/json/new?${encodeURIComponent(url)}`, { method: 'PUT', signal: AbortSignal.timeout(5000) })
-    list = await targets()
+    await fetch(`${base(site)}/json/new?${encodeURIComponent(SITES[site].url())}`, { method: 'PUT', signal: AbortSignal.timeout(5000) })
+    list = await targets(site)
     page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
   }
-  if (!page) throw new Error('אין לשונית בדפדפן ה-Webtop בענן.')
+  if (!page) throw new Error(`אין לשונית בדפדפן ${SITES[site].label} בענן.`)
   return page
 }
 
-function connect(wsUrl) {
+function connect(wsUrl, label) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, { perMessageDeflate: false, maxPayload: 32 * 1024 * 1024 })
     let nextId = 0
@@ -120,7 +166,7 @@ function connect(wsUrl) {
       msg.error ? bad(new Error(msg.error.message)) : ok(msg.result)
     })
     ws.once('error', reject)
-    ws.once('close', () => pending.forEach(({ bad }) => bad(new Error('החיבור לדפדפן ה-Webtop נסגר'))))
+    ws.once('close', () => pending.forEach(({ bad }) => bad(new Error(`החיבור לדפדפן ${label} נסגר`))))
     ws.once('open', () =>
       resolve({
         call: (method, params = {}) =>
@@ -136,10 +182,11 @@ function connect(wsUrl) {
   })
 }
 
-async function withPage(run) {
-  if (!config.webtop.cloud) throw new Error('Webtop בענן כבוי.')
-  const page = await pageTarget()
-  const cdp = await connect(page.webSocketDebuggerUrl)
+export async function withCloudPage(site, run) {
+  site = browserSite(site)
+  if (!SITES[site].enabled()) throw new Error(`${SITES[site].label} בענן כבוי.`)
+  const page = await pageTarget(site)
+  const cdp = await connect(page.webSocketDebuggerUrl, SITES[site].label)
   try {
     return await run(cdp.call)
   } finally {
@@ -147,21 +194,23 @@ async function withPage(run) {
   }
 }
 
-// Live JPEG of the tab the person is signing in to. Nothing here is written to disk.
-export function captureFrame() {
-  return withPage(async (call) => {
-    await call('Page.bringToFront').catch(() => {})
-    const layout = await call('Page.getLayoutMetrics').catch(() => ({}))
-    const vv = layout.cssVisualViewport || {}
-    const width = Math.max(1, Math.round(vv.clientWidth || VIEW.width))
-    const height = Math.max(1, Math.round(vv.clientHeight || VIEW.height))
-    const shot = await call('Page.captureScreenshot', {
-      format: 'jpeg',
-      quality: 55,
-      clip: { x: vv.pageX || 0, y: vv.pageY || 0, width, height, scale: 1 },
-    })
-    return { jpeg: Buffer.from(shot.data, 'base64'), width, height }
+async function shot(call) {
+  await call('Page.bringToFront').catch(() => {})
+  const layout = await call('Page.getLayoutMetrics').catch(() => ({}))
+  const vv = layout.cssVisualViewport || {}
+  const width = Math.max(1, Math.round(vv.clientWidth || VIEW.width))
+  const height = Math.max(1, Math.round(vv.clientHeight || VIEW.height))
+  const frame = await call('Page.captureScreenshot', {
+    format: 'jpeg',
+    quality: 55,
+    clip: { x: vv.pageX || 0, y: vv.pageY || 0, width, height, scale: 1 },
   })
+  return { jpeg: Buffer.from(frame.data, 'base64'), width, height }
+}
+
+// Live JPEG of the tab the person is signing in to. Nothing here is written to disk.
+export function captureFrame(site = 'webtop') {
+  return withCloudPage(site, shot)
 }
 
 const KEYS = {
@@ -176,9 +225,11 @@ function num(value, fallback = 0) {
 }
 
 // Clicks, typing, scrolling and Enter/Tab/Backspace. The text is forwarded to the browser and not logged.
+// action.site is "webtop" (default) or "google-home".
 export function webtopInput(action) {
   const type = String(action?.type || '')
-  return withPage(async (call) => {
+  const site = browserSite(action?.site)
+  return withCloudPage(site, async (call) => {
     if (type === 'click') {
       const x = num(action.x), y = num(action.y)
       await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })

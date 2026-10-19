@@ -6,6 +6,7 @@ import { mailEvent, calendarEvent } from './monitoring/intake.js'
 
 import { inQuietHours } from './outbox.js'
 import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice } from './session.js'
+import { googleHomeKeepAlive, isGoogleHomeLoginError, planGoogleHomeLoginNotice, clearGoogleHomeLoginNotice } from './google-home.js'
 import { lessonReminders } from './lessons.js'
 
 const NEWS_WINDOW = 4 * 60
@@ -113,6 +114,38 @@ async function webtop(notify) {
     }
     const h = (state.health.webtop ??= { fails: 0, down: false })
     if (!h.down) console.log(`[webtop] ${e.message}`)
+    h.fails = DOWN_AFTER
+    h.down = true
+    save()
+  }
+}
+
+let googleHomeLast = 0
+async function googleHome(notify) {
+  if (!config.googleHome.cloud) return
+  const failing = state.health.googleHome?.fails > 0
+  if (Date.now() - googleHomeLast < (failing ? 60000 : config.googleHome.keepAliveMinutes * 60000)) return
+  googleHomeLast = Date.now()
+  try {
+    await googleHomeKeepAlive()
+    clearGoogleHomeLoginNotice(state)
+    save()
+    const h = state.health.googleHome
+    if (h?.down) await notify('✅ Google Home חזר לעבוד.')
+    state.health.googleHome = { fails: 0, down: false, lastOk: Date.now() }
+    save()
+  } catch (e) {
+    if (!isGoogleHomeLoginError(e)) {
+      console.log(`[google-home] ${e.message}`)
+      return
+    }
+    const text = planGoogleHomeLoginNotice(state)
+    if (text) {
+      save()
+      await notify(text, true)
+    }
+    const h = (state.health.googleHome ??= { fails: 0, down: false })
+    if (!h.down) console.log(`[google-home] ${e.message}`)
     h.fails = DOWN_AFTER
     h.down = true
     save()
@@ -335,7 +368,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, webtop, lessonReminders, mail, calendar, googleCalendar, homework, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, webtop, googleHome, lessonReminders, mail, calendar, googleCalendar, homework, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {

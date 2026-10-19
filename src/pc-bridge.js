@@ -28,6 +28,9 @@ const TIMEOUT_MS = {
   readSessionPage: 90000,
   readTimetable: 90000,
   sessionKeepAlive: 90000,
+  getHomeDevices: 30000,
+  controlHomeDevice: 45000,
+  googleHomeKeepAlive: 60000,
 }
 
 const PC_NAMES = [
@@ -440,6 +443,10 @@ export async function homeHandlers() {
   handlers.readSessionPage = (url, maxChars) => session.readSessionPage(url, maxChars)
   handlers.readTimetable = () => session.readTimetable()
   handlers.sessionKeepAlive = () => session.sessionKeepAlive()
+  const home = await import('./google-home.js')
+  handlers.getHomeDevices = () => home.getHomeDevices()
+  handlers.controlHomeDevice = (query, action) => home.controlHomeDevice(query, action)
+  handlers.googleHomeKeepAlive = () => home.googleHomeKeepAlive()
   return handlers
 }
 

@@ -115,9 +115,11 @@ ok(later.includes('/webtop'), 'after the gap, and after the session had recovere
 
 const page = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'webtop.html'), 'utf8')
 ok(page.includes('dir="rtl"') && page.includes('התחברות ל-Webtop') && page.includes('הסיסמה לא נשמרת'), 'the login page is Hebrew, RTL, and does not claim to store the password')
+ok(page.includes('data-site="google-home"') && page.includes('התחברות ל-Google Home'), 'the login page lets the user choose Google Home')
 ok(page.includes("type: 'click'") && page.includes("type: 'type'") && page.includes("type: 'key'") && page.includes("type: 'scroll'"), 'the page forwards clicks, typing, keys and scrolling')
 const settingsHtml = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui.html'), 'utf8')
 ok(settingsHtml.includes('התחברות ל-Webtop') && settingsHtml.includes("href: '/webtop'"), 'the connections section links to the login page')
+ok(settingsHtml.includes("href: '/google-home'") && settingsHtml.includes('התחברות ל-Google Home'), 'the connections section links to Google Home login')
 
 function hit(method, urlPath, { host, origin, cookie, body } = {}) {
   return new Promise((resolve, reject) => {
@@ -164,6 +166,10 @@ const pubHost = await hit('GET', '/', { host: pub })
 ok(pubHost.status === 403 && pubHost.body.includes('כדי להיכנס') && !pubHost.body.includes('גישה נדחתה'), 'UI_PUBLIC_HOST passes the Host check')
 const open = await hit('GET', '/webtop', { cookie })
 ok(open.status === 200 && open.body.includes('התחברות ל-Webtop'), 'a signed-in visitor gets the login view')
+const gh = await hit('GET', '/google-home', { cookie })
+ok(gh.status === 200 && gh.body.includes('data-site="google-home"'), 'a signed-in visitor can open the Google Home login view')
+const ghLink = await hit('GET', `/google-home?t=${token}`, { host: pub })
+ok(ghLink.status === 302 && ghLink.headers.location === '/google-home', 'the WhatsApp link signs in and lands on /google-home')
 const closed = await hit('GET', '/webtop')
 ok(closed.status === 403, 'the login view requires the settings cookie')
 const fromPhone = await hit('GET', `/webtop?t=${token}`, { host: pub })

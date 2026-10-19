@@ -15,7 +15,7 @@ import { status } from './status.js'
 import { startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
 import { startPcBridgeServer, bridgeLabel } from './pc-bridge.js'
-import { cloudWebtopOn, ensureCloudWebtop } from './webtop-browser.js'
+import { cloudGoogleHomeOn, cloudWebtopOn, ensureCloudBrowser, ensureCloudWebtop } from './webtop-browser.js'
 import { startVoice } from './voice.js'
 import { createMonitoring } from './monitoring/index.js'
 import { inQuietHours } from './outbox.js'
@@ -33,6 +33,7 @@ if (!config.llm.apiKey || !config.llm.model) {
 // Open the bridge port before WhatsApp connects, so a platform health check is not waiting on the login.
 startPcBridgeServer()
 if (cloudWebtopOn()) ensureCloudWebtop().catch((e) => console.log(`[webtop] ${e.message}`))
+if (cloudGoogleHomeOn()) ensureCloudBrowser('google-home').catch((e) => console.log(`[google-home] ${e.message}`))
 
 // One assistant per data folder: two would share the WhatsApp session and answer every message twice.
 const LOCK = path.join(DATA_DIR, 'helper.lock')

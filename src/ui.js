@@ -9,6 +9,7 @@ import QRCode from 'qrcode'
 import { config, saveSettings, mailEnabled, ROOT, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
 import { setWebtopLoginUrl } from './session.js'
+import { setGoogleHomeLoginUrl } from './google-home.js'
 import { captureFrame, webtopInput } from './webtop-browser.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
 import { calendarOn } from './calendar.js'
@@ -100,6 +101,7 @@ async function snapshot(connectedSince) {
     appIp: ip,
     isTailscale,
     webtop: { enabled: Boolean(config.webtop.url), cloud: config.webtop.cloud, url: config.webtop.url, loginPath: '/webtop' },
+    googleHome: { cloud: config.googleHome.cloud, loginPath: '/google-home' },
   }
 }
 
@@ -130,6 +132,7 @@ export function startUi({ connectedSince, restart, agent }) {
   const origin = `http://127.0.0.1:${port}`
   const oauthStates = new Set()
   setWebtopLoginUrl(() => `${policy().publicBase}/webtop?t=${token}`)
+  setGoogleHomeLoginUrl(() => `${policy().publicBase}/google-home?t=${token}`)
 
   const send = (res, status, body, headers = {}) => {
     const json = typeof body !== 'string'
@@ -257,9 +260,9 @@ export function startUi({ connectedSince, restart, agent }) {
 
       // First visit carries the token in the address; it is swapped for a cookie and dropped from the URL.
       // The Webtop login link from WhatsApp lands on /webtop?t= and comes back to that page signed in.
-      if ((url.pathname === '/' || url.pathname === '/webtop') && url.searchParams.has('t')) {
+      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home') && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
-        const dest = url.pathname === '/webtop' ? '/webtop' : '/'
+        const dest = url.pathname === '/' ? '/' : url.pathname
         return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` })
       }
       if (!signedIn(req)) return send(res, 403, note('כדי להיכנס, פתח את הכתובת שמופיעה בחלון של העוזר.'))
@@ -267,10 +270,10 @@ export function startUi({ connectedSince, restart, agent }) {
       if (await handleDashboard(req, res, url, signedIn)) return
 
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'))
-      if (req.method === 'GET' && url.pathname === '/webtop') return send(res, 200, fs.readFileSync(WEBTOP_PAGE, 'utf8'))
+      if (req.method === 'GET' && (url.pathname === '/webtop' || url.pathname === '/google-home')) return send(res, 200, fs.readFileSync(WEBTOP_PAGE, 'utf8'))
       if (req.method === 'GET' && url.pathname === '/api/webtop/frame') {
         try {
-          const frame = await captureFrame()
+          const frame = await captureFrame(url.searchParams.get('site') === 'google-home' ? 'google-home' : 'webtop')
           res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'Content-Length': frame.jpeg.length })
           return res.end(frame.jpeg)
         } catch (e) {
