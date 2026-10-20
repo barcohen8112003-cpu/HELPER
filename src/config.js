@@ -175,8 +175,13 @@ const build = () => ({
     port: Number(env('GEMINI_DEBUG_PORT', '9224')) || 9224,
     timeoutMinutes: Math.max(2, Number(env('GEMINI_TIMEOUT_MINUTES', '15')) || 15),
   },
-  // The assistant's own browser for errands (run_errand), with its own profile in data/errand-profile. Opened on demand.
-  errand: { port: Number(env('ERRAND_DEBUG_PORT', '9225')) || 9225 },
+  // The assistant's own browser for errands (run_errand). In the cloud it is a third Chromium on the
+  // shared desktop, profile data/errand-profile, debugging port on 127.0.0.1 only. ERRAND_PROXY
+  // defaults to WEBTOP_PROXY; "direct" sends the errand browser out with no proxy.
+  errand: {
+    port: Number(env('ERRAND_DEBUG_PORT', '9227')) || 9227,
+    proxy: env('ERRAND_PROXY'),
+  },
   // "תשאל את ג'מיני": Google's Gemini through its official API (key from aistudio.google.com/apikey).
   geminiApi: { key: env('GEMINI_API_KEY'), model: env('GEMINI_MODEL', 'gemini-2.5-flash') },
   classroomWork: {

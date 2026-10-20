@@ -10,7 +10,7 @@ import { config, saveSettings, mailEnabled, ROOT, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
 import { setWebtopLoginUrl, webtopCloudBlockedNow, WEBTOP_BLOCKED_STATUS } from './session.js'
 import { setGoogleHomeLoginUrl } from './google-home.js'
-import { captureFrame, webtopInput } from './webtop-browser.js'
+import { captureFrame, ensureCloudBrowser, errandCloudOn, webtopInput } from './webtop-browser.js'
 import { desktopShellHtml, isDesktopPath, proxyDesktopHttp, proxyDesktopUpgrade } from './cloud-desktop.js'
 import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
@@ -114,6 +114,7 @@ async function snapshot(connectedSince) {
     googleHome: { cloud: config.googleHome.cloud, loginPath: '/google-home' },
     phone: { enabled: phoneEnabled(), host: phoneBox().host || config.phone.host, mode: config.phone.mode, loginPath: '/phone' },
     desktop: { enabled: config.desktop.enabled, path: '/desktop/' },
+    errand: { enabled: errandCloudOn(), path: '/errand' },
   }
 }
 
@@ -307,7 +308,7 @@ export function startUi({ connectedSince, restart, agent }) {
       // not sent on the 302 follow to dest, so the next GET looks signed out. Lax is sent on that GET.
       // Cross-site POSTs still omit the cookie, and the Origin allow-list rejects a foreign page anyway.
       const desktopEntry = isDesktopPath(url.pathname)
-      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || desktopEntry) && url.searchParams.has('t')) {
+      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || url.pathname === '/errand' || desktopEntry) && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
         const dest = desktopEntry ? '/desktop/' : (url.pathname === '/' ? '/' : url.pathname)
         return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000` })
@@ -323,7 +324,10 @@ export function startUi({ connectedSince, restart, agent }) {
       if (await handleDashboard(req, res, url, signedIn)) return
 
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'))
-      if (req.method === 'GET' && (url.pathname === '/webtop' || url.pathname === '/google-home')) return send(res, 200, fs.readFileSync(WEBTOP_PAGE, 'utf8'))
+      if (req.method === 'GET' && (url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/errand')) {
+        if (url.pathname === '/errand') ensureCloudBrowser('errand').catch(() => {})
+        return send(res, 200, fs.readFileSync(WEBTOP_PAGE, 'utf8'))
+      }
       if (req.method === 'GET' && url.pathname === '/phone') return send(res, 200, fs.readFileSync(PHONE_PAGE, 'utf8'))
       if (req.method === 'GET' && url.pathname === '/api/phone/status') return send(res, 200, await phoneStatus())
       if (req.method === 'GET' && url.pathname === '/api/phone/frame') {
@@ -337,7 +341,8 @@ export function startUi({ connectedSince, restart, agent }) {
       }
       if (req.method === 'GET' && url.pathname === '/api/webtop/frame') {
         try {
-          const frame = await captureFrame(url.searchParams.get('site') === 'google-home' ? 'google-home' : 'webtop')
+          const asked = url.searchParams.get('site')
+          const frame = await captureFrame(asked === 'google-home' || asked === 'errand' ? asked : 'webtop')
           res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'Content-Length': frame.jpeg.length })
           return res.end(frame.jpeg)
         } catch (e) {

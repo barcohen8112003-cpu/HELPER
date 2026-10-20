@@ -302,7 +302,10 @@ Helper זוכר מה שחשוב לך, מזכיר בזמן, עוקב בשקט א�
 docker compose -f docker-compose.yml -f docker-compose.tailscale.yml exec tailscale tailscale serve --bg --https=443 http://helper:6080
 ```
 
-לחיצה ימנית על הרקע של fluxbox פותחת תפריט עם **Webtop** ו-**Google Home**, ומביאה את החלון לחזית.
+לחיצה ימנית על הרקע של fluxbox פותחת תפריט עם **Webtop**, **Google Home** ו-**קניות**, ומביאה את החלון לחזית.
+
+### קניות וסקר שוק
+עם `COMPUTER_MODE` שונה מ-`off`, ובענן (`WEBTOP_CLOUD`, `GOOGLE_HOME_CLOUD` או `CLOUD_DESKTOP`), העוזר משווה וקונה בחלון Chromium משלו על אותו שולחן עבודה. הפרופיל `/var/data/errand-profile`, פורט הדיבוג 9227 על `127.0.0.1` בלבד, בלי לפרסם אותו. «הכי זול» הוא סקר: זאפ ו-Google Shopping, ואז 3–5 חנויות, מחיר סופי כולל משלוח, אותו דגם. `compare_prices` נעצר לפני הסל. הזמנה (`run_errand`) עדיין מבקשת אישור בוואטסאפ עם צילום מסך, ומעדיפה PayPal (דביט או פריפייד, בלי אשראי). חתימה על חנויות: באתר ההגדרות **🛒 דפדפן קניות** (`/errand`), ומשם שולחן העבודה. `ERRAND_PROXY` (או `WEBTOP_PROXY` אם הוא ריק) מוציא את הגלישה דרך יציאת הטלפון, כדי שהחנות תראה כתובת ישראלית. `ERRAND_PROXY=direct` מכבה את זה. בבית, בלי דגלי הענן, נשאר חלון Chrome/Edge המקומי.
 
 `CLOUD_DESKTOP_VNC_PASSWORD` אופציונלי. בלי סיסמה, הדלת של Tailscale היא החברות ב-tailnet, והדלת של אתר ההגדרות היא העוגייה. סיסמת VNC לא מחליפה את העוגייה.
 - אם תזכורות השיעורים מופעלות, לפני כל שיעור מגיעה הודעה עם המקצוע והחדר.

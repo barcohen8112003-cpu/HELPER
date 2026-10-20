@@ -206,6 +206,7 @@ function render(S) {
     W.cloud && h('a', { href: '/webtop' }, 'Webtop'),
     GH.cloud && h('a', { href: '/google-home' }, 'Google Home'),
     P.enabled && h('a', { href: '/phone' }, 'טלפון'),
+    S.errand?.enabled && h('a', { href: '/errand' }, '🛒 דפדפן קניות'),
   ].filter(Boolean)
   fill($('shortcuts'),
     D.enabled && h('a', { class: 'btn primary launch-desktop', href: '/desktop/' }, '🖥️ שליטה מרחוק במחשב בענן'),

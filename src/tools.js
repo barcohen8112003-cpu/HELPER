@@ -1107,6 +1107,24 @@ ${await askGemini(question)}`
       return `${result}\n[Reply in one short Hebrew line, addressing him in masculine singular (no "/י"). DONE: what happened; "הזמנתי"/"שילמתי" only if the summary says the site showed success. NEED_USER: exactly what he must do (sign in or solve it in the agent window on the PC, or send the missing detail), then wait. DENIED: nothing was paid or sent. FAIL: the honest reason and what he can do next.]`
     },
   },
+  {
+    name: 'compare_prices',
+    enabled: errandBrowserEnabled,
+    description: 'סקר שוק בלבד, בלי סל ובלי קופה: מוצא את האפשרות הזולה ביותר לאותו דגם. מתחיל באתר השוואת מחירים (זאפ לישראל, וגם Google Shopping), בודק 3-5 חנויות, ומשווה מחיר סופי כולל משלוח, אמינות מוכר וזמן אספקה. מחזיר רשימה מדורגת בעברית עם מחירים וקישורים. אם המשתמש ביקש גם להזמין, אחרי הרשימה קוראים ל-run_errand.',
+    parameters: obj(
+      {
+        goal: str('מה להשוות, במילים של המשתמש, כולל הדגם אם נאמר'),
+        budget: str('תקציב מקסימלי עם מטבע, אם נאמר'),
+        location: str('עיר או כתובת למשלוח, אם רלוונטי'),
+      },
+      ['goal']
+    ),
+    async run({ goal, budget, location }, ctx) {
+      const constraints = [budget && `budget: ${budget}`, location && `location: ${location}`, 'survey only: compare prices, do not add to cart or check out'].filter(Boolean).join('; ')
+      const result = await runErrand(goal, constraints, ctx, { survey: true })
+      return `${result}\n[Reply in Hebrew with the ranked list: shop, total including shipping, delivery, link. Do not say you ordered or paid.]`
+    },
+  },
 ]
 
 const isOn = (t) => !t.enabled || t.enabled()
@@ -1236,7 +1254,8 @@ const BRIEF = {
   google_home_devices: 'List smart home devices and their state (on/off) from Google Home.',
   google_home_control: 'Turn on, turn off, or toggle smart home devices (lights, speakers) via Google Home.',
   use_computer: 'Autonomous mouse and keyboard agent to operate the PC step by step (requires user approval).',
-  run_errand: 'Do any open-ended web task in your own agent browser (separate profile, not the user\'s screen): order, buy, book, sign up, fill forms, research to a cart. It decides every step from the screen. Before paying, ordering, sending as the user or deleting it asks the user itself with a screenshot; do not ask first. Returns DONE, NEED_USER, DENIED or FAIL. After NEED_USER and his answer, call again with the same goal plus the new detail.',
+  run_errand: 'Order, book or buy in your own browser. For the cheapest product, compare_prices first unless he already asked to order. Before paying or ordering it asks him with a screenshot. Prefer PayPal; he has a debit/prepaid card only, no credit card. Returns DONE, NEED_USER, DENIED or FAIL.',
+  compare_prices: 'Market survey only: cheapest exact model. Start at zap.co.il (Israel) and Google Shopping, then 3-5 shops. Compare total INCLUDING shipping, seller and delivery. Ranked Hebrew list with prices and links. Never a cart or checkout.',
 }
 
 // Parameter notes are dropped too, except the ones that fix a format the model could not guess.

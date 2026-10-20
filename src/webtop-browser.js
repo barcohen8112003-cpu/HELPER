@@ -47,6 +47,29 @@ const SITES = {
     // on .google.com. With browser sign-in off, account consistency is disabled and the cookies are left alone.
     extraArgs: ['--allow-browser-signin=false'],
   },
+  errand: {
+    label: 'קניות',
+    headed: true,
+    profile: () => path.join(DATA_DIR, 'errand-profile'),
+    port: () => config.errand.port,
+    url: () => 'about:blank',
+    enabled: () => errandCloudOn(),
+    // Same DICE sign-out as Google Home: shop logins (including Google) must survive a restart.
+    extraArgs: ['--allow-browser-signin=false'],
+  },
+}
+
+// The cloud container (Webtop, Google Home, or the shared desktop), not the home Windows process.
+export function errandCloudOn() {
+  if (config.computerMode === 'off') return false
+  return Boolean(config.webtop.cloud || config.googleHome.cloud || config.desktop?.enabled)
+}
+
+// ERRAND_PROXY wins. Empty falls back to WEBTOP_PROXY. "direct" means no proxy at all.
+export function errandProxyValue(proxy = config.errand.proxy, fallback = config.webtop.proxy) {
+  const own = String(proxy ?? '').trim()
+  if (own.toLowerCase() === 'direct') return ''
+  return own || String(fallback ?? '').trim()
 }
 
 export const cloudWebtopOn = () => config.webtop.cloud
@@ -139,6 +162,11 @@ export function browserLaunchArgs(site = 'webtop') {
     const proxy = webtopProxySwitch()
     if (proxy) args.push(proxy)
   }
+  // Israeli shops should see an Israeli exit (usually the phone). Google Home stays direct.
+  if (site === 'errand') {
+    const proxy = webtopProxySwitch(errandProxyValue())
+    if (proxy) args.push(proxy)
+  }
   args.push(spec.url())
   return args
 }
@@ -178,8 +206,9 @@ function launch(site) {
   child.on('error', () => {})
 }
 
-// Closes both cloud browsers through the debugging port so Chromium writes its cookies to the profile. Killed
-// outright (the container stopping), it loses Google's rotated session cookies and Google signs the profile out.
+// Closes every enabled cloud browser (Webtop, Google Home, errands) through the debugging port so Chromium
+// writes its cookies to the profile. Killed outright (the container stopping), it loses Google's rotated
+// session cookies and Google signs the profile out.
 export async function closeCloudBrowsers(ms = 4000) {
   await Promise.all(
     Object.keys(SITES).map(async (site) => {
