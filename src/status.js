@@ -5,6 +5,7 @@ import { calendarOn } from './calendar.js'
 import { canHear, canSpeak } from './media.js'
 import { chatModel } from './llm.js'
 import { bridgeLabel } from './pc-bridge.js'
+import { phoneEnabled } from './phone.js'
 
 export function ago(ts) {
   if (!ts) return 'עוד לא נבדק'
@@ -30,7 +31,7 @@ export function status(connectedSince) {
   const lines = [
     `*${config.botName}* | מודל: ${chatModel()}${config.llm.cheapModel ? ` | רקע: ${config.llm.cheapModel}` : ''}`,
     `וואטסאפ: ${connectedSince ? `מחובר ברצף ${ago(connectedSince).replace('לפני ', '')}` : 'לא מחובר'} | אזור זמן: ${process.env.TZ}`,
-    `הודעות קוליות: ${canHear() ? 'מבין' : 'כבוי'}${canSpeak() ? ' ועונה בקול' : ''} | מחשב: ${config.computerMode}${bridgeLabel()} | GitHub: ${config.githubToken ? 'מחובר' : 'לא מחובר'}`,
+    `הודעות קוליות: ${canHear() ? 'מבין' : 'כבוי'}${canSpeak() ? ' ועונה בקול' : ''} | מחשב: ${config.computerMode}${bridgeLabel()} | טלפון: ${phoneEnabled() ? config.phone.mode : 'כבוי'} | GitHub: ${config.githubToken ? 'מחובר' : 'לא מחובר'}`,
     `שעות שקט: ${process.env.QUIET_HOURS?.trim() || 'כבוי'}${state.outbox.length ? ` | ${state.outbox.length} הודעות ממתינות לשליחה` : ''}`,
     '',
     '*מקורות*',

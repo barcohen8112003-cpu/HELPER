@@ -14,7 +14,8 @@
     "test:watch": "node src/monitoring/selftest.js",
     "check:pc-bridge": "node src/pc-bridge-selftest.js",
     "check:webtop": "node src/webtop-selftest.js",
-    "check:google-home": "node src/google-home-selftest.js"
+    "check:google-home": "node src/google-home-selftest.js",
+    "check:phone": "node src/phone-selftest.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "~6.7.24",

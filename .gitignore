@@ -1,6 +1,7 @@
 node_modules/
 data/
 .env
+.tailscale.env
 .env.before-openrouter
 home-relay/config.json
 home-relay/pc-bridge.config.json

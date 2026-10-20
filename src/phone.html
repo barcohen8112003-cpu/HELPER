@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>טלפון</title>
+<style>
+  :root { --bg:#faf8f5; --card:#fff; --ink:#1f1d1a; --muted:#77716a; --line:#e7e2da; --accent:#1f1d1a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 system-ui, "Segoe UI", Arial, sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:18px 22px; flex-wrap:wrap; }
+  h1 { font:400 26px/1.2 Georgia, "Times New Roman", serif; margin:0; }
+  a { color:var(--ink); }
+  #status { margin-inline-start:auto; color:var(--muted); font-size:13px; }
+  .wrap { margin:0 22px 28px; max-width:1100px; }
+  .note { color:var(--muted); }
+  ol { padding-inline-start:20px; }
+  form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0 16px; }
+  input { font:inherit; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fff; }
+  button { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px; padding:8px 14px; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #stage { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; outline:none; cursor:pointer; }
+  #stage:focus { box-shadow:0 0 0 2px var(--accent); }
+  img { display:block; width:100%; height:auto; background:#111; min-height:120px; }
+  .hint { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>טלפון</h1>
+  <a href="/">חזרה להגדרות</a>
+  <span id="status">בודק חיבור…</span>
+</header>
+<div class="wrap">
+  <p class="note">השרת מגיע לטלפון רק דרך Tailscale, אז משתמשים בכתובת <b>100.x</b> של הטלפון וב<b>פורט</b> שמופיע על המסך. לא בכתובת ה-Wi-Fi.</p>
+  <ol>
+    <li>הגדרות ← מידע על הטלפון ← מידע על התוכנה ← הקש 7 פעמים על "מספר Build" עד שמופיע שאתה מפתח.</li>
+    <li>הגדרות ← אפשרויות למפתחים ← הפעל "ניפוי USB".</li>
+    <li>באותו מסך הפעל "ניפוי אלחוטי" ואשר.</li>
+    <li>היכנס ל"ניפוי אלחוטי". למעלה מופיע פורט החיבור. אותו שולחים ב"חבר טלפון", יחד עם כתובת ה-Tailscale.</li>
+    <li>לחץ "צימוד מכשיר באמצעות קוד צימוד". מופיעים פורט צימוד וקוד בן 6 ספרות, לכדקה. זה צימוד חד-פעמי.</li>
+    <li>Tailscale בטלפון צריך לרוץ. אחרי אתחול או החלפת רשת הניפוי נכבה והפורט משתנה. המפתח נשמר בשרת, אז בדרך כלל מספיק חיבור מחדש בלי צימוד.</li>
+  </ol>
+  <p>אפשר גם בוואטסאפ: <b>צמד טלפון 37123 123456</b> ואז <b>חבר טלפון 41234</b>.</p>
+  <h2>צימוד</h2>
+  <form id="pair">
+    <input id="pairEndpoint" inputmode="decimal" placeholder="100.110.143.89:פורט צימוד" autocomplete="off">
+    <input id="pairCode" inputmode="numeric" placeholder="קוד 6 ספרות" maxlength="6" autocomplete="off">
+    <button class="primary" type="submit">צמד</button>
+  </form>
+  <h2>חיבור</h2>
+  <form id="connect">
+    <input id="connectEndpoint" inputmode="decimal" placeholder="100.110.143.89:פורט חיבור" autocomplete="off">
+    <button class="primary" type="submit">חבר</button>
+    <button type="button" id="reconnect">חיבור מחדש</button>
+  </form>
+  <div id="stage" tabindex="0">
+    <img id="view" alt="מסך הטלפון">
+  </div>
+  <p class="hint">לוחצים על התמונה כדי ללחוץ על המסך. גלילה שולחת החלקה.</p>
+</div>
+<script>
+const status = document.getElementById('status')
+const img = document.getElementById('view')
+const stage = document.getElementById('stage')
+let url = ''
+let host = ''
+function point(e) {
+  const r = img.getBoundingClientRect()
+  const sx = img.naturalWidth && r.width ? img.naturalWidth / r.width : 1
+  const sy = img.naturalHeight && r.height ? img.naturalHeight / r.height : 1
+  return { x: Math.round((e.clientX - r.left) * sx), y: Math.round((e.clientY - r.top) * sy) }
+}
+async function post(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || 'הפעולה נכשלה')
+  return data
+}
+async function refreshStatus() {
+  try {
+    const res = await fetch('/api/phone/status', { cache: 'no-store' })
+    const data = await res.json()
+    host = data.host || host
+    status.textContent = data.line || (data.connected ? 'מחובר' : 'הטלפון לא מחובר')
+    if (host && !document.getElementById('pairEndpoint').value) document.getElementById('pairEndpoint').placeholder = host + ':פורט צימוד'
+    if (host && !document.getElementById('connectEndpoint').value) document.getElementById('connectEndpoint').placeholder = host + ':פורט חיבור'
+    return data.connected
+  } catch {
+    status.textContent = 'אין קשר לאתר'
+    return false
+  }
+}
+async function frame() {
+  const connected = await refreshStatus()
+  if (!connected) return
+  try {
+    const res = await fetch('/api/phone/frame', { cache: 'no-store' })
+    if (!res.ok) return
+    const blob = await res.blob()
+    const next = URL.createObjectURL(blob)
+    img.onload = () => { if (url) URL.revokeObjectURL(url); url = next }
+    img.src = next
+  } catch {}
+}
+document.getElementById('pair').addEventListener('submit', async (e) => {
+  e.preventDefault()
+  status.textContent = 'מצמד…'
+  try {
+    const data = await post('/api/phone/pair', { endpoint: document.getElementById('pairEndpoint').value, code: document.getElementById('pairCode').value })
+    status.textContent = data.message || 'צומד'
+  } catch (err) { status.textContent = err.message }
+})
+document.getElementById('connect').addEventListener('submit', async (e) => {
+  e.preventDefault()
+  status.textContent = 'מתחבר…'
+  try {
+    const data = await post('/api/phone/connect', { endpoint: document.getElementById('connectEndpoint').value })
+    status.textContent = data.line || data.message || 'מחובר'
+    frame()
+  } catch (err) { status.textContent = err.message }
+})
+document.getElementById('reconnect').addEventListener('click', async () => {
+  status.textContent = 'מתחבר מחדש…'
+  try {
+    const data = await post('/api/phone/reconnect', {})
+    status.textContent = data.line || data.message || 'מחובר'
+    frame()
+  } catch (err) { status.textContent = err.message }
+})
+stage.addEventListener('click', async (e) => {
+  stage.focus()
+  try { await post('/api/phone/tap', point(e)) } catch (err) { status.textContent = err.message }
+})
+stage.addEventListener('wheel', async (e) => {
+  e.preventDefault()
+  const p = point(e)
+  const dy = Math.max(-600, Math.min(600, e.deltaY))
+  try { await post('/api/phone/swipe', { x1: p.x, y1: p.y, x2: p.x, y2: p.y - dy }) } catch (err) { status.textContent = err.message }
+}, { passive: false })
+frame()
+setInterval(frame, 1500)
+</script>
+</body>
+</html>

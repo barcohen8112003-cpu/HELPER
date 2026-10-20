@@ -1,6 +1,8 @@
 # Run Helper 24/7 on a VPS (Oracle Always Free, or any Docker host).
 # Usage on the server:
 #   docker compose up -d --build
+# Phone over Tailscale (auth key in .tailscale.env, not here):
+#   docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d --build
 # Logs (pairing code / QR path):
 #   docker compose logs -f
 services:

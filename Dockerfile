@@ -4,8 +4,9 @@ FROM node:24-slim
 # Chromium reads pages that only render with JavaScript. The fonts make Hebrew pages come out as text.
 # xvfb gives Google Home a real display: Google often refuses sign-in in a headless browser.
 # xauth is required by xvfb-run; without it the virtual screen never starts.
+# adb (platform-tools) talks to the phone. The key it generates lives on the data volume, not in the image.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium fonts-noto-core ca-certificates tini xvfb xauth \
+ && apt-get install -y --no-install-recommends chromium fonts-noto-core ca-certificates tini xvfb xauth adb \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

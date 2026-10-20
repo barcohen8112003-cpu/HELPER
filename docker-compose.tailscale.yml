@@ -1,0 +1,33 @@
+# Optional Tailscale sidecar for a VPS that cannot dial the phone directly.
+# The auth key stays in .tailscale.env (gitignored). It is never written into .env.
+#
+# Replaces a hand-written docker-compose.override.yml on the server:
+#   cp .tailscale.env.example .tailscale.env   # then put TS_AUTHKEY in it
+#   docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d --build
+#
+# Userspace mode: the helper container reaches tailnet IPs only through socks5://tailscale:1055.
+# The phone (Samsung, Tailscale exit node, for example 100.110.143.89) is the other end.
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: tailscale
+    hostname: helper-vps
+    restart: unless-stopped
+    env_file:
+      - .tailscale.env
+    environment:
+      TS_USERSPACE: "true"
+      TS_SOCKS5_SERVER: ":1055"
+      TS_OUTBOUND_HTTP_PROXY_LISTEN: ":1056"
+      TS_STATE_DIR: /var/lib/tailscale
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+
+  helper:
+    depends_on:
+      - tailscale
+    environment:
+      PHONE_PROXY: socks5://tailscale:1055
+
+volumes:
+  tailscale-state:
