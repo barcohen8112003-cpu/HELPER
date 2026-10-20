@@ -36,6 +36,7 @@ const defaults = {
   classroomPaused: false, // /classroom pause: new assignments are noted but not started
   fileOutbox: [], // { path, name, mime, caption, at }: files waiting for WhatsApp to be connected
   location: null, // { lat, lng, address, city, live, at }: the last location the user shared in WhatsApp
+  phoneAppNotes: {}, // { [package]: [note] }: where things live in each phone app, learned by run_on_phone
   nextId: 1,
 }
 

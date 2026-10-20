@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import { llm, chatModel, LONG_PATIENCE, Aborted } from './llm.js'
 import { screenshot, act } from './pc.js'
 import { browserScreenshot, browserAct, browserProbe } from './errand-browser.js'
+import { phoneBody, onPhoneStop } from './phone-app.js'
 
 const IMAGE_WIDTH = 1280
 const MAX_GATES = 3
@@ -33,16 +34,18 @@ const sleep = (ms, signal) =>
     signal?.addEventListener('abort', () => (clearTimeout(timer), reject(new Aborted())), { once: true })
   })
 
-const ACTIONS = `Action types:
+// The pointer actions of the screen bodies (desktop, browser). A body with its own vocabulary (the phone) brings
+// `actions` instead; the ending actions below are shared by all.
+const POINTER_ACTIONS = `Action types:
 - {"type": "click", "x": <int>, "y": <int>}            left click at image coordinates
 - {"type": "double_click", "x": <int>, "y": <int>}
 - {"type": "right_click", "x": <int>, "y": <int>}
 - {"type": "type", "text": "<text>"}                   types into the focused field (Hebrew is fine)
 - {"type": "key", "keys": "<combo>"}                   e.g. "enter", "tab", "esc", "ctrl+a", "backspace"
 - {"type": "scroll", "x": <int>, "y": <int>, "amount": <int>}   positive scrolls down, negative up (notches)
-- {"type": "wait", "amount": <seconds 1-10>}
-@EXTRA
-- {"type": "gate", "kind": "payment|order|send|delete|account", "site": "<site>", "items": "<what exactly>", "total": "<final total as shown, or empty>", "currency": "<as shown>", "when": "<delivery or date if shown>", "why": "<in Hebrew: why this choice over the others you compared, with their numbers, or empty if nothing was open>", "uncertain": "<anything not sure about, in Hebrew, or empty>", "then": <the one click or key action that commits>}
+- {"type": "wait", "amount": <seconds 1-10>}`
+
+const END_ACTIONS = `- {"type": "gate", "kind": "payment|order|send|delete|account", "site": "<site>", "items": "<what exactly>", "total": "<final total as shown, or empty>", "currency": "<as shown>", "when": "<delivery or date if shown>", "why": "<in Hebrew: why this choice over the others you compared, with their numbers, or empty if nothing was open>", "uncertain": "<anything not sure about, in Hebrew, or empty>", "then": <the one click or key action that commits>}
 - {"type": "done", "summary": "<what was achieved, in Hebrew>"}
 - {"type": "need_user", "summary": "<in Hebrew: exactly what is needed from the user and why>"}
 - {"type": "fail", "summary": "<why it cannot be done, in Hebrew>"}`
@@ -116,10 +119,10 @@ Reply with JSON only, no other text:
 
 Older screenshots are not kept, so "found" is your notebook: what you put there is shown back to you every step.
 
-${ACTIONS.replace('@EXTRA\n', body.extra ? `${body.extra}\n` : '')}
+${body.actions || `${POINTER_ACTIONS}${body.extra ? `\n${body.extra}` : ''}`}
+${END_ACTIONS}
 
-Coordinates are pixels of the screenshot you were given (its size is stated with it). Click the centre of the target.
-${body.tips}
+${body.actions ? '' : 'Coordinates are pixels of the screenshot you were given (its size is stated with it). Click the centre of the target.\n'}${body.tips}
 
 ${RULES}
 ${survey ? SURVEY_ONLY : ''}`
@@ -148,7 +151,10 @@ function gateCard(g) {
   ].filter(Boolean).join('\n')
 }
 
-const isCommitAction = (a) => a && (['click', 'double_click'].includes(a.type) ? Number.isFinite(a.x) && Number.isFinite(a.y) : a.type === 'key')
+const pointed = (a) => Number.isFinite(a.index) || (Number.isFinite(a.x) && Number.isFinite(a.y))
+const isCommitAction = (a) => a && (['click', 'double_click', 'tap', 'long_press'].includes(a.type) ? pointed(a) : a.type === 'key')
+// Actions that land on a control, so the page or screen is asked what that control is before they run.
+const PROBED = ['click', 'double_click', 'tap', 'long_press', 'type', 'key']
 
 // Runs the loop. Returns a line for the main model that starts with DONE, NEED_USER, DENIED or FAIL.
 // ctx: { confirm(text, media?), sendMedia, signal }. `think` replaces the model call (self-tests only).
@@ -158,9 +164,11 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   const log = []
   // The model's own notes from the survey (candidates and their numbers), shown back to it every step.
   const found = []
+  const screens = []
   const messages = [{ role: 'system', content: systemFor(body, survey) }]
   let gates = 0
   const end = async (status, text) => {
+    body.finish?.(text)
     if (body.finalShot) {
       const final = await body.screenshot().catch(() => null)
       if (final) await ctx.sendMedia?.({ buffer: final.buffer, mime: final.mime, caption: text })
@@ -173,7 +181,12 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
     // Only the newest screenshot is sent in full; older ones become a line of text, to keep each step cheap.
     for (const m of messages) if (Array.isArray(m.content)) m.content = m.content.filter((p) => p.type === 'text')
     const head = step === 1 ? `Goal: ${goal}\n${constraints ? `Constraints: ${constraints}\n` : ''}` : `Goal: ${goal}\n${found.length ? `Your notes so far:\n${found.map((f) => `- ${f}`).join('\n')}\n` : ''}`
-    messages.push({ role: 'user', content: [{ type: 'text', text: `${head}Step ${step}. Screenshot ${shot.width}x${shot.height}.${shot.url ? ` Address: ${shot.url}` : ''}` }, { type: 'image_url', image_url: { url: shot.image } }] })
+    // A body that reads the screen as text (the phone) sends that list, and a picture only when it has one.
+    const seen = shot.text ? `Step ${step}.\n${shot.text}${shot.image ? '\nA screenshot is attached.' : ''}` : `Step ${step}. Screenshot ${shot.width}x${shot.height}.${shot.url ? ` Address: ${shot.url}` : ''}`
+    // The same screen three steps running means the last actions did nothing: say so instead of letting it loop.
+    screens.push(shot.text || '')
+    const stuck = shot.text && screens.length >= 4 && screens.slice(-4).every((s) => s === shot.text)
+    messages.push({ role: 'user', content: [{ type: 'text', text: `${head}${seen}${stuck ? '\nThe screen has not changed for 3 steps. That way is not working: take a different one (another element, back, an intent, search).' : ''}` }, ...(shot.image ? [{ type: 'image_url', image_url: { url: shot.image } }] : [])] })
     const reply = await think(messages, signal)
     if (signal?.aborted) throw new Aborted()
     const out = parse(reply.content)
@@ -183,6 +196,8 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       continue
     }
     const a = out.action
+    if (out.step) body.status?.(String(out.step).slice(0, 60))
+    if (out.learned && String(out.learned).trim()) body.learn?.(String(out.learned))
     if (out.found && String(out.found).trim()) {
       found.push(String(out.found).trim().slice(0, 200))
       if (found.length > MAX_NOTES) found.shift()
@@ -204,7 +219,9 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       }
       if (++gates > MAX_GATES) return end('FAIL', 'יותר מדי בקשות אישור בסידור אחד, עצרתי.')
       const card = gateCard(a)
-      const ok = ctx.confirm ? await ctx.confirm(card, { buffer: shot.buffer, mime: shot.mime }) : false
+      // A body that reads the screen as text takes the picture for the card now; the others already have one.
+      const media = body.capture ? await body.capture().catch(() => null) : shot.buffer ? { buffer: shot.buffer, mime: shot.mime } : null
+      const ok = ctx.confirm ? await ctx.confirm(card, media?.buffer ? media : undefined) : false
       if (signal?.aborted) throw new Aborted()
       if (!ok) return `DENIED: לא אושר, ולכן לא בוצע. ${KIND[a.kind] ? `שום ${KIND[a.kind]} לא קרה.` : ''}\n${card}`
       // The approval covers this one action, on this screen. Anything after it needs a gate of its own.
@@ -222,27 +239,31 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       return end('NEED_USER', 'זה נראה כמו מספר כרטיס. פרטי תשלום אני לא מקליד, את זה תזין בעצמך בחלון.')
     }
     const scaled = scale(a, shot)
-    if (body.probe && ['click', 'double_click', 'type', 'key'].includes(a.type)) {
+    if (body.probe && PROBED.includes(a.type)) {
       const found = await body.probe(scaled).catch(() => null)
-      if (a.type === 'type' && found?.secret) return end('NEED_USER', 'השדה מבקש סיסמה, קוד או פרטי כרטיס. את זה תזין בעצמך בחלון של העוזר במחשב, ואז תגיד לי להמשיך.')
+      if (a.type === 'type' && found?.secret) return end('NEED_USER', `השדה מבקש סיסמה, קוד או פרטי כרטיס. את זה תזין בעצמך ${body.name === 'phone' ? 'בטלפון' : 'בחלון של העוזר במחשב'}, ואז תגיד לי להמשיך.`)
       const commitKey = a.type === 'key' && /^(enter|space)$/i.test(String(a.keys).trim())
       if (survey && found?.label && (CART.test(found.label) || COMMIT.test(found.label)) && a.type !== 'type') {
         messages.push({ role: 'user', content: `Blocked: "${found.label.slice(0, 80)}" would leave the survey (cart or checkout). Go back and finish the ranked list with "done".` })
         continue
       }
-      if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && COMMIT.test(found.label)) {
+      if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && (COMMIT.test(found.label) || body.commit?.test(found.label))) {
         messages.push({ role: 'user', content: `Blocked by the safety check: the control there reads "${found.label.slice(0, 80)}", which may pay, order, send or delete. If it commits, reply with a "gate" with the details on screen and this action as "then". If it does not, take another way forward.` })
         continue
       }
     }
     if (a.type !== 'wait') {
       try {
-        await body.act(scaled)
+        // Some actions answer with text (the phone's notifications); the model gets it with the next screen.
+        const info = await body.act(scaled)
+        if (typeof info === 'string' && info) messages.push({ role: 'user', content: `Result of that action:\n${info}` })
       } catch (e) {
         messages.push({ role: 'user', content: `That action failed: ${e.message}` })
       }
     }
-    await sleep(a.type === 'wait' ? Math.min(10, Number(a.amount) || 2) * 1000 : a.type === 'navigate' ? 2500 : 900, signal)
+    // A body that waits for its own screen to settle (the phone) needs no fixed pause.
+    const pause = a.type === 'wait' ? Math.min(10, Number(a.amount) || 2) * 1000 : body.settled ? 0 : a.type === 'navigate' ? 2500 : 900
+    if (pause) await sleep(pause, signal)
   }
   return end('FAIL', `עצרתי אחרי ${body.maxSteps} צעדים בלי להגיע למטרה.`)
 }
@@ -250,6 +271,27 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
 // Back from screenshot pixels to screen pixels.
 function scale(a, shot) {
   return Number.isFinite(a.x) ? { ...a, x: a.x * shot.scale + shot.left, y: a.y * shot.scale + shot.top } : a
+}
+
+// A task on the user's phone, through the HELPER app (run_on_phone). "Stop" in the app's bubble or notification ends
+// the run, the same as "עצור" in WhatsApp; the turn itself goes on and reports it.
+export async function runOnPhone(goal, constraints, ctx = {}, { think } = {}) {
+  const local = new AbortController()
+  const outer = () => local.abort()
+  ctx.signal?.addEventListener('abort', outer, { once: true })
+  const off = onPhoneStop(() => local.abort())
+  const body = phoneBody()
+  try {
+    return await runGoal({ goal, constraints, body, ctx: { ...ctx, signal: local.signal }, think })
+  } catch (e) {
+    if (!(e instanceof Aborted)) throw e
+    body.finish('נעצר')
+    if (ctx.signal?.aborted) throw e
+    return 'STOPPED: עצרת את זה מהטלפון. לא המשכתי.'
+  } finally {
+    off()
+    ctx.signal?.removeEventListener('abort', outer)
+  }
 }
 
 // The user's own desktop (use_computer).

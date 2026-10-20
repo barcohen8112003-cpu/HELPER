@@ -62,6 +62,8 @@ import com.example.helper.assistant.AssistantStatus
 import com.example.helper.chat.ChatController
 import com.example.helper.data.SettingsRepository
 import com.example.helper.network.HelperApiService
+import com.example.helper.phone.PhoneLink
+import com.example.helper.phone.PhoneSetup
 import com.example.helper.ui.components.AuroraBackground
 import com.example.helper.ui.components.GlassCard
 import com.example.helper.ui.components.GradientText
@@ -99,6 +101,8 @@ fun MainScreen(
     var isDefaultAssistant by remember { mutableStateOf(AssistantStatus.isDefault(context)) }
     var canOverlay by remember { mutableStateOf(WakeAccess.canOverlay(context)) }
     var batteryFree by remember { mutableStateOf(WakeAccess.batteryFree(context)) }
+    var phoneAccess by remember { mutableStateOf(PhoneSetup.accessibilityOn(context)) }
+    var phoneNotifications by remember { mutableStateOf(PhoneSetup.notificationsOn(context)) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
@@ -106,6 +110,8 @@ fun MainScreen(
                 isDefaultAssistant = AssistantStatus.isDefault(context)
                 canOverlay = WakeAccess.canOverlay(context)
                 batteryFree = WakeAccess.batteryFree(context)
+                phoneAccess = PhoneSetup.accessibilityOn(context)
+                phoneNotifications = PhoneSetup.notificationsOn(context)
             }
         }
         lifecycle.addObserver(observer)
@@ -306,6 +312,17 @@ fun MainScreen(
                     }
                 }
             )
+            Spacer(Modifier.height(12.dp))
+
+            // ── phone control ───────────────────────────────────────────────
+            val linkState by PhoneLink.status.collectAsState()
+            PhoneControlCard(
+                accessibility = phoneAccess,
+                notifications = phoneNotifications,
+                batteryFree = batteryFree,
+                link = linkState,
+                onOpen = { intent -> try { context.startActivity(intent) } catch (_: ActivityNotFoundException) {} },
+            )
             Spacer(Modifier.height(20.dp))
         }
         }
@@ -412,6 +429,57 @@ private fun WakeCard(
                 }
             }
         }
+    }
+}
+
+/** Setup for phone control: one row per Android permission, a green check once it is on. */
+@Composable
+private fun PhoneControlCard(
+    accessibility: Boolean,
+    notifications: Boolean,
+    batteryFree: Boolean,
+    link: PhoneLink.State,
+    onOpen: (android.content.Intent) -> Unit,
+) {
+    val context = LocalContext.current
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column {
+            Text("שליטה בטלפון", color = TextHigh, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Text("HELPER מבצע בטלפון משימות שביקשת בוואטסאפ, ומבקש אישור לפני תשלום, שליחה או שיחה", color = TextLow, fontSize = 12.sp)
+            val linkText = when {
+                !accessibility -> ""
+                link == PhoneLink.State.CONNECTED -> "מחובר לשרת"
+                link == PhoneLink.State.NO_SETTINGS -> "חסרים כתובת וקוד חיבור (סרוק את קוד ה-QR)"
+                else -> "מתחבר לשרת…"
+            }
+            if (linkText.isNotEmpty()) Text(linkText, color = if (link == PhoneLink.State.CONNECTED) Mint else Cyan, fontSize = 12.sp)
+            PhoneStep("שירות נגישות", "הגדרות ← נגישות ← אפליקציות מותקנות ← HELPER", accessibility) { onOpen(PhoneSetup.accessibilitySettings()) }
+            if (!accessibility) {
+                PhoneStep("אם האפשרות אפורה", "פרטי האפליקציה ← ⋮ ← \"אפשר הגדרות מוגבלות\", ואז שוב נגישות", false) { onOpen(PhoneSetup.appInfo(context)) }
+            }
+            PhoneStep("גישה להתראות", "כדי שיוכל לקרוא לך את ההתראות", notifications) { onOpen(PhoneSetup.notificationSettings(context)) }
+            PhoneStep("ללא הגבלת סוללה", "אחרת סמסונג מנתקת אותו ברקע", batteryFree) { onOpen(PhoneSetup.batterySettings(context)) }
+        }
+    }
+}
+
+@Composable
+private fun PhoneStep(title: String, detail: String, done: Boolean, onClick: () -> Unit) {
+    Spacer(Modifier.height(10.dp))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (done) Mint.copy(alpha = 0.12f) else Pink.copy(alpha = 0.14f))
+            .clickable(enabled = !done, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = TextHigh, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            if (!done) Text(detail, color = TextLow, fontSize = 12.sp)
+        }
+        Text(if (done) "✓" else "←", color = if (done) Mint else TextLow, fontSize = 18.sp, fontWeight = FontWeight.Bold)
     }
 }
 

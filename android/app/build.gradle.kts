@@ -12,8 +12,10 @@ android {
         applicationId = "com.example.helper"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // CI numbers each build, so the phone accepts every new APK as an update.
+        val run = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        versionCode = if (run != null) 100 + run else 1
+        versionName = if (run != null) "1.$run" else "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -21,8 +23,23 @@ android {
         }
     }
 
+    // One fixed key for every release build (from the repository's secrets in CI), so each new APK installs over the
+    // last one. Without it the release build falls back to the debug key, and Android refuses it as an update.
+    val keystore = System.getenv("HELPER_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = keystore
+                storePassword = System.getenv("HELPER_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("HELPER_KEY_ALIAS")
+                keyPassword = System.getenv("HELPER_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

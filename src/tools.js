@@ -18,7 +18,8 @@ import { wakeEnabled, wakePc } from './wake.js'
 import * as pc from './pc.js'
 import * as services from './services.js'
 import * as googleHome from './google-home.js'
-import { useComputer, runErrand } from './computer-use.js'
+import { useComputer, runErrand, runOnPhone } from './computer-use.js'
+import { phoneAppConnected } from './phone-app.js'
 import { errandBrowserEnabled } from './errand-browser.js'
 import { extendedTools, categories, searchTools } from './toolkit/registry.js'
 import { addFact, removeFact, CATEGORIES } from './memory.js'
@@ -1108,6 +1109,22 @@ ${await askGemini(question)}`
     },
   },
   {
+    name: 'run_on_phone',
+    enabled: phoneAppConnected,
+    description: 'מבצע כל משימה בטלפון של המשתמש מקצה לקצה, דרך אפליקציית HELPER (שירות נגישות): "תזמין לי מונית ב-Gett הביתה", "תשלח לאבא בוואטסאפ שאני בדרך", "תדליק שעון מעורר ל-7", "תנווט הביתה", "מה ההתראות שלי". הסוכן קורא את המסך ובוחר כל צעד בעצמו, ומשתמש בקיצורים ישירים (שעון מעורר, טיימר, יומן, ניווט, חיוג) כשיש. לפני תשלום, הזמנה, שליחה בשמו, שיחה או מחיקה הוא שולח בעצמו בקשת אישור עם צילום מסך, אל תשאל לפני. מחזיר DONE, NEED_USER, DENIED, STOPPED או FAIL. כשהאפליקציה מחוברת, עדיף על כלי ה-phone_* של ADB.',
+    parameters: obj(
+      {
+        goal: str('המטרה במילים של המשתמש, מלאה. בלי הוראות צעד-צעד.'),
+        details: str('פרטים שמותר להשתמש בהם: נמען ומספר, כתובת, שעה. אף פעם לא סיסמה, קוד או כרטיס.'),
+      },
+      ['goal']
+    ),
+    async run({ goal, details }, ctx) {
+      const result = await runOnPhone(goal, details ? `details the user allowed: ${details}` : '', ctx)
+      return `${result}\n[Reply in one short Hebrew line, masculine singular. DONE: what happened, "שלחתי"/"הזמנתי" only if the summary says the screen showed it. NEED_USER: exactly what he must do on the phone. DENIED or STOPPED: nothing was sent or paid. FAIL: the honest reason and what he can do next.]`
+    },
+  },
+  {
     name: 'compare_prices',
     enabled: errandBrowserEnabled,
     description: 'סקר שוק בלבד, בלי סל ובלי קופה: מוצא את האפשרות הזולה ביותר לאותו דגם. מתחיל באתר השוואת מחירים (זאפ לישראל, וגם Google Shopping), בודק 3-5 חנויות, ומשווה מחיר סופי כולל משלוח, אמינות מוכר וזמן אספקה. מחזיר רשימה מדורגת בעברית עם מחירים וקישורים. אם המשתמש ביקש גם להזמין, אחרי הרשימה קוראים ל-run_errand.',
@@ -1254,6 +1271,7 @@ const BRIEF = {
   google_home_devices: 'List smart home devices and their state (on/off) from Google Home.',
   google_home_control: 'Turn on, turn off, or toggle smart home devices (lights, speakers) via Google Home.',
   use_computer: 'Autonomous mouse and keyboard agent to operate the PC step by step (requires user approval).',
+  run_on_phone: 'Do any task on the user\'s phone end to end through the HELPER app: order a ride, send a WhatsApp, set an alarm, navigate, read notifications. It picks every step itself and asks him with a screenshot before paying, ordering, sending, calling or deleting; do not ask first. Prefer it over the adb phone_* tools when the app is connected. Returns DONE, NEED_USER, DENIED, STOPPED or FAIL.',
   run_errand: 'Order, book or buy in your own browser. For the cheapest product, compare_prices first unless he already asked to order. Before paying or ordering it asks him with a screenshot. Prefer PayPal; he has a debit/prepaid card only, no credit card. Returns DONE, NEED_USER, DENIED or FAIL.',
   compare_prices: 'Market survey only: cheapest exact model. Start at zap.co.il (Israel) and Google Shopping, then 3-5 shops. Compare total INCLUDING shipping, seller and delivery. Ranked Hebrew list with prices and links. Never a cart or checkout.',
 }

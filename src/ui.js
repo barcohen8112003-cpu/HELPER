@@ -19,6 +19,7 @@ import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
 import { chatModel } from './llm.js'
 import { ago } from './status.js'
 import { handleDashboard } from './dashboard/api.js'
+import { handlePhoneUpgrade } from './phone-app.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
@@ -414,6 +415,10 @@ export function startUi({ connectedSince, restart, agent }) {
   })
 
   server.on('upgrade', (req, socket, head) => {
+    // The HELPER app's phone link, like the other bridge endpoints: any interface, bridge token only.
+    if ((req.url || '').split('?')[0] === '/bridge/phone') {
+      return handlePhoneUpgrade(req, socket, head, (r) => same((r.headers.authorization || '').replace(/^Bearer /, ''), bridgeToken))
+    }
     const host = req.headers.host || ''
     const access = policy()
     const fail = (status, text) => {

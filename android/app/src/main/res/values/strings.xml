@@ -1,4 +1,6 @@
 <resources>
     <string name="app_name">HELPER</string>
     <string name="assistant_label">HELPER</string>
+    <string name="phone_control_label">HELPER: שליטה בטלפון</string>
+    <string name="phone_control_description">מאפשר ל-HELPER לבצע משימות שביקשת בטלפון: לקרוא מה יש על המסך, ללחוץ, להקליד ולגלול. לפני תשלום, הזמנה, שליחת הודעה או שיחה הוא מבקש אישור בוואטסאפ. סיסמאות, קודים ופרטי כרטיס הוא לא מקליד אף פעם.</string>
 </resources>
