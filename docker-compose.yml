@@ -26,8 +26,9 @@ services:
       - helper-data:/var/data
       # Settings saved in the UI rewrite this file. Mounting it keeps them on the host across restarts.
       - ./.env:/app/.env
-    # Chromium inside the image needs these for headless page reads.
-    shm_size: "256mb"
+    # Two headed browsers on the shared desktop need more /dev/shm than one headless window.
+    # 6080 (noVNC) is intentionally not published. Reach it through the settings site or Tailscale Serve.
+    shm_size: "512mb"
 
 volumes:
   helper-data:

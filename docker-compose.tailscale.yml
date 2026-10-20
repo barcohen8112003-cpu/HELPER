@@ -20,8 +20,14 @@ services:
       TS_SOCKS5_SERVER: ":1055"
       TS_OUTBOUND_HTTP_PROXY_LISTEN: ":1056"
       TS_STATE_DIR: /var/lib/tailscale
+      # Serves the cloud desktop on the tailnet only. AllowFunnel is false, so it is not on the public internet.
+      # HTTPS must be enabled for the tailnet. The name is https://helper-vps.tail526bd3.ts.net/
+      # Equivalent command, from the repo root:
+      #   docker compose -f docker-compose.yml -f docker-compose.tailscale.yml exec tailscale tailscale serve --bg --https=443 http://helper:6080
+      TS_SERVE_CONFIG: /config/desktop.json
     volumes:
       - tailscale-state:/var/lib/tailscale
+      - ./tailscale-serve:/config:ro
 
   helper:
     depends_on:

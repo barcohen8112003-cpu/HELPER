@@ -4,9 +4,11 @@ FROM node:24-slim
 # Chromium reads pages that only render with JavaScript. The fonts make Hebrew pages come out as text.
 # xvfb gives Google Home a real display: Google often refuses sign-in in a headless browser.
 # xauth is required by xvfb-run; without it the virtual screen never starts.
+# CLOUD_DESKTOP=1 uses one shared Xvfb, fluxbox, x11vnc on localhost, and noVNC (websockify) on 6080.
+# 6080 stays inside the container. Do not publish it.
 # adb (platform-tools) talks to the phone. The key it generates lives on the data volume, not in the image.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium fonts-noto-core ca-certificates tini xvfb xauth adb \
+ && apt-get install -y --no-install-recommends chromium fonts-noto-core ca-certificates tini xvfb xauth adb fluxbox wmctrl x11vnc novnc websockify \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,6 +26,7 @@ ENV HELPER_DATA_DIR=/var/data \
     PC_BRIDGE_PORT=3212 \
     NODE_ENV=production
 
+# 3210 is the settings site (it proxies the desktop). 3212 is the home bridge. 6080 is not exposed.
 EXPOSE 3210 3212
 
 # tini passes signals on, so a stop from the platform closes the WhatsApp connection cleanly.

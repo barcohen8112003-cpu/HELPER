@@ -11,6 +11,7 @@ import { state, save } from './store.js'
 import { setWebtopLoginUrl, webtopCloudBlockedNow, WEBTOP_BLOCKED_STATUS } from './session.js'
 import { setGoogleHomeLoginUrl } from './google-home.js'
 import { captureFrame, webtopInput } from './webtop-browser.js'
+import { desktopShellHtml, isDesktopPath, proxyDesktopHttp, proxyDesktopUpgrade } from './cloud-desktop.js'
 import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
 import { calendarOn } from './calendar.js'
@@ -112,6 +113,7 @@ async function snapshot(connectedSince) {
     },
     googleHome: { cloud: config.googleHome.cloud, loginPath: '/google-home' },
     phone: { enabled: phoneEnabled(), host: phoneBox().host || config.phone.host, mode: config.phone.mode, loginPath: '/phone' },
+    desktop: { enabled: config.desktop.enabled, path: '/desktop/' },
   }
 }
 
@@ -299,12 +301,19 @@ export function startUi({ connectedSince, restart, agent }) {
       // WhatsApp and other apps open that link as a cross-site top-level navigation. SameSite=Strict is
       // not sent on the 302 follow to dest, so the next GET looks signed out. Lax is sent on that GET.
       // Cross-site POSTs still omit the cookie, and the Origin allow-list rejects a foreign page anyway.
-      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone') && url.searchParams.has('t')) {
+      const desktopEntry = isDesktopPath(url.pathname)
+      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || desktopEntry) && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
-        const dest = url.pathname === '/' ? '/' : url.pathname
+        const dest = desktopEntry ? '/desktop/' : (url.pathname === '/' ? '/' : url.pathname)
         return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000` })
       }
       if (!signedIn(req)) return send(res, 403, note('כדי להיכנס, פתח את הכתובת שמופיעה בחלון של העוזר.'))
+      if (desktopEntry) {
+        if (!config.desktop.enabled) return send(res, 503, note('שולחן העבודה בענן כבוי.'))
+        const mappedShell = url.pathname === '/desktop' || url.pathname === '/desktop/'
+        if (mappedShell) return send(res, 200, desktopShellHtml())
+        return proxyDesktopHttp(req, res, config.desktop.upstream)
+      }
       // The dashboard (/dash) is read-only and uses the same sign-in as everything below.
       if (await handleDashboard(req, res, url, signedIn)) return
 
@@ -348,6 +357,20 @@ export function startUi({ connectedSince, restart, agent }) {
     }
   })
 
+  server.on('upgrade', (req, socket, head) => {
+    const host = req.headers.host || ''
+    const access = policy()
+    const fail = (status, text) => {
+      socket.write(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+      socket.destroy()
+    }
+    if (!access.hosts.includes(host)) return fail(403, 'Forbidden')
+    let pathname = '/'
+    try { pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname } catch { /* keep / */ }
+    if (!isDesktopPath(pathname)) return fail(404, 'Not Found')
+    if (!config.desktop.enabled || !signedIn(req)) return fail(403, 'Forbidden')
+    proxyDesktopUpgrade(req, socket, head, config.desktop.upstream)
+  })
   server.on('error', (e) => console.log(`[ui] אתר ההגדרות לא עלה: ${e.code === 'EADDRINUSE' ? `הפורט ${port} תפוס. אפשר לשנות UI_PORT בקובץ .env` : e.message}`))
   server.listen(port, '0.0.0.0')
   return `${policy().publicBase}/?t=${token}`

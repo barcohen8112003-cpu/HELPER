@@ -287,6 +287,24 @@ Helper זוכר מה שחשוב לך, מזכיר בזמן, עוקב בשקט א�
 - נגמרה ההתחברות בענן? מגיעה הודעת וואטסאפ אחת עם הקישור לדף ההתחברות, ולא שוב עד שנכנסים או שעוברות 12 שעות.
 - באותו דף אפשר לבחור **Google Home**. זה דפדפן נפרד (`GOOGLE_HOME_CLOUD=1`, פרופיל `google-home-profile`, פורט 9226 שלא נפתח החוצה), כדי שהתחברות Google לא תתערבב עם Webtop של בית הספר. הקישור הישיר הוא `/google-home`.
 - Google לפעמים מסרב להתחברות בדפדפן אוטומטי («הדפדפן לא מאובטח»). חלון Google Home עולה על מסך וירטואלי (`xvfb`, לא headless) והכניסה נעשית ידנית במסך הזה. אם Google עדיין חוסם, משאירים את הלשונית מחוברת במחשב הביתי עם הגשר דלוק, והשליטה עוברת לשם. הסיסמה לא נשמרת אצל העוזר.
+
+### שולחן עבודה בענן
+צילום המסך בדפי `/webtop` ו-`/google-home` לא פותח מקלדת אמיתית בטלפון. עם `CLOUD_DESKTOP=1` שני הדפדפנים רצים כחלון על מסך אחד בתוך הקונטיינר (`Xvfb :99`, 1280×800, `fluxbox`), ונכנסים אליהם בעכבר ובמקלדת כמו לשולחן עבודה. הפרופילים נשארים `/var/data/webtop-profile` ו-`/var/data/google-home-profile`, אז ההתחברות נשמרת גם לקריאה ולשליטה של העוזר. `WEBTOP_PROXY` עדיין חל רק על חלון Webtop.
+
+`x11vnc` מאזין רק ל-localhost. `noVNC` עולה על פורט 6080 **בתוך** הקונטיינר. אסור להוסיף `6080:6080` ל-compose ולא לפתוח את הפורט בחומת האש.
+
+שני דרכים להיכנס:
+
+1. **אתר ההגדרות** (גם בלי Tailscale). בחיבורים: **שולחן עבודה בענן**, או ישירות `/desktop/`. צריך את אותה עוגיית התחברות של האתר (`?t=` מהחלון של העוזר). האתר מעביר את הדף ואת ה-WebSocket אל noVNC. בטלפון: `resize=scale`, חיבור אוטומטי, וכפתור **מקלדת**.
+2. **Tailscale**, מהטלפון שכבר ב-tailnet. ב-`docker-compose.tailscale.yml` מוגדר `TS_SERVE_CONFIG=/config/desktop.json` (הקובץ `tailscale-serve/desktop.json`). הוא מפרסם HTTPS רק ל-tailnet, עם `AllowFunnel: false`, אל `http://helper:6080`. צריך HTTPS מופעל ב-tailnet. הכתובת: `https://helper-vps.tail526bd3.ts.net/vnc.html?autoconnect=1&resize=scale&reconnect=1&show_dot=1`. הפקודה השקולה, מתוך תיקיית הפרויקט:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tailscale.yml exec tailscale tailscale serve --bg --https=443 http://helper:6080
+```
+
+לחיצה ימנית על הרקע של fluxbox פותחת תפריט עם **Webtop** ו-**Google Home**, ומביאה את החלון לחזית.
+
+`CLOUD_DESKTOP_VNC_PASSWORD` אופציונלי. בלי סיסמה, הדלת של Tailscale היא החברות ב-tailnet, והדלת של אתר ההגדרות היא העוגייה. סיסמת VNC לא מחליפה את העוגייה.
 - אם תזכורות השיעורים מופעלות, לפני כל שיעור מגיעה הודעה עם המקצוע והחדר.
 - בחלון הביתי המחשב צריך להישאר ער (Sleep על Never). אל תפתח בחלון הזה אתרים אחרים.
 
@@ -414,6 +432,8 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `PHONE_MODE` | `ask` (ברירת מחדל) / `ask-writes` / `ask-all` / `auto` / `off`. ראה את סעיף הטלפון |
 | `PHONE_PROXY` | `socks5://tailscale:1055` בדרך כלל. `direct` בלי מנהרה. מפתח Tailscale נמצא ב-`.tailscale.env`, לא כאן |
 | `GOOGLE_HOME_CLOUD` | `1`: דפדפן Google Home נפרד בקונטיינר. ריק: דרך הגשר לבית |
+| `CLOUD_DESKTOP` | `1`: מסך משותף לשני הדפדפנים, noVNC בתוך הקונטיינר. לא לפרסם את 6080 |
+| `CLOUD_DESKTOP_VNC_PASSWORD` | סיסמת VNC אופציונלית. הקישור באתר ההגדרות עדיין דורש עוגייה |
 | `GOOGLE_HOME_DEBUG_PORT` | פורט דיבוג פנימי, ברירת מחדל `9226`. לא לפרסם החוצה |
 | `UI_PUBLIC_HOST` | כתובת אתר ההגדרות מחוץ לשרת, למשל `37.60.240.231:3210`. ריק: רק המחשב עצמו |
 | `MAIL_HOST` / `MAIL_USER` / `MAIL_PASS` / `MAIL_POLL_MINUTES` | IMAP |
@@ -505,7 +525,7 @@ docker compose logs -f
 
 `.env` על השרת צריך `COMPUTER_MODE=ask`, `PC_BRIDGE_SECRET` (מחרוזת אקראית ארוכה), ואת `WEBTOP_URL` אם קוראים Webtop. כדי ש-Webtop יעבוד גם כשהמחשב כבוי: `WEBTOP_CLOUD=1`. כדי לפתוח את אתר ההגדרות מהטלפון: `UI_PUBLIC_HOST` עם הכתובת והפורט, למשל `37.60.240.231:3210`.
 
-`docker-compose.yml` מפרסם את פורט 3212 (הגשר) ואת 3210 (אתר ההגדרות), ומחבר את `.env` של השרת אל תוך הקונטיינר כדי ששמירה מהאתר תישאר אחרי הפעלה מחדש. אחרי עדכון קוד: `docker compose up -d --build`. התמונה כוללת Chromium, `adb` לטלפון, ובשביל Google Home גם `xvfb` (מסך וירטואלי) ו-`xauth` (בלי `xauth` הפקודה `xvfb-run` לא עולה). אין צורך להתקין אותם ידנית על השרת. פותחים את הפורטים ב-Security List, וב-iptables אם הוא חוסם:
+`docker-compose.yml` מפרסם את פורט 3212 (הגשר) ואת 3210 (אתר ההגדרות), ומחבר את `.env` של השרת אל תוך הקונטיינר כדי ששמירה מהאתר תישאר אחרי הפעלה מחדש. אחרי עדכון קוד: `docker compose up -d --build`. התמונה כוללת Chromium, `adb` לטלפון, ובשביל Google Home גם `xvfb` (מסך וירטואלי) ו-`xauth` (בלי `xauth` הפקודה `xvfb-run` לא עולה). עם `CLOUD_DESKTOP=1` נוספים `fluxbox`, `x11vnc` ו-noVNC. אין צורך להתקין אותם ידנית על השרת, ואין לפתוח את פורט 6080. פותחים את הפורטים ב-Security List, וב-iptables אם הוא חוסם:
 
 ```bash
 sudo iptables -I INPUT -p tcp --dport 3212 -j ACCEPT
