@@ -94,6 +94,9 @@ ok(readme.includes('שולחן עבודה בענן') && readme.includes('helper-
 ok(example.includes('CLOUD_DESKTOP=') && example.includes('6080 לא נפתח'), 'CLOUD_DESKTOP is documented and 6080 stays unpublished')
 const settings = fs.readFileSync(path.join(root, 'src', 'ui.html'), 'utf8')
 ok(settings.includes("href: '/desktop/'") && settings.includes('שולחן עבודה בענן'), 'settings links to the cloud desktop')
+ok(/D\.enabled && h\('a', \{ class: 'btn primary launch-desktop', href: '\/desktop\/' \}, '🖥️ שליטה מרחוק במחשב בענן'\)/.test(settings), 'the home page shows a same-tab remote desktop button only when the desktop is enabled')
+ok(!/launch-desktop[\s\S]{0,80}target/.test(settings) && settings.includes('class="launch"') && settings.includes("class: 'launch-links'"), 'the button stays in this tab, with small links under it')
+ok(settings.includes("href: '/webtop'") && settings.includes("href: '/google-home'") && settings.includes("href: '/phone'"), 'the home page links to Webtop, Google Home and the phone')
 
 const seen = { cookie: 'unset', path: '' }
 const upstream = http.createServer((req, res) => {
@@ -143,9 +146,15 @@ const cookie = String(ready.headers['set-cookie'] || '').split(';')[0]
 
 const closed = await hit('GET', '/desktop/', { cookie })
 ok(closed.status === 503 && closed.body.includes('כבוי'), 'a signed-in visitor does not reach noVNC while the desktop is off')
+const offState = JSON.parse((await hit('GET', '/api/state', { cookie })).body)
+ok(offState.desktop.enabled === false, 'the home page state hides the desktop button while the desktop is off')
 config.desktop.enabled = true
 config.desktop.upstream = `http://127.0.0.1:${upstreamPort}`
 
+const home = await hit('GET', '/', { cookie })
+ok(home.status === 200 && home.body.includes('id="shortcuts"') && home.body.includes('🖥️ שליטה מרחוק במחשב בענן'), 'the settings home page carries the remote desktop button')
+const onState = JSON.parse((await hit('GET', '/api/state', { cookie })).body)
+ok(onState.desktop.enabled === true && onState.desktop.path === '/desktop/', 'the home page state turns the desktop button on')
 const anon = await hit('GET', '/desktop/')
 ok(anon.status === 403 && anon.body.includes('כדי להיכנס'), 'the desktop proxy requires the session cookie')
 const foreign = await hit('GET', '/desktop/', { cookie, host: 'evil.example' })
