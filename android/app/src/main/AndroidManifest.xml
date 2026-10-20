@@ -15,6 +15,8 @@
     <!-- Phone control: the persistent notification's service type, and alarms/timers set directly. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Self-update: installs a newer HELPER build from GitHub over itself (same signing key only). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Lets "open app by name" see the installed launcher apps, and the shortcuts find WhatsApp and Waze. -->
@@ -134,6 +136,10 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the assistant's phone-control connection open while the user has turned phone control on." />
         </service>
+
+        <receiver
+            android:name=".update.UpdateReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

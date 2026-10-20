@@ -1,51 +1,80 @@
 package com.example.helper.data
 
 import android.content.Context
+import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 
 /**
  * What the phone remembers about the HELPER server: the address and bridge token from the QR, whether chat replies
- * are read aloud, and whether the wake word stays on. Plain SharedPreferences. The server's data/ directory is a
- * different folder and is not this package.
+ * are read aloud, and whether the wake word stays on. Encrypted, since the token lets anyone talk to the assistant.
+ * The server's data/ directory is a different folder and is not this package.
  */
-class SettingsRepository private constructor(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+class SettingsRepository(context: Context) {
 
-    fun getUrl(): String? = prefs.getString(KEY_URL, null)
+    private val sharedPreferences: SharedPreferences
 
-    fun getToken(): String? = prefs.getString(KEY_TOKEN, null)
+    init {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+
+        sharedPreferences = EncryptedSharedPreferences.create(
+            context,
+            "helper_secure_prefs",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
 
     fun saveConnectionDetails(url: String, token: String) {
-        prefs.edit().putString(KEY_URL, url).putString(KEY_TOKEN, token).apply()
+        sharedPreferences.edit()
+            .putString(KEY_URL, url)
+            .putString(KEY_TOKEN, token)
+            .apply()
     }
 
-    fun hasConnectionDetails(): Boolean = !getUrl().isNullOrBlank() && !getToken().isNullOrBlank()
+    fun getUrl(): String? = sharedPreferences.getString(KEY_URL, null)
 
-    /** Spoken answers are on until the user mutes them. */
-    fun isChatSpeakEnabled(): Boolean = prefs.getBoolean(KEY_CHAT_SPEAK, true)
+    fun getToken(): String? = sharedPreferences.getString(KEY_TOKEN, null)
 
-    fun setChatSpeakEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_CHAT_SPEAK, enabled).apply()
+    fun hasConnectionDetails(): Boolean {
+        return getUrl() != null && getToken() != null
     }
 
-    fun isWakeWordEnabled(): Boolean = prefs.getBoolean(KEY_WAKE, false)
+    fun isWakeWordEnabled(): Boolean = sharedPreferences.getBoolean(KEY_WAKE_WORD, false)
 
     fun setWakeWordEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_WAKE, enabled).apply()
+        sharedPreferences.edit().putBoolean(KEY_WAKE_WORD, enabled).apply()
+    }
+
+    /** Whether the chat reads Helper's answers aloud. On by default; the speaker button in the chat turns it off. */
+    fun isChatSpeakEnabled(): Boolean = sharedPreferences.getBoolean(KEY_CHAT_SPEAK, true)
+
+    fun setChatSpeakEnabled(enabled: Boolean) {
+        sharedPreferences.edit().putBoolean(KEY_CHAT_SPEAK, enabled).apply()
+    }
+
+    fun clearConnectionDetails() {
+        sharedPreferences.edit()
+            .remove(KEY_URL)
+            .remove(KEY_TOKEN)
+            .apply()
     }
 
     companion object {
-        private const val PREFS = "helper_settings"
-        private const val KEY_URL = "url"
-        private const val KEY_TOKEN = "token"
-        private const val KEY_CHAT_SPEAK = "chat_speak"
-        private const val KEY_WAKE = "wake_word"
+        private const val KEY_URL = "connection_url"
+        private const val KEY_TOKEN = "connection_token"
+        private const val KEY_WAKE_WORD = "wake_word_enabled"
+        private const val KEY_CHAT_SPEAK = "chat_speak_enabled"
 
         @Volatile
-        private var instance: SettingsRepository? = null
+        private var INSTANCE: SettingsRepository? = null
 
         fun getInstance(context: Context): SettingsRepository {
-            return instance ?: synchronized(this) {
-                instance ?: SettingsRepository(context.applicationContext).also { instance = it }
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: SettingsRepository(context.applicationContext).also { INSTANCE = it }
             }
         }
     }

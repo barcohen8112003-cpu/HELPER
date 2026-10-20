@@ -41,6 +41,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +65,9 @@ import com.example.helper.data.SettingsRepository
 import com.example.helper.network.HelperApiService
 import com.example.helper.phone.PhoneLink
 import com.example.helper.phone.PhoneSetup
+import com.example.helper.phone.HelperAccessibilityService
+import com.example.helper.update.Updater
+import kotlinx.coroutines.launch
 import com.example.helper.ui.components.AuroraBackground
 import com.example.helper.ui.components.GlassCard
 import com.example.helper.ui.components.GradientText
@@ -103,6 +107,7 @@ fun MainScreen(
     var batteryFree by remember { mutableStateOf(WakeAccess.batteryFree(context)) }
     var phoneAccess by remember { mutableStateOf(PhoneSetup.accessibilityOn(context)) }
     var phoneNotifications by remember { mutableStateOf(PhoneSetup.notificationsOn(context)) }
+    var canInstallUpdates by remember { mutableStateOf(Updater.canInstall(context)) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
@@ -112,6 +117,7 @@ fun MainScreen(
                 batteryFree = WakeAccess.batteryFree(context)
                 phoneAccess = PhoneSetup.accessibilityOn(context)
                 phoneNotifications = PhoneSetup.notificationsOn(context)
+                canInstallUpdates = Updater.canInstall(context)
             }
         }
         lifecycle.addObserver(observer)
@@ -323,6 +329,18 @@ fun MainScreen(
                 link = linkState,
                 onOpen = { intent -> try { context.startActivity(intent) } catch (_: ActivityNotFoundException) {} },
             )
+            Spacer(Modifier.height(12.dp))
+
+            // ── updates from GitHub ─────────────────────────────────────────
+            val updateStatus by Updater.status.collectAsState()
+            val updateScope = rememberCoroutineScope()
+            UpdateCard(
+                version = Updater.installedName(context),
+                status = updateStatus,
+                canInstall = canInstallUpdates,
+                onAllow = { try { context.startActivity(Updater.installPermissionSettings(context)) } catch (_: ActivityNotFoundException) {} },
+                onCheck = { updateScope.launch { Updater.check(context, HelperAccessibilityService.instance?.busy == true) } },
+            )
             Spacer(Modifier.height(20.dp))
         }
         }
@@ -459,6 +477,30 @@ private fun PhoneControlCard(
             }
             PhoneStep("גישה להתראות", "כדי שיוכל לקרוא לך את ההתראות", notifications) { onOpen(PhoneSetup.notificationSettings(context)) }
             PhoneStep("ללא הגבלת סוללה", "אחרת סמסונג מנתקת אותו ברקע", batteryFree) { onOpen(PhoneSetup.batterySettings(context)) }
+        }
+    }
+}
+
+/** The app's version, and whether it can update itself from GitHub. */
+@Composable
+private fun UpdateCard(version: String, status: String, canInstall: Boolean, onAllow: () -> Unit, onCheck: () -> Unit) {
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("עדכונים", color = TextHigh, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text("גרסה $version. האפליקציה מתעדכנת לבד מ-GitHub, בלי להתקין מחדש", color = TextLow, fontSize = 12.sp)
+                    if (status.isNotBlank()) Text(status, color = Cyan, fontSize = 12.sp)
+                }
+                Text(
+                    "בדוק עכשיו",
+                    color = Cyan,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onCheck).padding(8.dp),
+                )
+            }
+            PhoneStep("לאפשר התקנת עדכונים", "פעם אחת: \"אפשר ממקור זה\" עבור HELPER", canInstall, onAllow)
         }
     }
 }

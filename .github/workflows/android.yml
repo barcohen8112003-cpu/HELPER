@@ -74,3 +74,17 @@ jobs:
           gh release view android-latest >/dev/null 2>&1 || gh release create android-latest --title "HELPER Android (latest)" --notes "Built automatically from main. Download HELPER.apk on the phone and install it." --prerelease
           gh release upload android-latest "$RUNNER_TEMP/HELPER.apk" --clobber
           gh release edit android-latest --notes "Build ${{ github.run_number }} from ${{ github.sha }}. Download HELPER.apk on the phone and install it."
+
+      # The installed app reads this to update itself. It goes up after the APK, so it never points at a file that is
+      # not there yet, and only for builds signed with the real key: the app would refuse any other one anyway.
+      - name: Tell installed apps about this build
+        if: github.ref == 'refs/heads/main' && env.HELPER_KEYSTORE != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=$((100 + ${{ github.run_number }}))
+          sum=$(sha256sum "$RUNNER_TEMP/HELPER.apk" | cut -d' ' -f1)
+          url="https://github.com/${{ github.repository }}/releases/download/android-latest/HELPER.apk"
+          printf '{"versionCode":%d,"versionName":"1.%d","sha256":"%s","url":"%s"}\n' "$code" "${{ github.run_number }}" "$sum" "$url" > "$RUNNER_TEMP/version.json"
+          cat "$RUNNER_TEMP/version.json"
+          gh release upload android-latest "$RUNNER_TEMP/version.json" --clobber

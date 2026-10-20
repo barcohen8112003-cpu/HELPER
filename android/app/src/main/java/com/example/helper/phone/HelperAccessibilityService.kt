@@ -15,6 +15,7 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import com.example.helper.update.Updater
 import com.google.gson.JsonObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +47,19 @@ class HelperAccessibilityService : AccessibilityService() {
         link = PhoneLink(this) { msg -> scope.launch { handle(msg) } }
         link.start()
         PhoneAgentService.start(this)
+        // This service is the part of the app Android keeps running, so it is where updates are checked.
+        scope.launch {
+            delay(60_000)
+            while (true) {
+                Updater.check(this@HelperAccessibilityService, busy)
+                delay(6 * 3600_000L)
+            }
+        }
     }
+
+    /** A phone task is running (the bubble is up); an update would restart the app under it. */
+    @Volatile var busy = false
+        private set
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || event.packageName == packageName) return
@@ -76,6 +89,7 @@ class HelperAccessibilityService : AccessibilityService() {
         val op = msg.get("op")?.asString ?: return
         if (op == "status" || op == "finish") {
             val text = msg.get("text")?.asString.orEmpty()
+            busy = op == "status"
             if (op == "status") bubble.show(text) else bubble.finish(text)
             return
         }

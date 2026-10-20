@@ -16,6 +16,8 @@ android {
         val run = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         versionCode = if (run != null) 100 + run else 1
         versionName = if (run != null) "1.$run" else "1.0"
+        // Where the app looks for a newer build of itself (written by .github/workflows/android.yml).
+        buildConfigField("String", "UPDATE_URL", "\"https://github.com/barcohen8112003-cpu/HELPER/releases/download/android-latest/version.json\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -56,6 +58,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {
