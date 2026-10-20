@@ -288,11 +288,13 @@ export function startUi({ connectedSince, restart, agent }) {
       }
 
       // First visit carries the token in the address; it is swapped for a cookie and dropped from the URL.
-      // The Webtop login link from WhatsApp lands on /webtop?t= and comes back to that page signed in.
+      // WhatsApp and other apps open that link as a cross-site top-level navigation. SameSite=Strict is
+      // not sent on the 302 follow to dest, so the next GET looks signed out. Lax is sent on that GET.
+      // Cross-site POSTs still omit the cookie, and the Origin allow-list rejects a foreign page anyway.
       if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone') && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
         const dest = url.pathname === '/' ? '/' : url.pathname
-        return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` })
+        return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000` })
       }
       if (!signedIn(req)) return send(res, 403, note('כדי להיכנס, פתח את הכתובת שמופיעה בחלון של העוזר.'))
       // The dashboard (/dash) is read-only and uses the same sign-in as everything below.
