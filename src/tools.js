@@ -13,7 +13,7 @@ import { vmEnabled, vmRun, vmFetch } from './vm.js'
 import { checkWatcher } from './watchers.js'
 import { voiceEnabled, callOwner } from './voice.js'
 import { sessionEnabled } from './session.js'
-import { timetableText } from './lessons.js'
+import { parseTimetableDay, timetableText } from './lessons.js'
 import { wakeEnabled, wakePc } from './wake.js'
 import * as pc from './pc.js'
 import * as services from './services.js'
@@ -214,13 +214,11 @@ export const tools = [
     name: 'get_timetable',
     enabled: () => sessionEnabled(),
     description: 'מערכת השעות של המשתמש מ-Webtop ליום מסוים: שעה, מספר שיעור, מקצוע, חדר ומורה, ומה בוטל. ל"מה יש לי מחר", "באיזה חדר אני עכשיו". תזכורת לפני כל שיעור כבר נשלחת אוטומטית, אין צורך לקבוע אותה.',
-    parameters: obj({ day: str('today, tomorrow, או שם יום: ראשון, שני, שלישי, רביעי, חמישי, שישי') }, ['day']),
+    parameters: obj({ day: str('today, tomorrow, מחר, היום, מחרתיים, Hebrew or English weekday (יום רביעי, Wednesday), or YYYY-MM-DD') }, ['day']),
     run({ day }) {
-      const names = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת']
-      const today = new Date().getDay()
-      const index = day === 'today' ? today : day === 'tomorrow' ? (today + 1) % 7 : names.findIndex((n) => String(day).includes(n))
-      if (index < 0) return 'יום לא מוכר. today, tomorrow או שם יום.'
-      return timetableText(index)
+      const parsed = parseTimetableDay(day)
+      if (parsed.error) return parsed.error
+      return timetableText(parsed.day)
     },
   },
   {
@@ -1155,7 +1153,7 @@ const BRIEF = {
   list_tasks: 'List scheduled tasks.',
   cancel_task: 'Cancel a scheduled task by id.',
   send_whatsapp: 'Send the user a WhatsApp message right now. For when he is talking to you from elsewhere (Discord) and wants something on WhatsApp. A future reminder is add_reminder, which also arrives on WhatsApp.',
-  get_timetable: 'The user\'s school timetable for a day from Webtop: time, lesson, subject, room, teacher, cancellations. day = today, tomorrow or a Hebrew day name. A reminder before each lesson is already sent automatically.',
+  get_timetable: 'The user\'s school timetable for a day from Webtop: time, lesson, subject, room, teacher, cancellations. day = today, tomorrow, Hebrew/English weekday or YYYY-MM-DD (this week only). A reminder before each lesson is already sent automatically.',
   send_whatsapp_to: 'Send a WhatsApp message in the user\'s name to someone else (a contact name or a number). Only when he explicitly asked to send it; "draft" means draft only. He approves the exact recipient and text first.',
   send_discord: 'Send the user a private Discord message through his Discord bot; speak=true also says it aloud in the voice room. For when he is on WhatsApp and wants something on Discord.',
   voice_mode: 'always = reply as voice notes to everything ("talk to me"); match = voice only when the user sends voice.',
@@ -1246,6 +1244,9 @@ function briefParameters(parameters) {
   const properties = Object.fromEntries(
     Object.entries(parameters.properties).map(([name, p]) => {
       const { description, ...rest } = p
+      if (name === 'day' && /tomorrow|weekday|יום/.test(description || '')) {
+        return [name, { ...rest, description: 'today, tomorrow, Hebrew/English weekday or YYYY-MM-DD' }]
+      }
       if (/YYYY-MM-DDTHH:MM/.test(description || '')) return [name, { ...rest, description: 'local time, YYYY-MM-DDTHH:MM' }]
       if (/YYYY-MM-DD/.test(description || '')) return [name, { ...rest, description: 'YYYY-MM-DD' }]
       return [name, rest]

@@ -39,6 +39,13 @@ const SITES = {
     port: () => config.googleHome.port,
     url: () => 'https://home.google.com/',
     enabled: () => config.googleHome.cloud,
+    // Keeps the Google sign-in across browser restarts. Debian's Chromium ships an OAuth client, so Desktop
+    // Identity Consistency (DICE) is on: a web sign-in makes Chrome ask Gaia for a refresh token, Gaia answers
+    // without an authorization code ("Missing authorization code due to OAuth outage in Dice"), and Chrome only
+    // locks its AccountReconcilor for that run. On the next launch the reconcilor sees a signed-in web account
+    // with no Chrome token and calls Gaia's LogOutAllAccounts, which deletes SID/HSID/SSID/SAPISID/__Secure-*PSID
+    // on .google.com. With browser sign-in off, account consistency is disabled and the cookies are left alone.
+    extraArgs: ['--allow-browser-signin=false'],
   },
 }
 
@@ -125,6 +132,7 @@ export function browserLaunchArgs(site = 'webtop') {
     ...(spec.headed || onDesktop ? ['--disable-blink-features=AutomationControlled'] : []),
     ...(onDesktop ? [`--class=helper-${site}`, '--window-position=0,0'] : []),
     ...(headed ? [] : ['--headless=new']),
+    ...(spec.extraArgs || []),
   ]
   // The proxy is for Webtop only. Google Home signs in directly and must not inherit an Israeli school proxy.
   if (site === 'webtop') {
