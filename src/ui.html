@@ -48,6 +48,12 @@
   #toast { position:fixed; inset-inline:0; bottom:24px; margin:auto; width:max-content; max-width:90vw; background:var(--ink); color:#fff; padding:10px 18px; border-radius:10px; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.on { opacity:1; }
   #banner { display:none; background:#fff6d9; border:1px solid #ecd98c; padding:12px 16px; border-radius:10px; margin-bottom:28px; align-items:center; gap:14px; }
+  .launch { display:flex; flex-direction:column; align-items:stretch; gap:10px; margin:0 0 28px; }
+  .launch:empty { display:none; margin:0; }
+  a.launch-desktop { display:flex; align-items:center; justify-content:center; width:100%; min-height:48px; padding:14px 16px; font-size:17px; font-weight:600; border-radius:12px; text-align:center; white-space:normal; line-height:1.35; }
+  .launch-links { display:flex; flex-wrap:wrap; gap:4px 18px; }
+  .launch-links a { color:var(--muted); font-size:13px; text-decoration:none; padding:8px 0; min-height:44px; display:inline-flex; align-items:center; }
+  .launch-links a:hover { color:var(--ink); }
   @media (max-width: 820px) { .wrap { grid-template-columns: 1fr; gap:24px; padding:28px 16px 80px; } nav { position:static; } nav a { display:inline-block; margin-inline-end:14px; } form.fields { grid-template-columns:1fr; } form.fields .hint, form.fields .actions { grid-column:1; } }
 </style>
 </head>
@@ -64,6 +70,7 @@
   </nav>
   <main>
     <div id="banner"><span class="grow">חלק מהשינויים ייכנסו לתוקף רק אחרי הפעלה מחדש.</span><button class="primary" id="restart">הפעל מחדש</button></div>
+    <div id="shortcuts" class="launch"></div>
     <section id="connect"><h2>חיבורים</h2><p class="sub">החשבונות והשירותים שהעוזר יכול להשתמש בהם</p><div class="rows" id="connectors"></div></section>
     <section id="app-connect"><h2>חיבור לאפליקציה</h2><p class="sub">סרוק את הקוד באפליקציית האנדרואיד כדי להתחבר</p><div class="rows" id="appQrRows"></div></section>
     <section id="active"><h2>מה פעיל</h2><p class="sub">מקורות, תזכורות, משימות ומעקבים</p><div class="rows" id="activeRows"></div></section>
@@ -195,6 +202,14 @@ function render(S) {
   const phoneBody = h('div', {},
     h('p', { class: 'small' }, 'שליטה בטלפון דרך ADB ו-Tailscale. צימוד חד-פעמי, אחר כך חיבור לפורט של ניפוי אלחוטי. אחרי החיבור הראשון הטלפון עובר לפורט 5555 עד אתחול, גם בנתונים סלולריים. הסיסמה לא נשמרת. פעולות שמשנות את הטלפון מבקשות אישור בוואטסאפ.'),
     h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/phone' }, 'טלפון')))
+  const shortcuts = [
+    W.cloud && h('a', { href: '/webtop' }, 'Webtop'),
+    GH.cloud && h('a', { href: '/google-home' }, 'Google Home'),
+    P.enabled && h('a', { href: '/phone' }, 'טלפון'),
+  ].filter(Boolean)
+  fill($('shortcuts'),
+    D.enabled && h('a', { class: 'btn primary launch-desktop', href: '/desktop/' }, '🖥️ שליטה מרחוק במחשב בענן'),
+    shortcuts.length && h('div', { class: 'launch-links' }, shortcuts))
 
   fill($('connectors'),
     connector('Webtop', 'ציונים, מערכת שעות, שיעורי בית והודעות. קריאה בלבד', Boolean(W.enabled), webtopBody,
