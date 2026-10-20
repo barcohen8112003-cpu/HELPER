@@ -24,6 +24,7 @@ import { extendedTools, categories, searchTools } from './toolkit/registry.js'
 import { addFact, removeFact, CATEGORIES } from './memory.js'
 import { memoryTools } from './memory-tools.js'
 import { askGemini, geminiApiEnabled } from './gemini-api.js'
+import { phoneTools } from './phone-tools.js'
 
 // The computer tools drive the user's own Windows machine. Locally that is this process. In the cloud
 // (see src/pc-bridge.js) the same calls are forwarded to the home bridge, and only when COMPUTER_MODE is on.
@@ -1113,6 +1114,7 @@ ${await askGemini(question)}`
 const isOn = (t) => !t.enabled || t.enabled()
 
 tools.push(...memoryTools)
+tools.push(...phoneTools)
 
 // The extended toolkit is not sent to the model on every request: that would cost thousands of tokens and make the
 // model choose worse. It sees one tool, tool_search, and unlocks the few tools it needs for the turn.
@@ -1222,6 +1224,17 @@ const BRIEF = {
   get_weather: 'Current weather and forecast for any city (Israel and global).',
   get_jewish_calendar: 'Hebrew calendar date, Shabbat candle lighting and Havdalah times, Parasha, holidays.',
   get_currency_rate: 'Currency conversion and live exchange rates (USD, EUR, ILS, etc.).',
+  phone_screenshot: 'Photograph the Android phone screen. The image comes back so you can see it.',
+  phone_ui_dump: 'Read the phone screen as text with tappable element centers.',
+  phone_tap: 'Tap the phone at x,y or on an element by its text. Asks for approval.',
+  phone_swipe: 'Swipe the phone screen (up/down/left/right or two points). Asks for approval.',
+  phone_type_text: 'Type into the focused phone field. Hebrew goes through the clipboard. Asks for approval.',
+  phone_key: 'Press back, home, recents, enter, volume or power on the phone. Asks for approval.',
+  phone_open_app: 'Open a phone app by name or package. Asks for approval.',
+  phone_list_apps: 'List installed phone package names.',
+  phone_notifications: 'Summarize notifications currently shown on the phone.',
+  phone_battery: 'Phone battery level and charging state.',
+  phone_shell: 'One adb shell command. No chaining. Factory reset, rm, uninstall and settings put need an explicit yes.',
   google_home_devices: 'List smart home devices and their state (on/off) from Google Home.',
   google_home_control: 'Turn on, turn off, or toggle smart home devices (lights, speakers) via Google Home.',
   use_computer: 'Autonomous mouse and keyboard agent to operate the PC step by step (requires user approval).',

@@ -11,6 +11,7 @@ import { state, save } from './store.js'
 import { setWebtopLoginUrl, webtopCloudBlockedNow, WEBTOP_BLOCKED_STATUS } from './session.js'
 import { setGoogleHomeLoginUrl } from './google-home.js'
 import { captureFrame, webtopInput } from './webtop-browser.js'
+import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, parseEndpoint, phoneBox } from './phone.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
@@ -20,6 +21,7 @@ import { handleDashboard } from './dashboard/api.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
+const PHONE_PAGE = path.join(ROOT, 'src', 'phone.html')
 const SENT_LOG = path.join(DATA_DIR, 'sent.log')
 const COOKIE = 'helper_session'
 const MAX_BODY = 100000
@@ -109,6 +111,7 @@ async function snapshot(connectedSince) {
       blockedStatus: WEBTOP_BLOCKED_STATUS,
     },
     googleHome: { cloud: config.googleHome.cloud, loginPath: '/google-home' },
+    phone: { enabled: phoneEnabled(), host: phoneBox().host || config.phone.host, mode: config.phone.mode, loginPath: '/phone' },
   }
 }
 
@@ -188,6 +191,25 @@ export function startUi({ connectedSince, restart, agent }) {
     }
     if (route === 'restart') return setTimeout(restart, 300), {}
     if (route === 'webtop/input') return await webtopInput(body)
+    if (route === 'phone/pair') {
+      const ep = parseEndpoint(body.endpoint, phoneBox().host || config.phone.host)
+      if (!ep) throw new Error('צריך פורט צימוד, למשל 100.110.143.89:37123')
+      return pairPhone({ ...ep, code: String(body.code || '').trim() })
+    }
+    if (route === 'phone/connect') {
+      const ep = parseEndpoint(body.endpoint, phoneBox().host || config.phone.host)
+      if (!ep) throw new Error('צריך פורט חיבור, למשל 100.110.143.89:41234')
+      return connectPhone(ep)
+    }
+    if (route === 'phone/reconnect') return reconnectPhone()
+    if (route === 'phone/tap') {
+      await phoneTap(body)
+      return { ok: true }
+    }
+    if (route === 'phone/swipe') {
+      await phoneSwipe(body)
+      return { ok: true }
+    }
     throw Object.assign(new Error('לא נמצא'), { status: 404 })
   }
 
@@ -267,7 +289,7 @@ export function startUi({ connectedSince, restart, agent }) {
 
       // First visit carries the token in the address; it is swapped for a cookie and dropped from the URL.
       // The Webtop login link from WhatsApp lands on /webtop?t= and comes back to that page signed in.
-      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home') && url.searchParams.has('t')) {
+      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone') && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
         const dest = url.pathname === '/' ? '/' : url.pathname
         return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` })
@@ -278,6 +300,17 @@ export function startUi({ connectedSince, restart, agent }) {
 
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'))
       if (req.method === 'GET' && (url.pathname === '/webtop' || url.pathname === '/google-home')) return send(res, 200, fs.readFileSync(WEBTOP_PAGE, 'utf8'))
+      if (req.method === 'GET' && url.pathname === '/phone') return send(res, 200, fs.readFileSync(PHONE_PAGE, 'utf8'))
+      if (req.method === 'GET' && url.pathname === '/api/phone/status') return send(res, 200, await phoneStatus())
+      if (req.method === 'GET' && url.pathname === '/api/phone/frame') {
+        try {
+          const shot = await phoneScreenshot()
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'Content-Length': shot.buffer.length })
+          return res.end(shot.buffer)
+        } catch (e) {
+          return send(res, 503, { error: e.message })
+        }
+      }
       if (req.method === 'GET' && url.pathname === '/api/webtop/frame') {
         try {
           const frame = await captureFrame(url.searchParams.get('site') === 'google-home' ? 'google-home' : 'webtop')

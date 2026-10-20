@@ -193,6 +193,13 @@ const build = () => ({
   },
   calendarUrl: env('CALENDAR_ICS_URL'),
   computerMode: ['off', 'ask', 'auto'].includes(env('COMPUTER_MODE', 'ask')) ? env('COMPUTER_MODE', 'ask') : 'ask',
+  // Android phone over ADB. The tailnet is reached through PHONE_PROXY (SOCKS5). ask: reads run, writes need כן.
+  // ask-writes is the same. ask-all also asks before a screenshot. auto runs writes; dangerous shell still asks. off hides the tools.
+  phone: {
+    host: env('PHONE_ADB_HOST'),
+    proxy: env('PHONE_PROXY'),
+    mode: ['off', 'ask', 'ask-writes', 'ask-all', 'auto'].includes(env('PHONE_MODE', 'ask')) ? env('PHONE_MODE', 'ask') : 'ask',
+  },
   // Home PC bridge (src/pc-bridge.js). The cloud listens; the Windows PC dials out. Empty secret = computer tools stay local-only.
   pcBridge: {
     secret: env('PC_BRIDGE_SECRET'),

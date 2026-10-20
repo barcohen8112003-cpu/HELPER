@@ -8,6 +8,7 @@ import { inQuietHours } from './outbox.js'
 import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice, webtopKeepAliveFailure } from './session.js'
 import { googleHomeKeepAlive, isGoogleHomeLoginError, planGoogleHomeLoginNotice, clearGoogleHomeLoginNotice } from './google-home.js'
 import { lessonReminders } from './lessons.js'
+import { phoneEnabled, phoneKeepAlive } from './phone.js'
 
 const NEWS_WINDOW = 4 * 60
 const FIRST_CHECK_IN = 3 * 60000
@@ -126,6 +127,15 @@ async function webtop(notify) {
     h.down = true
     save()
   }
+}
+
+let phoneLast = 0
+async function phoneLink(notify) {
+  if (!phoneEnabled()) return
+  if (Date.now() - phoneLast < 60000) return
+  phoneLast = Date.now()
+  const text = await phoneKeepAlive()
+  if (text) await notify(text, true)
 }
 
 let googleHomeLast = 0
@@ -376,7 +386,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, webtop, googleHome, lessonReminders, mail, calendar, googleCalendar, homework, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {

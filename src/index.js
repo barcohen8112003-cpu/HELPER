@@ -21,6 +21,7 @@ import { createMonitoring } from './monitoring/index.js'
 import { inQuietHours } from './outbox.js'
 import { calendarOn, listEvents } from './calendar.js'
 import { getDay } from './day.js'
+import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 
 let reconciled = false
 import { exec } from 'node:child_process'
@@ -69,6 +70,7 @@ const EXAMPLES = `*דברים לנסות*
 • "תעקוב אחרי המחיר של [קישור] ותגיד לי כשהוא מתחת ל-300"
 • "כל בוקר ב-7:30 תגיד לי מה יש לי היום"
 • "מה יש להגיש השבוע?"
+• "מה יש לי בטלפון?" או "תשלוט לי בטלפון"
 • לשלוח לי תמונה של דף עבודה, PDF או הודעה קולית`
 const HELP = `*פקודות*
 /status - מה מחובר ואחרי מה אני עוקב
@@ -81,8 +83,10 @@ const HELP = `*פקודות*
 /model strong - עובר למודל החזק, /model default חוזר
 /unpair - מנתק את הצ'אט הזה
 /help - ההודעה הזאת
+צמד טלפון <פורט> <קוד> - צימוד חד-פעמי לניפוי אלחוטי
+חבר טלפון <פורט> - חיבור לפורט שמופיע במסך ניפוי אלחוטי
 
-חוץ מזה פשוט כותבים לי: טקסט, הודעה קולית, תמונה או קובץ.`
+חוץ מזה פשוט כותבים לי: טקסט, הודעה קולית, תמונה או קובץ. "תשלוט לי בטלפון" ו"מה יש לי בטלפון" מפעילים את שליטת הטלפון.`
 
 let pairCode = null
 let pendingConfirm = null
@@ -132,6 +136,15 @@ const wa = await startWhatsApp(async (m) => {
   }
   // "עצור" ends what the assistant is doing and forgets what was waiting; "שיחה חדשה" does that and clears the chat.
   // Both answer at once: no model, no queue.
+  const phoneCmd = parsePhoneMessage(text)
+  if (phoneCmd) {
+    if (pendingConfirm) {
+      const resolve = pendingConfirm
+      pendingConfirm = null
+      resolve(false)
+    }
+    return wa.send(state.owner.jid, await handlePhoneCommand(phoneCmd))
+  }
   const command = parseCommand(text)
   if (command) {
     // A question waiting for approval is answered "no" first, so the turn is not left hanging on it.
