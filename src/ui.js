@@ -11,7 +11,7 @@ import { state, save } from './store.js'
 import { setWebtopLoginUrl, webtopCloudBlockedNow, WEBTOP_BLOCKED_STATUS } from './session.js'
 import { setGoogleHomeLoginUrl } from './google-home.js'
 import { captureFrame, webtopInput } from './webtop-browser.js'
-import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, parseEndpoint, phoneBox } from './phone.js'
+import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
@@ -208,6 +208,14 @@ export function startUi({ connectedSince, restart, agent }) {
     }
     if (route === 'phone/swipe') {
       await phoneSwipe(body)
+      return { ok: true }
+    }
+    if (route === 'phone/type') {
+      await phoneTypeText(body.text)
+      return { ok: true }
+    }
+    if (route === 'phone/key') {
+      await phoneKey(body.key)
       return { ok: true }
     }
     throw Object.assign(new Error('לא נמצא'), { status: 404 })
