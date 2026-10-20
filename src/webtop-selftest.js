@@ -196,7 +196,7 @@ ok(page.includes('dir="rtl"') && page.includes('התחברות ל-Webtop') && pa
 ok(page.includes('וובטופ חוסם את כתובת השרת, משתמשים במחשב הביתי') && page.includes('/api/state'), 'the Webtop page can show the blocked-server status')
 ok(page.includes('data-site="google-home"') && page.includes('התחברות ל-Google Home'), 'the login page lets the user choose Google Home')
 ok(page.includes("type: 'click'") && page.includes("type: 'type'") && page.includes("type: 'key'") && page.includes("type: 'scroll'"), 'the page forwards clicks, typing, keys and scrolling')
-ok(page.includes('id="kbd"') && page.includes('id="txt"') && page.includes('לוחצים על שדה בתמונה, ואז מקלידים כאן') && page.includes('שלח טקסט') && page.includes('מחק ⮌'), 'the live view has a text bar a phone keyboard can open')
+ok(page.includes('id="kbd"') && page.includes('id="txt"') && page.includes('position:fixed') && page.includes('לוחצים על שדה בתמונה, ואז מקלידים כאן') && page.includes('שלח טקסט') && page.includes('מחק ⮌'), 'the live view has a text bar a phone keyboard can open')
 ok(/fromEnter && !text[\s\S]{0,120}type: 'key', key: 'Enter'/.test(page) && page.includes('data-key="Tab"') && page.includes('data-key="Backspace"'), 'Enter in an empty field sends Enter, and the key buttons send Tab and Backspace')
 const settingsHtml = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui.html'), 'utf8')
 ok(settingsHtml.includes('התחברות ל-Webtop') && settingsHtml.includes("href: '/webtop'"), 'the connections section links to the login page')

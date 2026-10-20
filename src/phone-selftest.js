@@ -135,7 +135,7 @@ ok(!compose.includes('TS_AUTHKEY=') && !exampleEnv.includes('TS_AUTHKEY='), 'the
 ok(tailExample.includes('TS_AUTHKEY=') && fs.readFileSync(path.join(root, '.gitignore'), 'utf8').includes('.tailscale.env'), '.tailscale.env holds the key and is gitignored')
 const page = fs.readFileSync(path.join(root, 'src', 'phone.html'), 'utf8')
 ok(page.includes('dir="rtl"') && page.includes('ניפוי אלחוטי') && page.includes('צמד') && page.includes('חבר'), 'the phone page is Hebrew, RTL, and explains pairing')
-ok(page.includes('id="kbd"') && page.includes('id="txt"') && page.includes('לוחצים על שדה בתמונה, ואז מקלידים כאן') && page.includes('שלח טקסט') && page.includes('/api/phone/type') && page.includes('/api/phone/key'), 'the phone live view types from a real text field')
+ok(page.includes('id="kbd"') && page.includes('id="txt"') && page.includes('position:fixed') && page.includes('לוחצים על שדה בתמונה, ואז מקלידים כאן') && page.includes('שלח טקסט') && page.includes('/api/phone/type') && page.includes('/api/phone/key'), 'the phone live view types from a real text field')
 ok(/fromEnter && !text[\s\S]{0,160}type: 'key', key: 'Enter'/.test(page) && page.includes('data-key="Tab"') && page.includes('מחק ⮌'), 'Enter in an empty phone field sends Enter, and Tab and Backspace have buttons')
 ok(phone.phoneKeyCode('Enter') === '66' && phone.phoneKeyCode('tab') === '61' && phone.phoneKeyCode('Backspace') === '67', 'the live-view keys map to Android enter, tab and delete')
 const settings = fs.readFileSync(path.join(root, 'src', 'ui.html'), 'utf8')
