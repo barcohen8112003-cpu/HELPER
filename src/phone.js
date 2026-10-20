@@ -17,9 +17,15 @@ const KEYS = {
   home: '3',
   recents: '187',
   enter: '66',
+  tab: '61',
+  backspace: '67',
   volume_up: '24',
   volume_down: '25',
   power: '26',
+}
+
+export function phoneKeyCode(name) {
+  return KEYS[String(name || '').toLowerCase()] || ''
 }
 
 const APP_ALIASES = {
@@ -508,8 +514,8 @@ export async function phoneTypeText(text) {
 }
 
 export async function phoneKey(name) {
-  const code = KEYS[String(name || '').toLowerCase()]
-  if (!code) throw new Error('מקש לא מוכר. back, home, recents, enter, volume_up, volume_down, power.')
+  const code = phoneKeyCode(name)
+  if (!code) throw new Error('מקש לא מוכר. back, home, recents, enter, tab, backspace, volume_up, volume_down, power.')
   await shell(['shell', 'input', 'keyevent', code])
   return `נלחץ ${name}`
 }

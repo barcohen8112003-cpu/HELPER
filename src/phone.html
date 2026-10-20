@@ -2,12 +2,12 @@
 <html lang="he" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>טלפון</title>
 <style>
   :root { --bg:#faf8f5; --card:#fff; --ink:#1f1d1a; --muted:#77716a; --line:#e7e2da; --accent:#1f1d1a; }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 system-ui, "Segoe UI", Arial, sans-serif; }
+  body { margin:0; padding-bottom:148px; background:var(--bg); color:var(--ink); font:15px/1.55 system-ui, "Segoe UI", Arial, sans-serif; }
   header { display:flex; align-items:center; gap:16px; padding:18px 22px; flex-wrap:wrap; }
   h1 { font:400 26px/1.2 Georgia, "Times New Roman", serif; margin:0; }
   a { color:var(--ink); }
@@ -22,6 +22,12 @@
   #stage { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; outline:none; cursor:pointer; }
   #stage:focus { box-shadow:0 0 0 2px var(--accent); }
   img { display:block; width:100%; height:auto; background:#111; min-height:120px; }
+  #kbd { position:fixed; z-index:5; left:50%; bottom:0; transform:translateX(-50%); width:min(1100px, 100%); display:flex; flex-direction:column; gap:8px; margin:0; padding:10px 12px max(10px, env(safe-area-inset-bottom)); background:var(--card); border:1px solid var(--line); border-bottom:none; border-radius:16px 16px 0 0; box-shadow:0 -10px 28px rgba(31,29,26,.12); }
+  #txt { width:100%; font:inherit; font-size:16px; line-height:1.4; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:11px 12px; }
+  #txt:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(31,29,26,.12); }
+  #kbd .row { display:flex; flex-wrap:wrap; gap:8px; margin:0; }
+  #kbd button { background:var(--bg); }
+  #kbd button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
   .hint { color:var(--muted); font-size:13px; }
 </style>
 </head>
@@ -57,7 +63,16 @@
   <div id="stage" tabindex="0">
     <img id="view" alt="מסך הטלפון">
   </div>
-  <p class="hint">לוחצים על התמונה כדי ללחוץ על המסך. גלילה שולחת החלקה.</p>
+  <form id="kbd" autocomplete="off" onsubmit="return false">
+    <input id="txt" type="text" enterkeyhint="send" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="לוחצים על שדה בתמונה, ואז מקלידים כאן">
+    <div class="row">
+      <button class="primary" type="button" id="sendText">שלח טקסט</button>
+      <button type="button" data-key="Enter">Enter</button>
+      <button type="button" data-key="Tab">Tab</button>
+      <button type="button" data-key="Backspace">מחק ⮌</button>
+    </div>
+  </form>
+  <p class="hint">לוחצים על שדה בתמונה, ואז מקלידים בשורה שמתחת. גלילה על התמונה שולחת החלקה. Enter, Tab ומחיקה נשלחים לטלפון.</p>
 </div>
 <script>
 const status = document.getElementById('status')
@@ -138,6 +153,32 @@ stage.addEventListener('wheel', async (e) => {
   const dy = Math.max(-600, Math.min(600, e.deltaY))
   try { await post('/api/phone/swipe', { x1: p.x, y1: p.y, x2: p.x, y2: p.y - dy }) } catch (err) { status.textContent = err.message }
 }, { passive: false })
+const txt = document.getElementById('txt')
+async function sendLive(body) {
+  try {
+    if (body.type === 'type') await post('/api/phone/type', { text: body.text })
+    else if (body.type === 'key') await post('/api/phone/key', { key: body.key })
+    return true
+  } catch (err) {
+    status.textContent = err.message
+    return false
+  }
+}
+async function sendTyped(fromEnter) {
+  const text = txt.value
+  if (fromEnter && !text) {
+    await sendLive({ type: 'key', key: 'Enter' })
+    return
+  }
+  if (await sendLive({ type: 'type', text })) txt.value = ''
+}
+txt.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing) return
+  e.preventDefault()
+  sendTyped(true)
+})
+document.getElementById('sendText').addEventListener('click', () => sendTyped(false))
+for (const b of document.querySelectorAll('#kbd [data-key]')) b.addEventListener('click', () => sendLive({ type: 'key', key: b.dataset.key }))
 frame()
 setInterval(frame, 1500)
 </script>
