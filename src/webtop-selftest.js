@@ -243,8 +243,10 @@ for (let i = 0; i < 20 && !ready; i++) {
   }
 }
 ok(ready && ready.status === 302, 'the token link is accepted on loopback')
-const cookie = String(ready.headers['set-cookie'] || '').split(';')[0]
+const setCookie = String(ready.headers['set-cookie'] || '')
+const cookie = setCookie.split(';')[0]
 ok(cookie.startsWith('helper_session='), 'the token is swapped for the session cookie')
+ok(/SameSite=Lax/i.test(setCookie) && !/SameSite=Strict/i.test(setCookie), 'a WhatsApp link can follow the redirect because the session cookie is Lax')
 
 const evil = await hit('GET', '/', { host: 'evil.example' })
 ok(evil.status === 403 && evil.body.includes('גישה נדחתה'), 'a foreign Host is rejected')
@@ -256,10 +258,15 @@ const gh = await hit('GET', '/google-home', { cookie })
 ok(gh.status === 200 && gh.body.includes('data-site="google-home"'), 'a signed-in visitor can open the Google Home login view')
 const ghLink = await hit('GET', `/google-home?t=${token}`, { host: pub })
 ok(ghLink.status === 302 && ghLink.headers.location === '/google-home', 'the WhatsApp link signs in and lands on /google-home')
+ok(/SameSite=Lax/i.test(String(ghLink.headers['set-cookie'] || '')) && !/SameSite=Strict/i.test(String(ghLink.headers['set-cookie'] || '')), 'the Google Home token link sets a Lax session cookie')
 const closed = await hit('GET', '/webtop')
 ok(closed.status === 403, 'the login view requires the settings cookie')
 const fromPhone = await hit('GET', `/webtop?t=${token}`, { host: pub })
 ok(fromPhone.status === 302 && fromPhone.headers.location === '/webtop', 'the WhatsApp link signs in and lands on /webtop')
+ok(/SameSite=Lax/i.test(String(fromPhone.headers['set-cookie'] || '')) && !/SameSite=Strict/i.test(String(fromPhone.headers['set-cookie'] || '')), 'the Webtop token link sets a Lax session cookie')
+const phoneLink = await hit('GET', `/phone?t=${token}`, { host: pub })
+ok(phoneLink.status === 302 && phoneLink.headers.location === '/phone', 'the WhatsApp link signs in and lands on /phone')
+ok(/SameSite=Lax/i.test(String(phoneLink.headers['set-cookie'] || '')) && !/SameSite=Strict/i.test(String(phoneLink.headers['set-cookie'] || '')), 'the phone token link sets a Lax session cookie')
 
 const badOrigin = await hit('POST', '/api/settings', { cookie, origin: 'http://evil.example', body: '{}' })
 ok(badOrigin.status === 403 && badOrigin.body.includes('מקור לא מורשה'), 'a foreign Origin is rejected')
