@@ -64,6 +64,29 @@ ok(lessonsOnly('ביום שישי אין שיעורים במערכת') === '', '
 ok(lessonsOnly('Webtop לא מחובר, אין לי מערכת שעות') === '', 'a disconnected Webtop gives nothing')
 ok(lessonsOnly('לא הצלחתי לקרוא את מערכת השעות מ-Webtop') === '', 'a read failure gives nothing')
 
+const { parseTimetableDay } = await import('./lessons.js')
+const { tools, toolDefs } = await import('./tools.js')
+const wed = new Date(2026, 9, 21)
+const dayOf = (input) => parseTimetableDay(input, wed)
+ok(dayOf('today').day === 3 && dayOf('היום').day === 3, 'today and היום are the current weekday')
+ok(dayOf('tomorrow').day === 4 && dayOf('מחר').day === 4, 'tomorrow and מחר are the next weekday')
+ok(dayOf('מחרתיים').day === 5, 'מחרתיים is two days ahead')
+ok(dayOf('Wednesday').day === 3 && dayOf('wednesday').day === 3 && dayOf('SUNDAY').day === 0, 'English day names are accepted in any case')
+ok(dayOf('יום רביעי').day === 3 && dayOf('רביעי').day === 3 && dayOf('שבת').day === 6, 'Hebrew day names, with or without יום, are accepted')
+ok(dayOf('2026-10-21').day === 3 && dayOf('2026-10-27').day === 2, 'an ISO date maps to that weekday, including six days ahead')
+ok(String(dayOf('2026-10-28').error).includes('השבוע הזה'), 'a date more than six days ahead is outside this week')
+ok(String(dayOf('2026-02-31').error).includes('יום לא מוכר') && String(dayOf('nope').error).includes('יום לא מוכר'), 'a bad date or an unknown word is rejected')
+const timetable = tools.find((t) => t.name === 'get_timetable')
+ok(String(await timetable.run({ day: 'Wednesday' })).includes('Webtop לא מחובר') && !String(await timetable.run({ day: 'מחרתיים' })).includes('יום לא מוכר'), 'the tool accepts the new day forms')
+ok(String(await timetable.run({ day: 'nope' })).includes('יום לא מוכר'), 'the tool still rejects an unknown day')
+const lightWas = config.llm.light
+config.llm.light = true
+const lightDay = toolDefs([timetable])[0].function.parameters.properties.day.description
+const lightFact = toolDefs([tools.find((t) => t.name === 'remember')])[0].function.parameters.properties.fact.description
+config.llm.light = lightWas
+ok(lightDay === 'today, tomorrow, Hebrew/English weekday or YYYY-MM-DD', 'light mode keeps a short hint on the timetable day')
+ok(lightFact === undefined, 'light mode still drops ordinary parameter descriptions')
+
 // ── the night's alerts go out separately, and only when there are any ────────
 const empty = { watches: [], delivered: [], notes: [], suspicious: [] }
 ok(nightText(empty) === '', 'no alerts -> no second message')

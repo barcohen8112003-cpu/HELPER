@@ -178,6 +178,8 @@ const withProxy = browser.browserLaunchArgs('webtop')
 const homeArgs = browser.browserLaunchArgs('google-home')
 ok(withProxy.includes('--proxy-server=http://il.example:8080'), 'the cloud Webtop Chromium receives the proxy')
 ok(!homeArgs.some((a) => String(a).startsWith('--proxy-server')), 'Google Home Chromium does not receive WEBTOP_PROXY')
+ok(homeArgs.includes('--allow-browser-signin=false'), 'Google Home Chromium turns off browser sign-in so restarts keep the Google cookies')
+ok(homeArgs.indexOf('--allow-browser-signin=false') < homeArgs.indexOf('https://home.google.com/'), 'the sign-in switch comes before the start URL')
 config.webtop.proxy = ''
 ok(!browser.browserLaunchArgs('webtop').some((a) => String(a).startsWith('--proxy-server')), 'clearing WEBTOP_PROXY drops the flag')
 

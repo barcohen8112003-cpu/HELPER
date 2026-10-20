@@ -7,6 +7,39 @@ import { sessionEnabled, readTimetable } from './session.js'
 // The timetable is read again this often, so this week's cancellations and next week's timetable show up.
 const REFRESH = 3 * 3600000
 const DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת']
+const EN_DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+const DAY_UNKNOWN = 'יום לא מוכר. today, tomorrow, מחר, היום, מחרתיים, שם יום בעברית או באנגלית, או YYYY-MM-DD.'
+const DAY_BEYOND_WEEK = 'יש לי רק את מערכת השעות של השבוע הזה (עד שישה ימים קדימה).'
+
+// today/tomorrow, Hebrew (היום, מחר, מחרתיים, יום רביעי), English weekdays, or YYYY-MM-DD.
+// A date more than six days ahead is next week; the saved timetable is only this week.
+export function parseTimetableDay(input, now = new Date()) {
+  const raw = String(input || '').trim().replace(/[.!?]+$/g, '').replace(/\s+/g, ' ')
+  if (!raw) return { error: DAY_UNKNOWN }
+  const today = now.getDay()
+  const key = raw.toLowerCase()
+  if (key === 'today' || raw === 'היום') return { day: today }
+  if (key === 'tomorrow' || raw === 'מחר') return { day: (today + 1) % 7 }
+  if (raw === 'מחרתיים') return { day: (today + 2) % 7 }
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
+  if (iso) {
+    const y = Number(iso[1])
+    const m = Number(iso[2])
+    const d = Number(iso[3])
+    const utc = Date.UTC(y, m - 1, d)
+    const dt = new Date(utc)
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return { error: DAY_UNKNOWN }
+    const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+    if (Math.round((utc - todayUtc) / 86400000) > 6) return { error: DAY_BEYOND_WEEK }
+    return { day: dt.getUTCDay() }
+  }
+  const bare = raw.replace(/^יום[\s-]+/u, '')
+  const he = DAYS.indexOf(bare)
+  if (he >= 0) return { day: he }
+  const en = EN_DAYS.indexOf(bare.toLowerCase())
+  if (en >= 0) return { day: en }
+  return { error: DAY_UNKNOWN }
+}
 
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
