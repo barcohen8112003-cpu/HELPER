@@ -20,8 +20,9 @@ const CANDIDATES = [
   '/usr/bin/google-chrome-stable',
 ]
 
-// Google Home is headed on Xvfb when that exists. A headless window is often rejected by Google's sign-in
-// ("this browser may not be secure"). The user still drives it from the settings page. Webtop stays headless.
+// Google Home is headed on its own Xvfb when that exists. A headless window is often rejected by Google's sign-in
+// ("this browser may not be secure"). Webtop stays headless until CLOUD_DESKTOP=1, which puts both browsers
+// on one shared display so a real mouse and keyboard can sign in. The profiles stay on the data volume.
 const SITES = {
   webtop: {
     label: 'Webtop',
@@ -92,10 +93,21 @@ async function portOpen(site) {
   }
 }
 
+export function usesSharedDesktop() {
+  return Boolean(config.desktop?.enabled)
+}
+
+function desktopView() {
+  const m = String(config.desktop?.geometry || '1280x800').match(/^(\d+)x(\d+)$/)
+  return m ? { width: Number(m[1]), height: Number(m[2]) } : { width: 1280, height: 800 }
+}
+
 export function browserLaunchArgs(site = 'webtop') {
   site = browserSite(site)
   const spec = SITES[site]
-  const headed = Boolean(spec.headed && xvfbPath())
+  const onDesktop = usesSharedDesktop()
+  const headed = onDesktop || Boolean(spec.headed && xvfbPath())
+  const view = onDesktop ? desktopView() : VIEW
   const args = [
     '--disable-gpu',
     '--no-first-run',
@@ -107,10 +119,11 @@ export function browserLaunchArgs(site = 'webtop') {
     `--remote-debugging-port=${spec.port()}`,
     '--remote-allow-origins=*',
     `--user-data-dir=${spec.profile()}`,
-    `--window-size=${VIEW.width},${VIEW.height}`,
+    `--window-size=${view.width},${view.height}`,
     '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
-    ...(spec.headed ? ['--disable-blink-features=AutomationControlled'] : []),
+    ...(spec.headed || onDesktop ? ['--disable-blink-features=AutomationControlled'] : []),
+    ...(onDesktop ? [`--class=helper-${site}`, '--window-position=0,0'] : []),
     ...(headed ? [] : ['--headless=new']),
   ]
   // The proxy is for Webtop only. Google Home signs in directly and must not inherit an Israeli school proxy.
@@ -122,6 +135,28 @@ export function browserLaunchArgs(site = 'webtop') {
   return args
 }
 
+// How this site's Chromium is started. The shared desktop does not wrap a private xvfb-run:
+// that would hide the window from the remote desktop.
+export function browserProcessPlan(site = 'webtop') {
+  site = browserSite(site)
+  const spec = SITES[site]
+  const exe = chromiumPath() || 'chromium'
+  const args = browserLaunchArgs(site)
+  if (usesSharedDesktop()) {
+    const display = config.desktop.display || ':99'
+    return { command: exe, args, env: { ...process.env, DISPLAY: display }, display }
+  }
+  if (spec.headed && xvfbPath()) {
+    return {
+      command: xvfbPath(),
+      args: ['-a', '-s', `-screen 0 ${VIEW.width}x${VIEW.height}x24`, exe, ...args],
+      env: process.env,
+      display: '',
+    }
+  }
+  return { command: exe, args, env: process.env, display: '' }
+}
+
 function launch(site) {
   const spec = SITES[site]
   const exe = chromiumPath()
@@ -129,11 +164,8 @@ function launch(site) {
   const profile = spec.profile()
   fs.mkdirSync(profile, { recursive: true })
   for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(profile, name), { force: true })
-  const headed = spec.headed && xvfbPath()
-  const args = browserLaunchArgs(site)
-  const child = headed
-    ? spawn(xvfbPath(), ['-a', '-s', `-screen 0 ${VIEW.width}x${VIEW.height}x24`, exe, ...args], { detached: true, stdio: 'ignore' })
-    : spawn(exe, args, { detached: true, stdio: 'ignore' })
+  const plan = browserProcessPlan(site)
+  const child = spawn(plan.command, plan.args, { detached: true, stdio: 'ignore', env: plan.env })
   child.unref()
   child.on('error', () => {})
 }

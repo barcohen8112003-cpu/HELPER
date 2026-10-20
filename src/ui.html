@@ -187,6 +187,10 @@ function render(S) {
       ? 'דפדפן נפרד בענן, מחובר לחשבון Google של הבית. נכנסים פעם אחת מכאן. אם Google חוסם דפדפן אוטומטי, החלון רץ על מסך וירטואלי כדי שאפשר יהיה להיכנס ידנית. הסיסמה לא נשמרת אצל העוזר.'
       : 'בלי GOOGLE_HOME_CLOUD השליטה עוברת לחלון Google Home שבמחשב הביתי, דרך הגשר.'),
     GH.cloud && h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/google-home' }, 'התחברות ל-Google Home')))
+  const D = S.desktop || { enabled: false }
+  const desktopBody = h('div', {},
+    h('p', { class: 'small' }, 'עכבר ומקלדת אמיתיים לדפדפני Webtop ו-Google Home על השרת, לא צילום מסך. נכנסים כאן פעם אחת, והעוגיות נשמרות לפעולות של העוזר. בטלפון לוחצים על «מקלדת». לחיצה ימנית על שולחן העבודה מעלה את Webtop או את Google Home.'),
+    h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/desktop/' }, 'שולחן עבודה בענן')))
   const P = S.phone || { enabled: false }
   const phoneBody = h('div', {},
     h('p', { class: 'small' }, 'שליטה בטלפון דרך ADB ו-Tailscale. צימוד חד-פעמי, אחר כך חיבור לפורט של ניפוי אלחוטי. הסיסמה לא נשמרת. פעולות שמשנות את הטלפון מבקשות אישור בוואטסאפ.'),
@@ -197,6 +201,7 @@ function render(S) {
       W.blocked && h('p', { class: 'small', style: 'margin:10px 0 0' }, W.blockedStatus || 'וובטופ חוסם את כתובת השרת, משתמשים במחשב הביתי')),
     connector('Google Home', 'אורות, רמקולים ושאר מכשירי הבית', GH.cloud, googleHomeBody),
     connector('טלפון', 'מסך, לחיצות ואפליקציות בטלפון Android', Boolean(P.enabled), phoneBody),
+    D.enabled && connector('שולחן עבודה בענן', 'מסך השרת: עכבר ומקלדת לדפדפנים', true, desktopBody),
     connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.length > 0, googleBody),
     connector('מודל AI', S.model, S.settings.LLM_API_KEY.set, form(S, [
       ['LLM_BASE_URL', 'כתובת הספק', { hint: 'כל ספק תואם OpenAI. Groq: https://api.groq.com/openai/v1' }],

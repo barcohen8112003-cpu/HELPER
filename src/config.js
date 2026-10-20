@@ -157,6 +157,17 @@ const build = () => ({
     port: Number(env('GOOGLE_HOME_DEBUG_PORT', '9226')) || 9226,
     keepAliveMinutes: Math.max(1, Number(env('GOOGLE_HOME_KEEPALIVE_MINUTES', '10')) || 10),
   },
+  // One shared X display for the cloud browsers, reached as a remote desktop.
+  // noVNC listens inside the container only. The settings site proxies it, and Tailscale Serve can too.
+  desktop: {
+    enabled: ['1', 'true', 'yes'].includes(env('CLOUD_DESKTOP').toLowerCase()),
+    display: env('CLOUD_DESKTOP_DISPLAY', ':99') || ':99',
+    geometry: env('CLOUD_DESKTOP_GEOMETRY', '1280x800') || '1280x800',
+    vncPort: Number(env('CLOUD_DESKTOP_VNC_PORT', '5900')) || 5900,
+    webPort: Number(env('CLOUD_DESKTOP_WEB_PORT', '6080')) || 6080,
+    upstream: env('CLOUD_DESKTOP_UPSTREAM', 'http://127.0.0.1:6080') || 'http://127.0.0.1:6080',
+    vncPassword: env('CLOUD_DESKTOP_VNC_PASSWORD'),
+  },
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
   gemini: {
