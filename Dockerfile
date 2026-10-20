@@ -6,10 +6,19 @@ FROM node:24-slim
 # xauth is required by xvfb-run; without it the virtual screen never starts.
 # CLOUD_DESKTOP=1 uses one shared Xvfb, fluxbox, x11vnc on localhost, and noVNC (websockify) on 6080.
 # 6080 stays inside the container. Do not publish it.
-# adb (platform-tools) talks to the phone. The key it generates lives on the data volume, not in the image.
+# Debian's adb package is too old: `adb pair` exits with "unknown command". Current platform-tools
+# provides pair and tcpip. The key adb generates lives on the data volume, not in the image.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium fonts-noto-core ca-certificates tini xvfb xauth adb fluxbox wmctrl x11vnc novnc websockify \
+ && apt-get install -y --no-install-recommends \
+      chromium fonts-noto-core ca-certificates tini xvfb xauth unzip curl \
+      fluxbox wmctrl x11vnc novnc websockify \
+ && curl -fsSL -o /tmp/platform-tools.zip https://dl.google.com/android/repository/platform-tools-latest-linux.zip \
+ && unzip -q /tmp/platform-tools.zip -d /opt \
+ && ln -sf /opt/platform-tools/adb /usr/local/bin/adb \
+ && rm -rf /tmp/platform-tools.zip \
  && rm -rf /var/lib/apt/lists/*
+
+ENV ADB_PATH=/opt/platform-tools/adb
 
 WORKDIR /app
 COPY package.json package-lock.json ./

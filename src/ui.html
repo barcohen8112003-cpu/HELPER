@@ -193,7 +193,7 @@ function render(S) {
     h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/desktop/' }, 'שולחן עבודה בענן')))
   const P = S.phone || { enabled: false }
   const phoneBody = h('div', {},
-    h('p', { class: 'small' }, 'שליטה בטלפון דרך ADB ו-Tailscale. צימוד חד-פעמי, אחר כך חיבור לפורט של ניפוי אלחוטי. הסיסמה לא נשמרת. פעולות שמשנות את הטלפון מבקשות אישור בוואטסאפ.'),
+    h('p', { class: 'small' }, 'שליטה בטלפון דרך ADB ו-Tailscale. צימוד חד-פעמי, אחר כך חיבור לפורט של ניפוי אלחוטי. אחרי החיבור הראשון הטלפון עובר לפורט 5555 עד אתחול, גם בנתונים סלולריים. הסיסמה לא נשמרת. פעולות שמשנות את הטלפון מבקשות אישור בוואטסאפ.'),
     h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/phone' }, 'טלפון')))
 
   fill($('connectors'),

@@ -121,11 +121,14 @@ config.phone.mode = 'off'
 ok(!phone.phoneEnabled() && !activeTools().some((t) => t.name === 'phone_tap'), 'PHONE_MODE=off hides the phone tools')
 config.phone.mode = 'ask'
 ok(activeTools().some((t) => t.name === 'phone_screenshot') && activeTools().some((t) => t.name === 'phone_type_text'), 'ask mode exposes the phone tools')
-ok(phone.phonePrompt(false).includes('תשלוט לי בטלפון') && phone.phonePrompt(false).includes('מה יש לי בטלפון'), 'the Hebrew prompt routes phone requests to the tools')
+ok(phone.phonePrompt(false).includes('תשלוט לי בטלפון') && phone.phonePrompt(false).includes('מה יש לי בטלפון') && phone.phonePrompt(false).includes('5555'), 'the Hebrew prompt routes phone requests and mentions port 5555')
+ok(JSON.stringify(phone.reconnectPorts(41234)) === JSON.stringify([41234, 5555]) && JSON.stringify(phone.reconnectPorts(5555)) === JSON.stringify([5555]), 'reconnect tries the saved port, then 5555')
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const docker = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8')
-ok(/\badb\b/.test(docker), 'the image installs adb')
+const aptInstall = docker.slice(docker.indexOf('apt-get install'), docker.indexOf('curl -fsSL'))
+ok(docker.includes('https://dl.google.com/android/repository/platform-tools-latest-linux.zip') && docker.includes('ADB_PATH=/opt/platform-tools/adb'), 'the image installs current platform-tools adb')
+ok(!/(^|[\s\\])adb([\s\\]|$)/.test(aptInstall), 'the image does not install Debian adb, which has no pair command')
 const compose = fs.readFileSync(path.join(root, 'docker-compose.tailscale.yml'), 'utf8')
 const exampleEnv = fs.readFileSync(path.join(root, '.env.example'), 'utf8')
 const tailExample = fs.readFileSync(path.join(root, '.tailscale.env.example'), 'utf8')
@@ -134,12 +137,15 @@ ok(compose.includes('socks5://tailscale:1055') && compose.includes('helper-vps')
 ok(!compose.includes('TS_AUTHKEY=') && !exampleEnv.includes('TS_AUTHKEY='), 'the auth key is not written into the compose file or .env')
 ok(tailExample.includes('TS_AUTHKEY=') && fs.readFileSync(path.join(root, '.gitignore'), 'utf8').includes('.tailscale.env'), '.tailscale.env holds the key and is gitignored')
 const page = fs.readFileSync(path.join(root, 'src', 'phone.html'), 'utf8')
-ok(page.includes('dir="rtl"') && page.includes('ניפוי אלחוטי') && page.includes('צמד') && page.includes('חבר'), 'the phone page is Hebrew, RTL, and explains pairing')
+ok(page.includes('dir="rtl"') && page.includes('ניפוי אלחוטי') && page.includes('צמד') && page.includes('חבר') && page.includes('5555') && page.includes('סלולר'), 'the phone page is Hebrew, RTL, and explains port 5555')
 ok(page.includes('id="kbd"') && page.includes('id="txt"') && page.includes('position:fixed') && page.includes('לוחצים על שדה בתמונה, ואז מקלידים כאן') && page.includes('שלח טקסט') && page.includes('/api/phone/type') && page.includes('/api/phone/key'), 'the phone live view types from a real text field')
 ok(/fromEnter && !text[\s\S]{0,160}type: 'key', key: 'Enter'/.test(page) && page.includes('data-key="Tab"') && page.includes('מחק ⮌'), 'Enter in an empty phone field sends Enter, and Tab and Backspace have buttons')
 ok(phone.phoneKeyCode('Enter') === '66' && phone.phoneKeyCode('tab') === '61' && phone.phoneKeyCode('Backspace') === '67', 'the live-view keys map to Android enter, tab and delete')
 const settings = fs.readFileSync(path.join(root, 'src', 'ui.html'), 'utf8')
 ok(settings.includes("href: '/phone'") && settings.includes('טלפון'), 'settings links to the phone page')
+ok(settings.includes('פורט 5555 עד אתחול, גם בנתונים סלולריים'), 'settings explains that the phone moves to port 5555')
+const help = fs.readFileSync(path.join(root, 'src', 'index.js'), 'utf8')
+ok(help.includes('אחר כך העוזר עובר לפורט 5555 עד אתחול, גם בנתונים סלולריים'), 'WhatsApp help explains the move to port 5555')
 
 function listen(handler) {
   return new Promise((resolve) => {
@@ -212,6 +218,97 @@ ok(echoed === 'שלום-adb', 'a TCP connection is forwarded through SOCKS5 to t
 await fwd.close()
 await new Promise((resolve) => socks.close(resolve))
 await new Promise((resolve) => echo.close(resolve))
+
+const calls = []
+const up = new Set()
+let failWireless = false
+let tcpipFails = false
+let miss5555 = 0
+phone.setPhoneIoForTests({
+  tunnel: async (host, port) => {
+    calls.push(['tunnel', host, port])
+    return { port, host, close: async () => {} }
+  },
+  closeTunnel: async (host, port) => {
+    calls.push(['close', host, port])
+  },
+  runAdb: async (args) => {
+    calls.push(['adb', ...args])
+    if (args[0] === 'connect') {
+      if (failWireless && String(args[1]).endsWith(':41234')) throw new Error('failed to connect')
+      if (String(args[1]).endsWith(':5555') && miss5555 > 0) {
+        miss5555--
+        throw new Error('connection refused')
+      }
+      up.add(args[1])
+      return `connected to ${args[1]}`
+    }
+    if (args[0] === 'disconnect') {
+      up.delete(args[1])
+      return ''
+    }
+    if (args.includes('get-state')) {
+      const serial = args[args.indexOf('-s') + 1]
+      if (!up.has(serial)) throw new Error('not connected')
+      return 'device\n'
+    }
+    if (args.includes('tcpip')) {
+      if (tcpipFails) throw new Error('tcpip refused')
+      return 'restarting in TCP mode port: 5555\n'
+    }
+    if (args.includes('getprop')) return 'SM-S938B\n'
+    if (args.includes('dumpsys')) return 'level: 80\n'
+    return ''
+  },
+})
+const tcpipCount = () => calls.filter((c) => c[0] === 'adb' && c.includes('tcpip')).length
+const host = '100.110.143.89'
+
+miss5555 = 1
+const switched = await phone.connectPhone({ host, port: 41234 })
+ok(tcpipCount() === 1, 'the first wireless connect runs adb tcpip 5555 once')
+ok(calls.some((c) => c[0] === 'adb' && c[1] === '-s' && c[2] === '127.0.0.1:41234' && c[3] === 'tcpip' && c[4] === '5555'), 'tcpip is sent to the wireless serial')
+ok(calls.some((c) => c[0] === 'adb' && c[1] === 'connect' && c[2] === '127.0.0.1:5555'), 'the forwarder reconnects to host port 5555')
+ok(phone.phoneBox().port === 5555 && phone.phoneBox().host === host && phone.phoneBox().serial === '127.0.0.1:5555', 'port 5555 is saved after the switch')
+ok(switched.message.includes('5555') && switched.message.includes('סלולר'), 'the connect reply says 5555 stays up on cellular data')
+ok(miss5555 === 0, 'a refused first try on 5555 is retried')
+
+const tcpipAfterSwitch = tcpipCount()
+up.delete('127.0.0.1:5555')
+const stayed = await phone.connectPhone({ host, port: 5555 })
+ok(tcpipCount() === tcpipAfterSwitch && phone.phoneBox().port === 5555 && stayed.message.includes('מחובר'), 'connecting to 5555 does not run tcpip again')
+
+const beforeReconnect = tcpipCount()
+await phone.reconnectPhone()
+ok(tcpipCount() === beforeReconnect && phone.phoneBox().port === 5555, 'reconnect on a saved 5555 does not run tcpip')
+
+failWireless = true
+up.clear()
+phone.phoneBox().port = 41234
+phone.phoneBox().serial = '127.0.0.1:41234'
+const beforeFallback = tcpipCount()
+const fellBack = await phone.reconnectPhone()
+ok(tcpipCount() === beforeFallback && phone.phoneBox().port === 5555 && fellBack.message.includes('מחובר'), 'reconnect tries the saved port, then 5555, without tcpip')
+ok(calls.some((c) => c[0] === 'adb' && c[1] === 'connect' && c[2] === '127.0.0.1:41234'), 'the dead wireless port is attempted before 5555')
+
+up.delete('127.0.0.1:5555')
+phone.phoneBox().serial = '127.0.0.1:41234'
+phone.phoneBox().port = 41234
+const kept = await phone.phoneKeepAlive()
+ok(kept === '' && phone.phoneBox().port === 5555, 'keepalive falls through to 5555 when the saved wireless port is down')
+
+tcpipFails = true
+failWireless = false
+const beforeFail = phone.phoneBox().port
+let tcpipThrew = false
+try {
+  await phone.connectPhone({ host, port: 39999 })
+} catch (e) {
+  tcpipThrew = e.message.includes('5555')
+}
+ok(tcpipThrew && phone.phoneBox().port === beforeFail && phone.phoneBox().port !== 39999, 'a failed move to 5555 does not save the wireless port')
+
+phone.setPhoneIoForTests({})
 
 console.log(`${passed} בדיקות עברו, ${failed} נכשלו`)
 process.exit(failed ? 1 : 0)
