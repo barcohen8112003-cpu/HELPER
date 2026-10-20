@@ -1,5 +1,7 @@
 node_modules/
-data/
+# Server state only (data/state.json, browser profiles). A bare "data/" would also hide
+# android/app/src/main/java/com/example/helper/data/.
+/data/
 .env
 .tailscale.env
 .env.before-openrouter
