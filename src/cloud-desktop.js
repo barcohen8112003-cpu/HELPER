@@ -73,6 +73,7 @@ export function fluxboxMenu(raise = path.join(HOME, 'raise.sh')) {
   return `[begin] (שולחן העבודה)
 [exec] (Webtop) {${raise} helper-webtop}
 [exec] (Google Home) {${raise} helper-google-home}
+[exec] (קניות) {${raise} helper-errand}
 [end]
 `
 }

@@ -15,7 +15,7 @@ import { status } from './status.js'
 import { maskSettingsUrl, startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
 import { startPcBridgeServer, bridgeLabel } from './pc-bridge.js'
-import { closeCloudBrowsers, cloudGoogleHomeOn, cloudWebtopOn, ensureCloudBrowser, ensureCloudWebtop } from './webtop-browser.js'
+import { closeCloudBrowsers, cloudGoogleHomeOn, cloudWebtopOn, ensureCloudBrowser, ensureCloudWebtop, errandCloudOn } from './webtop-browser.js'
 import { startCloudDesktop } from './cloud-desktop.js'
 import { startVoice } from './voice.js'
 import { createMonitoring } from './monitoring/index.js'
@@ -37,6 +37,7 @@ startPcBridgeServer()
 function startCloudBrowsers() {
   if (cloudWebtopOn()) ensureCloudWebtop().catch((e) => console.log(`[webtop] ${e.message}`))
   if (cloudGoogleHomeOn()) ensureCloudBrowser('google-home').catch((e) => console.log(`[google-home] ${e.message}`))
+  if (errandCloudOn()) ensureCloudBrowser('errand').catch((e) => console.log(`[errand] ${e.message}`))
 }
 if (config.desktop.enabled) {
   startCloudDesktop().then(startCloudBrowsers).catch((e) => console.log(`[desktop] ${e.message}`))

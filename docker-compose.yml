@@ -16,6 +16,7 @@ services:
       TIMEZONE: Asia/Jerusalem
       # Computer actions stay off until .env sets COMPUTER_MODE=ask (or auto) and PC_BRIDGE_SECRET.
       # 3212 is the home bridge (the PC dials out). 3210 is the settings page. Nothing at home is exposed.
+      # 9223, 9226 and 9227 (Webtop, Google Home, errand Chromium) stay on 127.0.0.1 inside the container.
       PC_BRIDGE_LISTEN: "1"
       PC_BRIDGE_PORT: "3212"
       NODE_ENV: production

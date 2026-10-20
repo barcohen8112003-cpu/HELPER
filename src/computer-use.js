@@ -20,6 +20,8 @@ const MAX_NOTES = 15
 
 // Labels of controls that commit something. Generic words in Hebrew and English, never a site's own wording.
 const COMMIT = /\b(pay|pay now|buy now|place (your )?order|submit order|complete (your )?(order|purchase|payment|booking)|confirm (and pay|order|purchase|payment|booking)|book now|send|delete|remove account|close account|change password|subscribe)\b|שלם|לתשלום עכשיו|בצע(י)? (תשלום|הזמנה)|אישור (תשלום|הזמנה|רכישה)|אשר(י)? (תשלום|הזמנה|רכישה)|סיום (הזמנה|רכישה)|השלמת (הזמנה|רכישה)|קנ(ה|י) עכשיו|הזמ(ן|יני) עכשיו|לרכישה|שלח|שליחה|מחק|מחיקה|שינוי סיסמה|סגירת חשבון|הרשמה סופית/i
+// Survey mode stops before a cart. These are not commits: an order run may still add to a cart and then gate the pay step.
+const CART = /add to (?:cart|bag|basket)|הוסף(?:ה)? לסל|הוספה לסל|לסל הקניות|checkout|מעבר לקופה|buy now|קנה עכשיו|קנ(ה|י) עכשיו/i
 // A run of 13-19 digits, the shape of a card number.
 const CARD = /(?:\d[ -]?){13,19}/
 const KIND = { payment: 'תשלום', order: 'הזמנה', send: 'שליחה בשמך', delete: 'מחיקה', account: 'שינוי בחשבון' }
@@ -64,8 +66,18 @@ const RULES = `Rules that always hold:
   pick the best fit and say why. Do not take the first result just because it is first, and do not stop to ask;
   "need_user" only for an identity choice (which account) or when nothing fits the budget or the address.
   Keep the survey proportionate: a few minutes, not every option on the site.
+- Finding or buying the cheapest product is a market survey, not the first result. Start at a price-comparison site
+  (zap.co.il for Israel) and also Google Shopping. Then open at least 3 and at most 5 shops that sell the exact same
+  model and variant (storage, colour, size, bundle). Compare the total INCLUDING shipping, seller reliability and
+  delivery time. Israeli shops should show ILS. Put each shop in "found" with the total, shipping, delivery and the
+  link or address on screen. "done" for a comparison includes a short ranked list in Hebrew: place, shop, total with
+  shipping, delivery, link, and which you would buy and why.
+- Payment: the user pays with PayPal and has only a debit or prepaid card, no credit card. Prefer PayPal checkout
+  where the site offers it. Say so in the gate "why", including when the site has no PayPal.
 - Never invent a price, stock or status: only what the screen shows.
 - Finish with "done" as soon as the goal is visibly reached; "fail" when the site is broken or the goal impossible.`
+
+const SURVEY_ONLY = `This run is research only (compare_prices). Do not add anything to a cart, do not open checkout, do not sign in to pay, and do not send a "gate" for payment or order. Stop with "done" and the ranked Hebrew list once the shops are compared.`
 
 const BODIES = {
   desktop: {
@@ -97,7 +109,7 @@ uses) to carry out an errand he gave you. Each turn you get a screenshot of the 
   },
 }
 
-const systemFor = (body) => `${body.intro}
+const systemFor = (body, survey) => `${body.intro}
 
 Reply with JSON only, no other text:
 {"thought": "<one short sentence: what you see and why this action>", "found": "<optional: a candidate or fact worth keeping, with its numbers as shown>", "action": {"type": "<type>", ...}}
@@ -109,7 +121,8 @@ ${ACTIONS.replace('@EXTRA\n', body.extra ? `${body.extra}\n` : '')}
 Coordinates are pixels of the screenshot you were given (its size is stated with it). Click the centre of the target.
 ${body.tips}
 
-${RULES}`
+${RULES}
+${survey ? SURVEY_ONLY : ''}`
 
 function parse(raw) {
   try {
@@ -131,6 +144,7 @@ function gateCard(g) {
     line('משלוח/מועד', g.when),
     line('למה זה', g.why),
     line('לא בטוח', g.uncertain),
+    g.kind === 'payment' || g.kind === 'order' ? 'תשלום מועדף: PayPal. אין כרטיס אשראי, רק דביט או פריפייד.' : '',
   ].filter(Boolean).join('\n')
 }
 
@@ -138,13 +152,13 @@ const isCommitAction = (a) => a && (['click', 'double_click'].includes(a.type) ?
 
 // Runs the loop. Returns a line for the main model that starts with DONE, NEED_USER, DENIED or FAIL.
 // ctx: { confirm(text, media?), sendMedia, signal }. `think` replaces the model call (self-tests only).
-export async function runGoal({ goal, constraints = '', body = BODIES.browser, ctx = {}, think }) {
+export async function runGoal({ goal, constraints = '', body = BODIES.browser, ctx = {}, think, survey = false }) {
   const signal = ctx.signal
   think ??= (messages) => llm(messages, null, chatModel(), LONG_PATIENCE, { max_completion_tokens: 600 }, signal)
   const log = []
   // The model's own notes from the survey (candidates and their numbers), shown back to it every step.
   const found = []
-  const messages = [{ role: 'system', content: systemFor(body) }]
+  const messages = [{ role: 'system', content: systemFor(body, survey) }]
   let gates = 0
   const end = async (status, text) => {
     if (body.finalShot) {
@@ -180,6 +194,10 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
     if (a.type === 'need_user') return end('NEED_USER', a.summary || 'צריך אותך כדי להמשיך')
 
     if (a.type === 'gate') {
+      if (survey && (a.kind === 'payment' || a.kind === 'order')) {
+        messages.push({ role: 'user', content: 'This run is research only. Do not check out or pay. Reply with "done" and the ranked Hebrew list.' })
+        continue
+      }
       if (!isCommitAction(a.then)) {
         messages.push({ role: 'user', content: 'A gate needs "then": the single click or key action that commits. Reply again.' })
         continue
@@ -208,6 +226,10 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       const found = await body.probe(scaled).catch(() => null)
       if (a.type === 'type' && found?.secret) return end('NEED_USER', 'השדה מבקש סיסמה, קוד או פרטי כרטיס. את זה תזין בעצמך בחלון של העוזר במחשב, ואז תגיד לי להמשיך.')
       const commitKey = a.type === 'key' && /^(enter|space)$/i.test(String(a.keys).trim())
+      if (survey && found?.label && (CART.test(found.label) || COMMIT.test(found.label)) && a.type !== 'type') {
+        messages.push({ role: 'user', content: `Blocked: "${found.label.slice(0, 80)}" would leave the survey (cart or checkout). Go back and finish the ranked list with "done".` })
+        continue
+      }
       if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && COMMIT.test(found.label)) {
         messages.push({ role: 'user', content: `Blocked by the safety check: the control there reads "${found.label.slice(0, 80)}", which may pay, order, send or delete. If it commits, reply with a "gate" with the details on screen and this action as "then". If it does not, take another way forward.` })
         continue
@@ -234,7 +256,7 @@ function scale(a, shot) {
 export const useComputer = (goal, ctx) => runGoal({ goal, body: BODIES.desktop, ctx })
 
 // An errand in the assistant's own browser (run_errand).
-export const runErrand = (goal, constraints, ctx) => runGoal({ goal, constraints, body: BODIES.browser, ctx })
+export const runErrand = (goal, constraints, ctx, opts = {}) => runGoal({ goal, constraints, body: BODIES.browser, ctx, survey: Boolean(opts.survey) })
 
 // Exposed for the self-test only.
-export const _test = { BODIES, COMMIT, gateCard }
+export const _test = { BODIES, COMMIT, CART, gateCard, RULES, SURVEY_ONLY }

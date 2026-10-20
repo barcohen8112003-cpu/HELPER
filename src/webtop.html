@@ -40,8 +40,10 @@
 <div class="pick">
   <button type="button" data-site="webtop">Webtop</button>
   <button type="button" data-site="google-home">Google Home</button>
+  <button type="button" data-site="errand">קניות</button>
 </div>
 <p class="note" id="note"></p>
+<p class="note" id="deskWrap" hidden>לחתימה על חנויות עם עכבר ומקלדת: <a id="desk" href="/desktop/">שולחן העבודה בענן</a>. קליק ימני על הרקע, ואז «קניות». התעבורה לחנויות ישראליות יוצאת דרך הטלפון כשיש פרוקסי, כדי שהמחיר יהיה בשקלים.</p>
 <p class="note" id="blocked" hidden>וובטופ חוסם את כתובת השרת, משתמשים במחשב הביתי</p>
 <div id="screen">
   <div id="stage" tabindex="0">
@@ -76,13 +78,18 @@ const SITES = {
     title: 'התחברות ל-Google Home',
     note: 'זה החלון של Google Home בענן, חשבון Google נפרד מ-Webtop. נכנסים פעם אחת. אם Google חוסם דפדפן אוטומטי, החלון רץ על מסך וירטואלי כדי שאפשר יהיה להיכנס ידנית. הסיסמה לא נשמרת אצל העוזר.',
   },
+  errand: {
+    title: 'דפדפן קניות',
+    note: 'זה חלון הקניות בענן, פרופיל נפרד. נכנסים פעם אחת ל-Google ול-PayPal. הסיסמה לא נשמרת אצל העוזר, רק עוגיות הדפדפן. תשלום מועדף: PayPal (דביט או פריפייד, בלי כרטיס אשראי).',
+  },
 }
-let site = location.pathname === '/google-home' || new URLSearchParams(location.search).get('site') === 'google-home' ? 'google-home' : 'webtop'
+let site = location.pathname === '/errand' || new URLSearchParams(location.search).get('site') === 'errand' ? 'errand' : location.pathname === '/google-home' || new URLSearchParams(location.search).get('site') === 'google-home' ? 'google-home' : 'webtop'
 let url = ''
 function showSite() {
   title.textContent = SITES[site].title
   note.textContent = SITES[site].note
   document.title = SITES[site].title
+  document.getElementById('deskWrap').hidden = site !== 'errand'
   for (const b of document.querySelectorAll('.pick button')) b.classList.toggle('on', b.dataset.site === site)
 }
 for (const b of document.querySelectorAll('.pick button')) b.addEventListener('click', () => { site = b.dataset.site; showSite(); tick() })
