@@ -63,6 +63,26 @@ function getNetworkIp() {
   return { ip: tailscaleIp || localIp, isTailscale: Boolean(tailscaleIp) };
 }
 
+// Address the Android app should dial. Inside Docker, getNetworkIp() is the bridge (172.18.0.2), which a phone
+// cannot reach. APP_PUBLIC_URL wins. A set UI_PUBLIC_HOST (host:port, as on the VPS) is next. At home, the LAN or
+// Tailscale address on port 3210 is used, the same as before.
+export function appConnectTarget({ appPublicUrl = '', uiPublicHost = '', networkIp = '', port = 3210 } = {}) {
+  const explicit = String(appPublicUrl || '').trim()
+  if (explicit) return explicit
+  const host = String(uiPublicHost || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+  if (host) return `http://${host}`
+  if (networkIp) return `http://${networkIp}:${port}`
+  return ''
+}
+
+// One line for a /bridge/ask attempt. Source, status and duration only: never the token or the message text.
+export function bridgeAskLog({ source = '-', status = 0, ms = 0 } = {}) {
+  const safe = /^[A-Za-z0-9_.-]{1,30}$/.test(String(source)) ? String(source) : '-'
+  const code = Number.isFinite(Number(status)) ? Number(status) : 0
+  const took = Number.isFinite(Number(ms)) ? Math.max(0, Math.round(Number(ms))) : 0
+  return `[bridge] ask source=${safe} status=${code} ms=${took}`
+}
+
 async function snapshot(connectedSince) {
   const health = (label, key) => {
     const h = state.health[key]
@@ -71,13 +91,18 @@ async function snapshot(connectedSince) {
   }
   const google = googleAccounts()
   const { ip, isTailscale } = getNetworkIp()
+  const appUrl = appConnectTarget({
+    appPublicUrl: process.env.APP_PUBLIC_URL,
+    uiPublicHost: process.env.UI_PUBLIC_HOST,
+    networkIp: ip,
+  })
   let appQrDataUrl = ''
-  if (ip) {
+  if (appUrl && state.bridgeToken) {
     try {
-      const qrData = JSON.stringify({ url: `http://${ip}:3210`, token: state.bridgeToken })
+      const qrData = JSON.stringify({ url: appUrl, token: state.bridgeToken })
       appQrDataUrl = await QRCode.toDataURL(qrData)
     } catch (e) {
-      console.error('[ui] QR generation failed:', e)
+      console.error('[ui] QR generation failed:', e.message)
     }
   }
 
@@ -101,8 +126,11 @@ async function snapshot(connectedSince) {
     waiting: state.outbox.length,
     sent: fs.existsSync(SENT_LOG) ? fs.readFileSync(SENT_LOG, 'utf8').trim().split('\n').slice(-40).reverse() : [],
     appQrDataUrl,
+    appUrl,
     appIp: ip,
     isTailscale,
+    // The bridge token is returned only with the signed-in settings state. The page masks it until "הצג".
+    bridgeToken: state.bridgeToken || '',
     webtop: {
       enabled: Boolean(config.webtop.url),
       cloud: config.webtop.cloud,
@@ -247,24 +275,42 @@ export function startUi({ connectedSince, restart, agent }) {
         return send(res, 200, { items })
       }
       if (req.method === 'POST' && url.pathname === '/bridge/ask') {
-        state.bridgeSeenAt = Date.now()
-        const given = (req.headers.authorization || '').replace(/^Bearer /, '')
-        if (!agent || !same(given, bridgeToken)) return send(res, 403, { error: 'bridge token missing or wrong' })
-        const body = await readJson(req)
-        const text = String(body.text || '').trim().slice(0, 4000)
-        if (!text) return send(res, 400, { error: 'empty text' })
-        const reply = await agent(text, { voice: Boolean(body.voice), source: String(body.source || 'discord').slice(0, 30) })
-        // Speech costs ElevenLabs credits, so a client that only shows text (the app's chat) asks for none: "audio": false.
-        let audio = null
-        if (body.audio !== false) {
-          try {
-            const audioBuffer = await elevenSpeakMp3(reply)
-            if (audioBuffer) audio = audioBuffer.toString('base64')
-          } catch (e) {
-            console.error('[ui] ElevenLabs audio generation failed:', e.message)
+        const started = Date.now()
+        let status = 500
+        let source = '-'
+        try {
+          state.bridgeSeenAt = Date.now()
+          const given = (req.headers.authorization || '').replace(/^Bearer /, '')
+          if (!agent || !same(given, bridgeToken)) {
+            status = 403
+            return send(res, 403, { error: 'bridge token missing or wrong' })
           }
+          const body = await readJson(req)
+          source = String(body.source || 'discord').slice(0, 30)
+          const text = String(body.text || '').trim().slice(0, 4000)
+          if (!text) {
+            status = 400
+            return send(res, 400, { error: 'empty text' })
+          }
+          const reply = await agent(text, { voice: Boolean(body.voice), source })
+          // Speech costs ElevenLabs credits, so a client that only shows text (the app's chat) asks for none: "audio": false.
+          let audio = null
+          if (body.audio !== false) {
+            try {
+              const audioBuffer = await elevenSpeakMp3(reply)
+              if (audioBuffer) audio = audioBuffer.toString('base64')
+            } catch (e) {
+              console.error('[ui] ElevenLabs audio generation failed:', e.message)
+            }
+          }
+          status = 200
+          return send(res, 200, { reply, audio })
+        } catch (e) {
+          status = e.status || 400
+          throw e
+        } finally {
+          console.log(bridgeAskLog({ source, status, ms: Date.now() - started }))
         }
-        return send(res, 200, { reply, audio })
       }
       if (req.method === 'POST' && url.pathname === '/bridge/tts') {
         state.bridgeSeenAt = Date.now()

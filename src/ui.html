@@ -43,6 +43,8 @@
   details[open] > summary::before { content:"− "; }
   ol.steps { margin:10px 0 0; padding-inline-start:20px; color:var(--muted); font-size:14px; }
   code { background:var(--soft); padding:1px 6px; border-radius:5px; direction:ltr; display:inline-block; font-size:13px; }
+  .copy-line { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; justify-content:center; margin-top:8px; }
+  .copy-value { max-width:100%; word-break:break-all; }
   .log { font-size:13px; color:var(--muted); max-height:320px; overflow:auto; }
   .log div { padding:6px 4px; border-bottom:1px solid var(--line); }
   #toast { position:fixed; inset-inline:0; bottom:24px; margin:auto; width:max-content; max-width:90vw; background:var(--ink); color:#fff; padding:10px 18px; border-radius:10px; opacity:0; transition:opacity .2s; pointer-events:none; }
@@ -273,16 +275,38 @@ function render(S) {
 
   fill($('sent'), (S.sent.length ? S.sent.map((line) => h('div', {}, line)) : [h('div', {}, 'עוד לא נשלח כלום')]))
 
-  if (S.appQrDataUrl) {
-    fill($('appQrRows'),
-      h('div', { class: 'row block', style: 'text-align:center' },
-        h('img', { src: S.appQrDataUrl, style: 'width:250px;height:250px;margin:16px auto;display:block;border-radius:12px' }),
-        h('div', { class: 'small' }, S.isTailscale ? 'כתובת Tailscale: ' + S.appIp : 'כתובת רשת מקומית: ' + S.appIp)
-      )
-    )
-  } else {
-    fill($('appQrRows'), h('div', { class: 'row small' }, 'לא נמצאה כתובת רשת זמינה לחיבור.'))
+  const maskToken = (token) => {
+    const t = String(token || '')
+    return t.length <= 4 ? '••••' : '••••' + t.slice(-4)
   }
+  const copyBtn = (value) => h('button', { type: 'button', class: 'link', onclick: async () => {
+    try { await navigator.clipboard.writeText(value); toast('הועתק') } catch { toast('ההעתקה נכשלה') }
+  } }, 'העתק')
+  const appRows = []
+  if (S.appQrDataUrl) {
+    appRows.push(h('img', { src: S.appQrDataUrl, alt: 'קוד QR לחיבור האפליקציה', style: 'width:250px;height:250px;margin:16px auto;display:block;border-radius:12px' }))
+  } else if (!S.appUrl) {
+    appRows.push(h('div', { class: 'row small' }, 'לא נמצאה כתובת רשת זמינה לחיבור.'))
+  }
+  if (S.appUrl) {
+    appRows.push(h('div', { class: 'copy-line' },
+      h('span', { class: 'small' }, 'כתובת'),
+      h('code', { class: 'copy-value' }, S.appUrl),
+      copyBtn(S.appUrl)))
+  }
+  if (S.bridgeToken) {
+    const shown = h('code', { class: 'copy-value' }, maskToken(S.bridgeToken))
+    const reveal = h('button', { type: 'button', class: 'link', onclick: () => {
+      const open = shown.dataset.open === '1'
+      shown.dataset.open = open ? '' : '1'
+      shown.textContent = open ? maskToken(S.bridgeToken) : S.bridgeToken
+      reveal.textContent = open ? 'הצג' : 'הסתר'
+    } }, 'הצג')
+    appRows.push(h('div', { class: 'copy-line' },
+      h('span', { class: 'small' }, 'קוד גישה'),
+      shown, reveal, copyBtn(S.bridgeToken)))
+  }
+  fill($('appQrRows'), appRows.length ? h('div', { class: 'row block', style: 'text-align:center' }, appRows) : h('div', { class: 'row small' }, 'לא נמצאה כתובת רשת זמינה לחיבור.'))
 }
 
 async function load() {

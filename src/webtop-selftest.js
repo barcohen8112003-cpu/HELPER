@@ -38,7 +38,7 @@ fs.writeFileSync(process.env.HELPER_ENV_FILE, [
 const { config } = await import('./config.js')
 const session = await import('./session.js')
 const browser = await import('./webtop-browser.js')
-const { uiPolicy, startUi, maskSettingsUrl } = await import('./ui.js')
+const { uiPolicy, startUi, maskSettingsUrl, appConnectTarget, bridgeAskLog } = await import('./ui.js')
 
 let failed = 0
 let passed = 0
@@ -66,6 +66,19 @@ ok(policy.origins.includes(`http://${pub}`), 'the public origin is allowed for P
 ok(policy.publicBase === `http://${pub}`, 'printed links use the public base')
 const loop = uiPolicy(port, {})
 ok(!loop.hosts.includes(pub) && loop.publicBase === `http://127.0.0.1:${port}`, 'without UI_PUBLIC_HOST only loopback is offered')
+
+const dockerIp = '172.18.0.2'
+ok(appConnectTarget({ appPublicUrl: 'http://app.example:3210', uiPublicHost: pub, networkIp: dockerIp }) === 'http://app.example:3210', 'APP_PUBLIC_URL is the address in the app QR')
+ok(appConnectTarget({ appPublicUrl: '  ', uiPublicHost: pub, networkIp: dockerIp }) === `http://${pub}`, 'an empty APP_PUBLIC_URL falls through to UI_PUBLIC_HOST')
+ok(appConnectTarget({ uiPublicHost: pub, networkIp: dockerIp }) === `http://${pub}`, 'UI_PUBLIC_HOST replaces the Docker bridge address')
+ok(appConnectTarget({ uiPublicHost: `http://${pub}/` }) === `http://${pub}`, 'a scheme on UI_PUBLIC_HOST is not doubled')
+ok(appConnectTarget({ networkIp: '192.168.1.20' }) === 'http://192.168.1.20:3210', 'at home the QR uses the LAN address on port 3210')
+ok(appConnectTarget({ networkIp: '' }) === '', 'with no address there is no app URL')
+const secret = 'bridge-token-should-not-appear'
+const askLine = bridgeAskLog({ source: 'android_app', status: 200, ms: 12 })
+ok(askLine === '[bridge] ask source=android_app status=200 ms=12', 'a bridge ask is one line with source, status and duration')
+ok(!bridgeAskLog({ source: secret + ' leaked text', status: 403, ms: 1 }).includes(secret), 'the bridge ask line drops a source that is not a short name')
+ok(!askLine.includes('token') && !bridgeAskLog({ source: 'android_app\nPOST', status: 400, ms: 3 }).includes('\n'), 'the bridge ask line has no message text')
 
 const route = session.sessionTransport({ cloud: true, remote: true, bridgeUp: true })
 ok(route.primary === 'cloud' && route.fallback === 'home', 'cloud Webtop is read locally, with the home bridge as fallback')
