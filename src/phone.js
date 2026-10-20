@@ -9,8 +9,9 @@ import { state, save } from './store.js'
 import { parseSocksProxy, startTcpForward } from './socks-forward.js'
 
 export const PHONE_DISCONNECT_MS = 12 * 60 * 60 * 1000
+export const ADB_TCP_PORT = 5555
 export const PHONE_DISCONNECT_TEXT =
-  'ניפוי אלחוטי בטלפון כבוי או שהפורט השתנה (קורה אחרי החלפת רשת או אתחול). בטלפון: הגדרות ← אפשרויות למפתחים ← ניפוי אלחוטי, להפעיל, ולשלוח "חבר טלפון <פורט>" עם פורט החיבור. אם מבקשים צימוד מחדש: "צמד טלפון <פורט> <קוד>". אפשר גם מדף הטלפון באתר ההגדרות.'
+  'הטלפון לא מגיב. אם לא אתחלת אותו, פורט 5555 אמור לעבוד גם בנתונים סלולריים (העוזר מנסה אותו לבד). אחרי אתחול ניפוי אלחוטי כבוי ודורש Wi-Fi: הגדרות ← אפשרויות למפתחים ← ניפוי אלחוטי, להפעיל, ולשלוח "חבר טלפון <פורט>". אם מבקשים צימוד מחדש: "צמד טלפון <פורט> <קוד>". אפשר גם מדף הטלפון באתר ההגדרות.'
 
 const KEYS = {
   back: '4',
@@ -282,9 +283,9 @@ export function resolveApp(name, packages = []) {
 export function phonePrompt(english = false) {
   if (!phoneEnabled()) return ''
   if (english) {
-    return '- Android phone (ADB over Tailscale): "תשלוט לי בטלפון" / "מה יש לי בטלפון" use phone_screenshot (you see the image), phone_ui_dump, phone_notifications, phone_battery, phone_list_apps. phone_tap, phone_swipe, phone_type_text, phone_key, phone_open_app and phone_shell change the phone and ask him themselves; do not ask first. Hebrew is typed via the clipboard (adb input text is ASCII-only); the text field must already be focused. "צמד טלפון <port> <code>" and "חבר טלפון <port>" are handled before you. If a tool says the phone is disconnected, tell him to turn Wireless debugging back on and send the new port.\n'
+    return '- Android phone (ADB over Tailscale): "תשלוט לי בטלפון" / "מה יש לי בטלפון" use phone_screenshot (you see the image), phone_ui_dump, phone_notifications, phone_battery, phone_list_apps. phone_tap, phone_swipe, phone_type_text, phone_key, phone_open_app and phone_shell change the phone and ask him themselves; do not ask first. Hebrew is typed via the clipboard (adb input text is ASCII-only); the text field must already be focused. "צמד טלפון <port> <code>" and "חבר טלפון <port>" are handled before you. The first wireless connect switches the phone to TCP port 5555 until reboot, so it keeps working on mobile data. After a reboot he needs Wi-Fi, Wireless debugging, and a new port.\n'
   }
-  return '• טלפון Android (ADB דרך Tailscale): "תשלוט לי בטלפון", "מה יש לי בטלפון", "תפתח לי בטלפון", "תצלם את מסך הטלפון". כלים: phone_screenshot (התמונה חוזרת אליך), phone_ui_dump (רכיבים לחיצים עם קואורדינטות), phone_tap, phone_swipe, phone_type_text (עברית דרך לוח ההעתקה, כי input text לא תומך בעברית; השדה צריך להיות בפוקוס), phone_key, phone_open_app, phone_list_apps, phone_notifications, phone_battery, phone_shell. פעולה שמשנה את הטלפון מבקשת אישור בוואטסאפ בעצמה, אל תשאל לפני. "צמד טלפון <פורט> <קוד>" ו"חבר טלפון <פורט>" מטופלים לפנייך. אם הכלי אומר שהטלפון מנותק, תגיד להפעיל מחדש ניפוי אלחוטי ולשלוח את הפורט.\n'
+  return '• טלפון Android (ADB דרך Tailscale): "תשלוט לי בטלפון", "מה יש לי בטלפון", "תפתח לי בטלפון", "תצלם את מסך הטלפון". כלים: phone_screenshot (התמונה חוזרת אליך), phone_ui_dump (רכיבים לחיצים עם קואורדינטות), phone_tap, phone_swipe, phone_type_text (עברית דרך לוח ההעתקה, כי input text לא תומך בעברית; השדה צריך להיות בפוקוס), phone_key, phone_open_app, phone_list_apps, phone_notifications, phone_battery, phone_shell. פעולה שמשנה את הטלפון מבקשת אישור בוואטסאפ בעצמה, אל תשאל לפני. "צמד טלפון <פורט> <קוד>" ו"חבר טלפון <פורט>" מטופלים לפנייך. אחרי החיבור הראשון הטלפון עובר לפורט 5555 עד אתחול, גם בנתונים סלולריים. אחרי אתחול צריך Wi-Fi, ניפוי אלחוטי, ופורט חדש.\n'
 }
 
 export function planPhoneDisconnectNotice(box = phoneBox(), now = Date.now()) {
@@ -304,7 +305,7 @@ function adbBin() {
   return process.env.ADB_PATH || 'adb'
 }
 
-export function runAdb(args, { timeout = 20000, binary = false } = {}) {
+function defaultRunAdb(args, { timeout = 20000, binary = false } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(adbBin(), args, { env: adbEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
     const out = []
@@ -329,6 +330,11 @@ export function runAdb(args, { timeout = 20000, binary = false } = {}) {
   })
 }
 
+let execAdb = defaultRunAdb
+export function runAdb(args, opts) {
+  return execAdb(args, opts)
+}
+
 async function tunnel(host, port) {
   const key = `${host}:${port}`
   const existing = tunnels.get(key)
@@ -347,6 +353,23 @@ async function closeTunnel(host, port) {
   if (!record) return
   tunnels.delete(key)
   await record.close().catch(() => {})
+}
+
+let openTunnel = (host, port) => tunnel(host, port)
+let shutTunnel = (host, port) => closeTunnel(host, port)
+
+// Tests substitute the tunnel and adb without spawning a binary. Production keeps the defaults.
+export function setPhoneIoForTests(io = {}) {
+  execAdb = io.runAdb || defaultRunAdb
+  openTunnel = io.tunnel || ((host, port) => tunnel(host, port))
+  shutTunnel = io.closeTunnel || ((host, port) => closeTunnel(host, port))
+}
+
+export function reconnectPorts(saved) {
+  const port = Number(saved)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return []
+  if (port === ADB_TCP_PORT) return [ADB_TCP_PORT]
+  return [port, ADB_TCP_PORT]
 }
 
 function serialOf(localPort) {
@@ -376,7 +399,7 @@ function remember(host, port, serial, paired) {
 export async function pairPhone({ host, port, code }) {
   if (config.phone.mode === 'off') throw new Error('שליטה בטלפון כבויה (PHONE_MODE=off).')
   if (!/^\d{6}$/.test(String(code || ''))) throw new Error('קוד הצימוד הוא 6 ספרות.')
-  const fwd = await tunnel(host, port)
+  const fwd = await openTunnel(host, port)
   try {
     const out = await runAdb(['pair', serialOf(fwd.port), String(code)], { timeout: 30000 })
     const ok = /successfully paired/i.test(out)
@@ -386,33 +409,73 @@ export async function pairPhone({ host, port, code }) {
     save()
     return { ok: true, message: 'הטלפון צומד. עכשיו צריך את פורט החיבור (לא פורט הצימוד): "חבר טלפון <פורט>" או כפתור החיבור בדף הטלפון.' }
   } finally {
-    await closeTunnel(host, port)
+    await shutTunnel(host, port)
   }
 }
 
-export async function connectPhone({ host, port }) {
-  if (config.phone.mode === 'off') throw new Error('שליטה בטלפון כבויה (PHONE_MODE=off).')
-  const fwd = await tunnel(host, port)
-  const serial = serialOf(fwd.port)
-  if (!(await deviceUp(serial))) {
-    const out = await runAdb(['connect', serial], { timeout: 20000 })
-    if (!/connected to/i.test(out) || /failed/i.test(out)) {
-      throw new Error(out.trim() || 'החיבור לטלפון נכשל. צריך להפעיל ניפוי אלחוטי ולבדוק את הפורט.')
-    }
-    if (!(await deviceUp(serial))) throw new Error('adb ראה את הטלפון אבל הוא לא אישר את המפתח. אשר "לאפשר ניפוי" על המסך, או צמד מחדש.')
+// Wireless debugging listens on a random port and only while Wi-Fi is up. `adb tcpip 5555` moves
+// adbd to a fixed port that stays reachable over Tailscale, including mobile data, until reboot.
+// This is a setup step, so it runs on its own and does not wait for a WhatsApp yes.
+async function switchToTcpip(host, fromPort, serial) {
+  try {
+    await runAdb(['-s', serial, 'tcpip', String(ADB_TCP_PORT)], { timeout: 20000 })
+  } catch (e) {
+    throw new Error(`הטלפון התחבר, אבל המעבר לפורט 5555 נכשל: ${e.message}`)
   }
-  remember(host, port, serial, phoneBox().paired)
-  const status = await phoneStatus()
-  return { ok: true, ...status, message: status.line }
+  await runAdb(['disconnect', serial]).catch(() => {})
+  await shutTunnel(host, fromPort)
+  let last = new Error('המעבר לפורט 5555 נכשל')
+  for (let i = 0; i < 5; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 300))
+    try {
+      const result = await connectPhone({ host, port: ADB_TCP_PORT, setupTcp: false })
+      result.message = `${result.message} הועבר לפורט 5555 עד האתחול הבא, גם בנתונים סלולריים.`
+      return result
+    } catch (e) {
+      last = e
+      await shutTunnel(host, ADB_TCP_PORT)
+    }
+  }
+  throw new Error(`הטלפון התחבר, אבל המעבר לפורט 5555 נכשל: ${last.message}`)
+}
+
+export async function connectPhone({ host, port, setupTcp = true }) {
+  if (config.phone.mode === 'off') throw new Error('שליטה בטלפון כבויה (PHONE_MODE=off).')
+  const fwd = await openTunnel(host, port)
+  const serial = serialOf(fwd.port)
+  try {
+    if (!(await deviceUp(serial))) {
+      const out = await runAdb(['connect', serial], { timeout: 20000 })
+      if (!/connected to/i.test(out) || /failed/i.test(out)) {
+        throw new Error(out.trim() || 'החיבור לטלפון נכשל. צריך להפעיל ניפוי אלחוטי ולבדוק את הפורט.')
+      }
+      if (!(await deviceUp(serial))) throw new Error('adb ראה את הטלפון אבל הוא לא אישר את המפתח. אשר "לאפשר ניפוי" על המסך, או צמד מחדש.')
+    }
+    if (setupTcp && Number(port) !== ADB_TCP_PORT) return await switchToTcpip(host, port, serial)
+    remember(host, port, serial, phoneBox().paired)
+    const status = await phoneStatus()
+    return { ok: true, ...status, message: status.line }
+  } catch (e) {
+    await shutTunnel(host, port)
+    throw e
+  }
 }
 
 export async function reconnectPhone() {
   const box = phoneBox()
   const host = box.host || config.phone.host
-  const port = box.port
-  if (!host || !port) throw new Error('עוד אין פורט שמור. שולחים "חבר טלפון <פורט>" או מתחברים מדף הטלפון.')
-  await closeTunnel(host, port)
-  return connectPhone({ host, port })
+  const ports = reconnectPorts(box.port)
+  if (!host || !ports.length) throw new Error('עוד אין פורט שמור. שולחים "חבר טלפון <פורט>" או מתחברים מדף הטלפון.')
+  let last = new Error('החיבור לטלפון נכשל')
+  for (const port of ports) {
+    try {
+      await shutTunnel(host, port)
+      return await connectPhone({ host, port, setupTcp: port !== ADB_TCP_PORT })
+    } catch (e) {
+      last = e
+    }
+  }
+  throw last
 }
 
 export async function phoneStatus() {
@@ -585,7 +648,7 @@ export async function phoneKeepAlive() {
       save()
       return ''
     }
-    await connectPhone({ host, port: box.port })
+    await reconnectPhone()
     return ''
   } catch (e) {
     console.log(`[phone] ${e.message}`)
