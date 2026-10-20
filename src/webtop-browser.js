@@ -170,6 +170,26 @@ function launch(site) {
   child.on('error', () => {})
 }
 
+// Closes both cloud browsers through the debugging port so Chromium writes its cookies to the profile. Killed
+// outright (the container stopping), it loses Google's rotated session cookies and Google signs the profile out.
+export async function closeCloudBrowsers(ms = 4000) {
+  await Promise.all(
+    Object.keys(SITES).map(async (site) => {
+      if (!SITES[site].enabled()) return
+      try {
+        const v = await (await fetch(`${base(site)}/json/version`, { signal: AbortSignal.timeout(1500) })).json()
+        const ws = new WebSocket(v.webSocketDebuggerUrl, { perMessageDeflate: false })
+        await new Promise((resolve, reject) => (ws.once('open', resolve), ws.once('error', reject)))
+        ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }))
+        const deadline = Date.now() + ms
+        while (Date.now() < deadline && (await portOpen(site))) await new Promise((r) => setTimeout(r, 200))
+      } catch {
+        // Already down, or not answering: nothing to save.
+      }
+    }),
+  )
+}
+
 // Starts one site's browser if its debugging port is down. One launch per site at a time.
 export function ensureCloudBrowser(site = 'webtop') {
   site = browserSite(site)

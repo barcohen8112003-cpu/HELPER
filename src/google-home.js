@@ -22,6 +22,8 @@ export function googleHomeSignedOut(url, hasPassword = false) {
   const u = String(url || '')
   if (hasPassword) return true
   if (/accounts\.google\.com|ServiceLogin|\/signin/i.test(u)) return true
+  // Signed out, home.google.com/ and /home redirect to the marketing page, which has no sign-in field.
+  if (/home\.google\.com\/welcome/i.test(u)) return true
   return false
 }
 

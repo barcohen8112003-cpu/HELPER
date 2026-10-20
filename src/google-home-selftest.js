@@ -25,6 +25,8 @@ function ok(cond, name) {
 ok(home.googleHomeSignedOut('https://accounts.google.com/ServiceLogin'), 'accounts.google.com is a sign-in page')
 ok(home.googleHomeSignedOut('https://accounts.google.com/v3/signin/identifier'), 'the identifier step is a sign-in page')
 ok(!home.googleHomeSignedOut('https://home.google.com/'), 'home.google.com itself is signed in')
+ok(home.googleHomeSignedOut('https://home.google.com/welcome'), 'home.google.com/welcome is signed out')
+ok(home.googleHomeSignedOut('https://home.google.com/welcome?hl=en'), 'the welcome page stays signed out with a query')
 ok(home.googleHomeSignedOut('https://home.google.com/', true), 'a password field on any page is signed out')
 ok(home.isGoogleHomeLoginError(Object.assign(new Error('Google Home לא מחובר.'), { code: 'google-home-login' })), 'the login error is recognized')
 

@@ -130,6 +130,11 @@ export function uiPolicy(port = config.uiPort, env = process.env, extraHosts = [
   return { hosts, origins, publicBase: pub ? `http://${pub}` : `http://127.0.0.1:${port}` }
 }
 
+// The startup banner must not print the sign-in token. The full address stays in the return value and in the prompt.
+export function maskSettingsUrl(url) {
+  return String(url || '').replace(/([?&]t=)([^&\s#]+)/g, (_, key, token) => `${key}…${token.slice(-4)}`)
+}
+
 // { connectedSince(): number, restart(): void }
 // agent(text, { voice, source }) => Promise<string>: optional; enables the bridge for other local programs.
 export function startUi({ connectedSince, restart, agent }) {
