@@ -21,19 +21,31 @@ function bellTimes(list = config.lessons.times) {
   )
 }
 
-async function week() {
+// After a failed or empty read the next one comes sooner, and a question from the user retries right away:
+// a read that failed while Webtop was signed out must not leave the timetable empty for three hours.
+const RETRY = 10 * 60000
+let reading = null
+let lastError = ''
+
+async function week(force = false) {
   const L = (state.lessons ??= { fetchedAt: 0, week: [] })
-  if (Date.now() - L.fetchedAt > REFRESH) {
-    // Stamped before the read, so a failing page is retried in a few hours and not on every tick.
-    L.fetchedAt = Date.now()
-    try {
-      L.week = await readTimetable()
-    } catch (e) {
-      console.log(`[lessons] ${e.message}`)
-    }
-    save()
+  const age = Date.now() - L.fetchedAt
+  if (age > REFRESH || (!L.week?.length && (force || age > RETRY))) {
+    reading ??= (async () => {
+      // Stamped before the read, so a failing page is not retried on every tick.
+      L.fetchedAt = Date.now()
+      try {
+        L.week = await readTimetable()
+        lastError = ''
+      } catch (e) {
+        lastError = e.message || String(e)
+        console.log(`[lessons] ${lastError}`)
+      }
+      save()
+    })().finally(() => (reading = null))
+    await reading
   }
-  return L.week
+  return L.week || []
 }
 
 // A day's lessons as units: lessons that start at the same time are one unit (here, the pairs 1-2, 3-4 ...) and get
@@ -84,8 +96,8 @@ export async function lessonReminders(notify) {
 // For the model: one day's timetable in words, with times. day: 0 (Sunday) - 6.
 export async function timetableText(day) {
   if (!sessionEnabled()) return 'Webtop לא מחובר, אין לי מערכת שעות'
-  const entries = await week()
-  if (!entries.length) return 'לא הצלחתי לקרוא את מערכת השעות מ-Webtop'
+  const entries = await week(true)
+  if (!entries.length) return `לא הצלחתי לקרוא את מערכת השעות מ-Webtop${lastError ? ` (${lastError})` : ''}`
   const list = blocks(entries, day)
   const cancelled = entries.filter((x) => x.day === day && x.cancelled).map((x) => `שיעור ${x.lesson} ${x.subject}`)
   if (!list.length) return `ביום ${DAYS[day]} אין שיעורים במערכת${cancelled.length ? ` (בוטלו: ${cancelled.join(', ')})` : ''}`

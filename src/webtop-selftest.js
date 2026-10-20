@@ -38,7 +38,7 @@ fs.writeFileSync(process.env.HELPER_ENV_FILE, [
 const { config } = await import('./config.js')
 const session = await import('./session.js')
 const browser = await import('./webtop-browser.js')
-const { uiPolicy, startUi } = await import('./ui.js')
+const { uiPolicy, startUi, maskSettingsUrl } = await import('./ui.js')
 
 let failed = 0
 let passed = 0
@@ -236,6 +236,9 @@ function hit(method, urlPath, { host, origin, cookie, body } = {}) {
 const settingsUrl = startUi({ connectedSince: () => 0, restart: () => {} })
 ok(settingsUrl.startsWith(`http://${pub}/?t=`), 'the printed settings URL uses UI_PUBLIC_HOST')
 const token = new URL(settingsUrl).searchParams.get('t')
+const masked = maskSettingsUrl(settingsUrl)
+ok(masked.startsWith(`http://${pub}/?t=…`) && masked.endsWith(token.slice(-4)) && !masked.includes(token), 'the console banner shows only the last 4 of the settings token')
+ok(maskSettingsUrl('http://127.0.0.1:3210/') === 'http://127.0.0.1:3210/', 'a URL without a token is unchanged')
 let ready = null
 for (let i = 0; i < 20 && !ready; i++) {
   try {
@@ -297,6 +300,33 @@ config.google.clientSecret = 'test-secret'
 const oauth = await hit('GET', '/google/connect', { cookie, host: pub })
 const loc = decodeURIComponent(oauth.headers.location || '')
 ok(oauth.status === 302 && loc.includes(`http://${pub}/google/callback`), 'Google OAuth redirect uses the public base')
+
+const { isSecretSessionLog } = await import('./secret-logs.js')
+ok(isSecretSessionLog('Closing session:') && isSecretSessionLog('Closing open session in favor of incoming prekey bundle') && isSecretSessionLog('Removing old closed session:'), 'libsignal session lines are recognized')
+ok(!isSecretSessionLog('[lessons] read failed') && !isSecretSessionLog('העוזר רץ'), 'ordinary logs are not session dumps')
+const captured = []
+const hook = (stream) => {
+  const orig = stream.write
+  stream.write = (chunk, _enc, cb) => {
+    captured.push(Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk))
+    if (typeof cb === 'function') cb()
+    return true
+  }
+  return () => { stream.write = orig }
+}
+const restoreOut = hook(process.stdout)
+const restoreErr = hook(process.stderr)
+console.info('Closing session:', { priv: 'SUPERSECRETKEY' })
+console.warn('Closing open session in favor of incoming prekey bundle')
+console.info('Removing old closed session:', { priv: 'SUPERSECRETKEY' })
+console.info('Opening session:', { priv: 'SUPERSECRETKEY' })
+console.warn('Session already closed', { priv: 'SUPERSECRETKEY' })
+console.info('helper still logs this line')
+restoreOut()
+restoreErr()
+const dumped = captured.join('')
+ok(!dumped.includes('SUPERSECRETKEY'), 'session key material is not written to the console')
+ok(dumped.includes('helper still logs this line'), 'normal console output still prints')
 
 console.log(`${passed} בדיקות עברו, ${failed} נכשלו`)
 process.exit(failed ? 1 : 0)

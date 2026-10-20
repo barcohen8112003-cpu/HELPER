@@ -153,11 +153,10 @@ export async function startCloudDesktop() {
   return true
 }
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    for (const child of children) child.kill('SIGTERM')
-  })
-}
+// On exit, not on the signal: the browsers on this display close cleanly first (index.js), then the display goes.
+process.on('exit', () => {
+  for (const child of children) child.kill('SIGTERM')
+})
 
 export function desktopShellHtml() {
   const src = desktopClientPath()

@@ -12,10 +12,10 @@ import { createOutbox } from './outbox.js'
 import { chatModel, Aborted } from './llm.js'
 import { parseCommand } from './commands.js'
 import { status } from './status.js'
-import { startUi } from './ui.js'
+import { maskSettingsUrl, startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
 import { startPcBridgeServer, bridgeLabel } from './pc-bridge.js'
-import { cloudGoogleHomeOn, cloudWebtopOn, ensureCloudBrowser, ensureCloudWebtop } from './webtop-browser.js'
+import { closeCloudBrowsers, cloudGoogleHomeOn, cloudWebtopOn, ensureCloudBrowser, ensureCloudWebtop } from './webtop-browser.js'
 import { startCloudDesktop } from './cloud-desktop.js'
 import { startVoice } from './voice.js'
 import { createMonitoring } from './monitoring/index.js'
@@ -62,7 +62,14 @@ if (lockedBy && lockedBy !== process.pid && running(lockedBy)) {
 fs.writeFileSync(LOCK, String(process.pid))
 fs.rmSync(HEALTHY, { force: true })
 process.on('exit', () => fs.rmSync(LOCK, { force: true }))
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK']) process.on(signal, () => process.exit(0))
+// The cloud browsers are closed first, so their sign-ins are on disk when the container stops.
+let stopping = false
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK'])
+  process.on(signal, () => {
+    if (stopping) return
+    stopping = true
+    closeCloudBrowsers().finally(() => process.exit(0))
+  })
 // start.bat reads this file as "the last run was fine", and stops retrying only after a string of quick crashes.
 setTimeout(() => fs.writeFileSync(HEALTHY, ''), 5 * 60000).unref()
 
@@ -345,6 +352,6 @@ const bridgeAsk = (text, { voice, source }) => {
 
 const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk })
 setSettingsUrl(settingsUrl)
-console.log(`\nאתר ההגדרות (חיבור חשבונות, העדפות, מה פעיל):\n${settingsUrl}\n`)
+console.log(`\nאתר ההגדרות (חיבור חשבונות, העדפות, מה פעיל):\n${maskSettingsUrl(settingsUrl)}\n`)
 // On a fresh install the page opens by itself, since connecting accounts is the next thing to do.
 if (!state.owner && process.platform === 'win32' && !process.env.HELPER_DATA_DIR) exec(`start "" "${settingsUrl}"`)
