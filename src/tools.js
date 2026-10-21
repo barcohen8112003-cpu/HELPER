@@ -1,10 +1,7 @@
-import fs from 'node:fs'
 import path from 'node:path'
-import { config, mailEnabled } from './config.js'
+import { config } from './config.js'
 import { state, save, newId } from './store.js'
 import { webSearch, fetchPage } from './web.js'
-import { recentMail } from './mail.js'
-import { upcomingEvents, calendarOn } from './calendar.js'
 import * as google from './google.js'
 import * as create from './create.js'
 import { getNews, formatNews } from './news.js'
@@ -14,8 +11,6 @@ import { checkWatcher } from './watchers.js'
 import { voiceEnabled, callOwner } from './voice.js'
 import { sessionEnabled } from './session.js'
 import { parseTimetableDay, timetableText } from './lessons.js'
-import { wakeEnabled, wakePc } from './wake.js'
-import * as pc from './pc.js'
 import * as services from './services.js'
 import * as googleHome from './google-home.js'
 import { useComputer, runErrand, runOnPhone } from './computer-use.js'
@@ -26,71 +21,17 @@ import { addFact, removeFact, CATEGORIES } from './memory.js'
 import { memoryTools } from './memory-tools.js'
 import { askGemini, geminiApiEnabled } from './gemini-api.js'
 import { phoneTools } from './phone-tools.js'
+import { googleTools } from './google-tools.js'
+import { pcTools, firstYouTubeVideo } from './pc-tools.js'
+import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 
-// The computer tools drive the user's own Windows machine. Locally that is this process. In the cloud
-// (see src/pc-bridge.js) the same calls are forwarded to the home bridge, and only when COMPUTER_MODE is on.
 // The Discord bot counts as linked once it has called the bridge within the last day.
 const discordLinked = () => Date.now() - (state.bridgeSeenAt || 0) < 24 * 3600000
 
-const computerEnabled = () => config.computerMode !== 'off' && pc.pcEnabled()
 // Each scheduled task is a full model run, so the list is kept short.
 const MAX_TASKS = 20
 
-async function approved(ctx, what) {
-  if (config.computerMode === 'auto') return true
-  return ctx.confirm(what)
-}
-
-// What "open" may launch besides a web address: sites by name, and a few built-in Windows apps by their URI.
-const APPS = {
-  youtube: 'https://www.youtube.com',
-  יוטיוב: 'https://www.youtube.com',
-  google: 'https://www.google.com',
-  גוגל: 'https://www.google.com',
-  gmail: 'https://mail.google.com',
-  classroom: 'https://classroom.google.com',
-  calendar: 'https://calendar.google.com',
-  יומן: 'https://calendar.google.com',
-  drive: 'https://drive.google.com',
-  whatsapp: 'https://web.whatsapp.com',
-  spotify: 'spotify:',
-  ספוטיפיי: 'spotify:',
-  calculator: 'calculator:',
-  מחשבון: 'calculator:',
-  settings: 'ms-settings:',
-  הגדרות: 'ms-settings:',
-}
-
-// The first ordinary video for a search, read from YouTube's own results page: { id, title } or null.
-// Only "videoRenderer" entries count, which leaves out ads, Shorts shelves, channels and playlists.
-export async function firstYouTubeVideo(query) {
-  const res = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=he`, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36', 'Accept-Language': 'he,en;q=0.8' },
-    signal: AbortSignal.timeout(15000),
-  })
-  if (!res.ok) return null
-  const html = await res.text()
-  const m = html.match(/"videoRenderer":\{"videoId":"([\w-]{11})"[\s\S]{0,1500}?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/)
-  if (m) return { id: m[1], title: JSON.parse(`"${m[2]}"`) }
-  const id = html.match(/"videoId":"([\w-]{11})"/)
-  return id ? { id: id[1], title: '' } : null
-}
-
-// Read tools cover every connected Google account unless one is named; write tools default to the first (primary) one.
-const one = (account) => google.resolveAccounts(account)[0]
-// For tools that change something. Read-only accounts (school) are refused here, in code, whatever the model was told.
-function writable(account) {
-  const email = account ? one(account) : google.googleAccounts().find((a) => !config.google.readOnly.includes(a.toLowerCase()))
-  if (!email) throw new Error('אין חשבון Google שמותר לכתוב בו')
-  if (config.google.readOnly.includes(email.toLowerCase())) throw new Error(`החשבון ${email} מוגדר לקריאה בלבד. אפשר לנסח טיוטה והמשתמש ישלח בעצמו.`)
-  return email
-}
-const perAccount = async (account, fn) => (await Promise.all(google.resolveAccounts(account).map((a) => fn(a).catch((e) => [{ account: a, error: e.message }])))).flat()
-
-const str = (description) => ({ type: 'string', description })
-const ACCOUNT = str('כתובת חשבון Google מסוים; ריק = כל החשבונות בקריאה, החשבון הראשי בכתיבה')
-const obj = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required })
-
+// Google tools live in google-tools.js and the computer's in pc-tools.js; both join this list below.
 export const tools = [
   {
     name: 'remember',
@@ -199,6 +140,20 @@ export const tools = [
       state.tasks = state.tasks.filter((t) => t.id !== id)
       save()
       return before === state.tasks.length ? 'לא נמצא' : 'בוטל'
+    },
+  },
+  {
+    name: 'start_background_task',
+    enabled: () => true,
+    description: 'מעביר משימה ארוכה לסוכן ברקע, כדי שהמשתמש יוכל להמשיך לדבר איתך בזמן שהיא רצה: שליטה במחשב או בטלפון, דפדפן קניות, מחקר בהרבה אתרים, כתיבת קוד והרצתו במכונה שלך. התוצאה תגיע בהודעה נפרדת כשהיא מוכנה. לא לשאלה שעונים עליה בכלי אחד או שניים.',
+    parameters: obj({
+      title: str('שם קצר בעברית שהמשתמש יזהה, 2-4 מילים, למשל "השוואת מחירי אוזניות"'),
+      instruction: str('המשימה המלאה לסוכן, עם כל הפרטים מהשיחה שהוא צריך: מה בדיוק, מגבלות, תקציב, מה להחזיר. הוא לא רואה את השיחה.'),
+    }),
+    async run({ title, instruction }, ctx) {
+      if (!ctx.background) return 'אי אפשר להתחיל משימת רקע מכאן. בצע אותה בעצמך עכשיו.'
+      const job = ctx.background(title, instruction)
+      return `המשימה "${job.title}" רצה ברקע. אמור למשתמש בשורה אחת שהתחלת ושהתוצאה תגיע, בלי לחכות לה.`
     },
   },
   {
@@ -368,119 +323,6 @@ ${await askGemini(question)}`
     },
   },
   {
-    name: 'check_mail',
-    enabled: mailEnabled,
-    description: 'מחזיר את המיילים האחרונים (שולח, נושא, תחילת התוכן) מכל התיבות המחוברות, או מתיבה אחת.',
-    parameters: obj({ limit: { type: 'number', description: 'כמה מיילים מכל תיבה (ברירת מחדל 5, מקסימום 15)' }, account: str('כתובת של תיבה מסוימת; ריק = כל התיבות') }, []),
-    async run({ limit = 5, account }) {
-      const accounts = config.mail.accounts.filter((a) => !account || a.user === account)
-      if (!accounts.length) return `אין תיבה מחוברת בשם ${account}`
-      const n = Math.min(15, Math.max(1, limit))
-      const boxes = await Promise.all(accounts.map((a) => recentMail(a, n).catch((e) => [{ account: a.user, error: e.message }])))
-      return JSON.stringify(boxes.flat())
-    },
-  },
-  {
-    name: 'get_calendar',
-    enabled: calendarOn,
-    description: 'מחזיר אירועים קרובים מכל היומנים המחוברים של המשתמש.',
-    parameters: obj({ days: { type: 'number', description: 'כמה ימים קדימה (ברירת מחדל 7)' } }, []),
-    async run({ days = 7 }) {
-      return JSON.stringify(await upcomingEvents(Math.min(60, Math.max(1, days))))
-    },
-  },
-  {
-    name: 'gmail_search',
-    enabled: google.googleEnabled,
-    description: 'מחפש מיילים ב-Gmail עם תחביר החיפוש של Gmail (למשל "from:teacher is:unread", "newer_than:3d"). שאילתה ריקה = המיילים האחרונים. מחזיר id לקריאה עם gmail_read.',
-    parameters: obj({ query: str('שאילתת Gmail'), account: ACCOUNT, limit: { type: 'number', description: 'כמה תוצאות מכל חשבון (ברירת מחדל 5, מקסימום 15)' } }, []),
-    async run({ query = '', account, limit = 5 }) {
-      return JSON.stringify(await perAccount(account, (a) => google.gmailSearch(a, query, Math.min(15, Math.max(1, limit)))))
-    },
-  },
-  {
-    name: 'gmail_read',
-    enabled: google.googleEnabled,
-    description: 'קורא מייל מלא לפי id שהתקבל מ-gmail_search.',
-    parameters: obj({ account: str('החשבון שבו נמצא המייל'), id: str('מזהה המייל') }),
-    async run({ account, id }) {
-      return JSON.stringify(await google.gmailRead(one(account), id))
-    },
-  },
-  {
-    name: 'gmail_send',
-    enabled: google.googleEnabled,
-    description: 'שולח מייל מחשבון Gmail של המשתמש. המשתמש מקבל בקשת אישור עם הנוסח המלא לפני השליחה.',
-    parameters: obj({ account: ACCOUNT, to: str('כתובת הנמען'), subject: str('נושא'), body: str('גוף המייל, טקסט רגיל') }, ['to', 'subject', 'body']),
-    async run({ account, to, subject, body }, ctx) {
-      const from = writable(account)
-      if (!/^[^\s,;<>]+@[^\s,;<>]+\.[^\s,;<>]+$/.test(to)) return 'כתובת הנמען לא תקינה. נדרשת כתובת מייל אחת.'
-      // Sending in the user's name always needs their yes, whatever COMPUTER_MODE says.
-      if (!(await ctx.confirm(`לשלוח את המייל הזה?\n*מאת:* ${from}\n*אל:* ${to}\n*נושא:* ${subject}\n\n${body}`))) return 'המשתמש לא אישר את השליחה'
-      await google.gmailSend(from, { to, subject, body })
-      return 'נשלח'
-    },
-  },
-  {
-    name: 'calendar_add',
-    enabled: google.googleEnabled,
-    description: 'מוסיף אירוע ליומן Google של המשתמש.',
-    parameters: obj(
-      { account: ACCOUNT, title: str('כותרת'), start: str('התחלה, זמן מקומי YYYY-MM-DDTHH:MM'), end: str('סיום (ברירת מחדל: שעה אחרי ההתחלה)'), description: str('פירוט') },
-      ['title', 'start']
-    ),
-    async run({ account, ...event }) {
-      return `האירוע נוסף: ${await google.calendarAdd(writable(account), event)}`
-    },
-  },
-  {
-    name: 'tasks_list',
-    enabled: google.googleEnabled,
-    description: 'מציג את המשימות הפתוחות ב-Google Tasks.',
-    parameters: obj({ account: ACCOUNT }, []),
-    async run({ account }) {
-      return JSON.stringify(await perAccount(account, google.tasksList))
-    },
-  },
-  {
-    name: 'tasks_add',
-    enabled: google.googleEnabled,
-    description: 'מוסיף משימה ל-Google Tasks.',
-    parameters: obj({ account: ACCOUNT, title: str('המשימה'), due: str('תאריך יעד YYYY-MM-DD'), notes: str('הערות') }, ['title']),
-    async run({ account, ...task }) {
-      await google.tasksAdd(writable(account), task)
-      return 'המשימה נוספה'
-    },
-  },
-  {
-    name: 'classroom_assignments',
-    enabled: google.googleEnabled,
-    description: 'מטלות מ-Google Classroom: קורס, כותרת, תאריך הגשה והאם כבר הוגשה. זה המקור המדויק לשיעורי בית.',
-    parameters: obj({ account: ACCOUNT, days: { type: 'number', description: 'כמה ימים קדימה (ברירת מחדל 14)' } }, []),
-    async run({ account, days = 14 }) {
-      const work = await perAccount(account, (a) => google.classroomWork(a, Math.min(120, Math.max(1, days))))
-      return JSON.stringify(work.map((w) => (w.error ? w : { account: w.account, course: w.course, title: w.title, due: w.due ? w.due.toLocaleString('he-IL') : 'בלי תאריך', submitted: w.submitted, link: w.link })))
-    },
-  },
-  {
-    name: 'drive_search',
-    enabled: google.googleEnabled,
-    description: 'מחפש קבצים ב-Google Drive לפי תוכן או שם. מחזיר id לקריאה עם drive_read.',
-    parameters: obj({ query: str('מה לחפש'), account: ACCOUNT }, ['query']),
-    async run({ query, account }) {
-      return JSON.stringify(await perAccount(account, (a) => google.driveSearch(a, query)))
-    },
-  },
-  {
-    name: 'drive_read',
-    enabled: google.googleEnabled,
-    description: 'קורא את התוכן של מסמך Docs, גיליון Sheets, מצגת Slides או קובץ טקסט מ-Drive.',
-    parameters: obj({ account: str('החשבון שבו נמצא הקובץ'), id: str('מזהה הקובץ') }),
-    async run({ account, id }) {
-      return google.driveRead(one(account), id)
-    },
-  },
-  {
     name: 'create_image',
     enabled: create.imageEnabled,
     description: 'יוצר תמונה מתיאור ושולח אותה למשתמש בוואטסאפ. כתוב את התיאור באנגלית ובפירוט (נושא, סגנון, תאורה, זווית).',
@@ -572,311 +414,6 @@ ${await askGemini(question)}`
     },
   },
   {
-    name: 'wake_pc',
-    enabled: wakeEnabled,
-    description: 'מדליק את המחשב של המשתמש מרחוק (Wake-on-LAN), בלי אישור. ל"תדליק את המחשב", "תעיר את המחשב". המחשב עולה בתוך כדקה.',
-    parameters: obj({}),
-    async run() {
-      return wakePc()
-    },
-  },
-  {
-    name: 'open',
-    enabled: () => pc.pcEnabled(),
-    description: 'פותח משהו על המסך במחשב של המשתמש, מיד ובלי לבקש אישור: כתובת אינטרנט (https://...) או אחת מהאפליקציות: ' + Object.keys(APPS).join(', ') + '. ל"תפתח יוטיוב" / "תפתח לי את האתר של...". לחיפוש ביוטיוב בלי להפעיל: https://www.youtube.com/results?search_query=... כדי להפעיל שיר או סרטון יש play_youtube.',
-    parameters: obj({ target: str('כתובת https מלאה, או שם אפליקציה מהרשימה') }),
-    async run({ target }) {
-      const what = APPS[String(target).trim().toLowerCase()] || String(target).trim()
-      // Only a web address or a name from the fixed list gets through. Nothing here can run a command.
-      const isUrl = /^https?:\/\/[^\s"'<>|&^]+$/i.test(what)
-      if (!isUrl && !Object.values(APPS).includes(what)) return `אפשר לפתוח רק כתובת אינטרנט או אחת מאלה: ${Object.keys(APPS).join(', ')}. לכל דבר אחר יש run_command.`
-      await pc.openOnScreen(what)
-      return `נפתח: ${what}`
-    },
-  },
-  {
-    name: 'play_youtube',
-    enabled: () => pc.pcEnabled(),
-    description: 'מחפש ביוטיוב ומפעיל מיד את הסרטון הראשון בתוצאות, על המסך של המשתמש, בלי לבקש אישור. ל"תפעיל/תשים לי ביוטיוב X", "תפתח יוטיוב ותחפש X ותפעיל", שיר, זמר, קליפ. אם הוא רק רוצה לראות תוצאות בלי להפעיל, יש open עם כתובת חיפוש.',
-    parameters: obj({ query: str('מה לחפש: שם שיר, זמר, סרטון') }),
-    async run({ query }) {
-      const found = await firstYouTubeVideo(query)
-      // No video found: the results page is still better than nothing.
-      const url = found ? `https://www.youtube.com/watch?v=${found.id}` : `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`
-      await pc.openOnScreen(url)
-      return found ? `מתנגן: ${found.title || query} (${url})` : `לא מצאתי סרטון להפעלה, פתחתי את תוצאות החיפוש: ${url}`
-    },
-  },
-  {
-    name: 'run_command',
-    enabled: computerEnabled,
-    description: 'מריץ פקודת PowerShell על המחשב של המשתמש ומחזיר את הפלט. מוגבל ל-60 שניות.',
-    parameters: obj({ command: str('פקודת PowerShell') }),
-    async run({ command }, ctx) {
-      if (!(await approved(ctx, `להריץ את הפקודה?\n\`\`\`${command}\`\`\``))) return 'המשתמש לא אישר את הפקודה'
-      return pc.runCommand(command)
-    },
-  },
-  {
-    name: 'read_file',
-    enabled: computerEnabled,
-    description: 'קורא קובץ טקסט מהמחשב של המשתמש.',
-    parameters: obj({ path: str('נתיב מלא לקובץ') }),
-    async run({ path: p }, ctx) {
-      const shown = process.platform === 'win32' ? path.resolve(p) : p
-      if (!(await approved(ctx, `לקרוא את הקובץ ${shown}?`))) return 'המשתמש לא אישר'
-      return pc.readTextFile(p)
-    },
-  },
-  {
-    name: 'write_file',
-    enabled: computerEnabled,
-    description: 'כותב קובץ טקסט במחשב של המשתמש (דורס קובץ קיים).',
-    parameters: obj({ path: str('נתיב מלא לקובץ'), content: str('תוכן הקובץ') }),
-    async run({ path: p, content }, ctx) {
-      const where = pc.pcEnabled() && process.platform !== 'win32' ? p : path.resolve(p)
-      const exists = process.platform === 'win32' && fs.existsSync(where)
-      if (!(await approved(ctx, `${exists ? 'לדרוס' : 'ליצור'} את הקובץ ${where}? (${content.length} תווים)`))) return 'המשתמש לא אישר'
-      return pc.writeTextFile(p, content)
-    },
-  },
-  {
-    name: 'pc_media',
-    enabled: () => pc.pcEnabled(),
-    description: 'שליטה במדיה ובווליום במחשב: ניגון/עצירה, שיר הבא, שיר קודם, השתקה, הגברה/הנמכה, או קביעת ווליום באחוזים (0-100). ל"תעצור", "שיר הבא", "תגביר", "ווליום 30", "השתק".',
-    parameters: obj(
-      {
-        action: { type: 'string', enum: ['play_pause', 'next', 'previous', 'mute', 'volume_up', 'volume_down', 'set_volume'], description: 'הפעולה לביצוע' },
-        level: { type: 'number', description: 'רמת ווליום באחוזים (0-100, רלוונטי רק עבור set_volume)' },
-      },
-      ['action']
-    ),
-    async run({ action, level }) {
-      return pc.media(action, level)
-    },
-  },
-  {
-    name: 'pc_screenshot',
-    enabled: () => pc.pcEnabled(),
-    description: 'מצלם את מסך המחשב ושולח את התמונה למשתמש בוואטסאפ. ל"מה פתוח לי על המסך?", "תצלם את המסך".',
-    parameters: obj({ caption: str('כיתוב שיופיע עם התמונה בוואטסאפ (אופציונלי)') }, []),
-    async run({ caption = 'צילום מסך מהמחשב' }, ctx) {
-      if (!ctx.sendMedia) return 'אין יכולת לשלוח מדיה בשיחה הזאת'
-      const shot = await pc.screenshot(0)
-      try {
-        const buffer = fs.readFileSync(shot.file)
-        await ctx.sendMedia({ buffer, mime: 'image/png', caption })
-        return 'צילום המסך נשלח למשתמש בוואטסאפ'
-      } finally {
-        fs.rmSync(shot.file, { force: true })
-      }
-    },
-  },
-  {
-    name: 'play_spotify',
-    enabled: () => pc.pcEnabled(),
-    description: 'מחפש ומפעיל שיר, אמן או פלייליסט בספוטיפיי במחשב. ל"תשים בספוטיפיי X", "תנגן בספוטיפיי עומר אדם".',
-    parameters: obj({ query: str('שם השיר, האמן או הפלייליסט') }),
-    async run({ query }) {
-      return pc.playSpotify(query)
-    },
-  },
-  {
-    name: 'pc_launch_app',
-    enabled: () => pc.pcEnabled(),
-    description: 'פותח כל אפליקציה או תוכנה המותקנת במחשב לפי שם. ל"תפתח דיסקורד", "תפתח VS Code", "תפתח כרום".',
-    parameters: obj({ name: str('שם האפליקציה או התוכנה') }),
-    async run({ name }) {
-      const launched = await pc.launchApp(name)
-      return launched ? `האפליקציה "${launched}" נפתחה` : `לא נמצאה אפליקציה מותקנת בשם "${name}"`
-    },
-  },
-  {
-    name: 'pc_close_app',
-    enabled: computerEnabled,
-    description: 'סוגר אפליקציה או תוכנה שרצה במחשב. דורש אישור המשתמש בוואטסאפ. ל"תסגור את כרום".',
-    parameters: obj({ name: str('שם התוכנה או התהליך לסגירה (למשל chrome, spotify, discord)') }),
-    async run({ name }, ctx) {
-      if (!(await approved(ctx, `לסגור את התוכנה ${name} במחשב?`))) return 'המשתמש לא אישר את סגירת התוכנה'
-      return pc.closeApp(name)
-    },
-  },
-  {
-    name: 'pc_lock',
-    enabled: () => pc.pcEnabled(),
-    description: 'נועל את מסך המחשב מיד (Lock Workstation). ל"תנעל את המחשב".',
-    parameters: obj({}),
-    async run() {
-      await pc.lock()
-      return 'המחשב ננעל'
-    },
-  },
-  {
-    name: 'pc_unlock',
-    enabled: () => pc.pcEnabled(),
-    description: 'מבטל את נעילת המחשב: מדליק/מעיר את המסך, מעלה את מסך הנעילה לחלון הזנת הסיסמה ומקליד את הסיסמה (ברירת מחדל: naorkk132) עם Enter. ל"תבטל נעילה", "תבטל את הנעילה", "תפתח את המחשב", "תפתח את הנעילה".',
-    parameters: obj({ password: str('הסיסמה להקלדה (ברירת מחדל: naorkk132). כדי לפתוח רק את המסך בלי להזין סיסמה העבר "none"') }, []),
-    async run({ password = 'naorkk132' } = {}) {
-      return pc.unlock(password)
-    },
-  },
-  {
-    name: 'pc_display_off',
-    enabled: () => pc.pcEnabled(),
-    description: 'מכבה את מסכי המחשב מיד (שולח את המסכים למצב שינה / Standby מבלי לכבות או להרדים את המחשב עצמו). מתבצע מיד ללא שום בקשת אישור! ל"תכבה מסכים", "תכבה את המסך", "כיבוי מסכים", "לילה טוב".',
-    parameters: obj({
-      lock: { type: 'boolean', description: 'האם לנעול את מסך המחשב במקביל לכיבוי המסך (ברירת מחדל: false)' },
-    }),
-    async run({ lock = false } = {}) {
-      if (lock) await pc.lock()
-      return pc.sleepMonitors()
-    },
-  },
-  {
-    name: 'pc_display_on',
-    enabled: () => pc.pcEnabled(),
-    description: 'מדליק/מעיר את מסכי המחשב ממצב כיבוי או שינה. ל"תדליק מסכים", "תדליק את המסך", "הדלקת מסכים".',
-    parameters: obj({}),
-    async run() {
-      return pc.wakeMonitors()
-    },
-  },
-  {
-    name: 'pc_type',
-    enabled: () => pc.pcEnabled(),
-    description: 'מקליד טקסט, קוד PIN או סיסמה במחשב (בשדה הפעיל, במסך הנעילה, במסמך או בחיפוש). ל"תקליד 1234", "תקליד במחשב ...", "תקליד את הקוד ...".',
-    parameters: obj(
-      {
-        text: str('הטקסט, קוד ה-PIN או הסיסמה להקלדה'),
-        press_enter: { type: 'boolean', description: 'האם ללחוץ Enter בסיום ההקלדה (למשל לאישור קוד PIN או טופס)' },
-      },
-      ['text']
-    ),
-    async run({ text, press_enter = false }) {
-      return pc.typeText(text, press_enter)
-    },
-  },
-  {
-    name: 'pc_press_key',
-    enabled: () => pc.pcEnabled(),
-    description: 'לוחץ על מקש או צירוף מקשים במקלדת של המחשב. מקשים אפשריים: enter, esc, tab, space, backspace, up, down, left, right, f1-f12, ctrl+c, ctrl+v, alt+f4. ל"תלחץ אנטר", "תלחץ Enter", "תלחץ esc".',
-    parameters: obj({ key: str('שם המקש או הצירוף (למשל enter, esc, tab, space)') }),
-    async run({ key }) {
-      return pc.pressKey(key)
-    },
-  },
-  {
-    name: 'pc_status',
-    enabled: () => pc.pcEnabled(),
-    description: 'מציג את נתוני המחשב: אחוז שימוש במעבד, זיכרון RAM, סוללה, מקום פנוי בכוננים, והתוכנות שצורכות הכי הרבה משאבים. ל"מה מצב המחשב?", "למה המחשב איטי?".',
-    parameters: obj({}),
-    async run() {
-      return pc.status()
-    },
-  },
-  {
-    name: 'pc_speak',
-    enabled: () => pc.pcEnabled(),
-    description: 'מקריא טקסט בקול ברמקולים של המחשב (בקול של ElevenLabs אם מוגדר, או בקול של Windows). ל"תגיד במחשב שהאוכל מוכן".',
-    parameters: obj({ text: str('הטקסט להקראה ברמקולים') }),
-    async run({ text }) {
-      return pc.speakOnPc(text)
-    },
-  },
-  {
-    name: 'pc_timer',
-    enabled: () => pc.pcEnabled(),
-    description: 'מציג חלון טיימר ספירה לאחור מרחף על מסך המחשב שמשמיע צליל ומתריע בסיום. ל"טיימר 25 דקות ללמידה".',
-    parameters: obj(
-      {
-        minutes: { type: 'number', description: 'משך הטיימר בדקות' },
-        label: str('כותרת או נושא הטיימר (ברירת מחדל: טיימר)'),
-      },
-      ['minutes']
-    ),
-    run({ minutes, label = 'טיימר' }) {
-      return pc.startTimer(minutes, label)
-    },
-  },
-  {
-    name: 'pc_clipboard_get',
-    enabled: () => pc.pcEnabled(),
-    description: 'קורא את הטקסט שנמצא כרגע בלוח ההעתקה (Clipboard) של המחשב.',
-    parameters: obj({}),
-    async run() {
-      const text = await pc.getClipboard()
-      return text ? `תוכן לוח ההעתקה:\n${text.slice(0, 4000)}` : 'לוח ההעתקה ריק'
-    },
-  },
-  {
-    name: 'pc_clipboard_set',
-    enabled: () => pc.pcEnabled(),
-    description: 'מעתיק טקסט ללוח ההעתקה (Clipboard) של המחשב. ל"תעתיק לי את הקישור הזה".',
-    parameters: obj({ text: str('הטקסט להעתקה ללוח') }),
-    async run({ text }) {
-      await pc.setClipboard(text)
-      return 'הטקסט הועתק ללוח ההעתקה במחשב'
-    },
-  },
-  {
-    name: 'pc_power',
-    enabled: computerEnabled,
-    description: 'כיבוי, הפעלה מחדש, מעבר למצב שינה, או ביטול כיבוי של המחשב כולו. דורש אישור בוואטסאפ (למעט ביטול). ל"תכבה את המחשב בעוד חצי שעה", "מצב שינה למחשב". שים לב: לכיבוי מסכים בלבד אל תשתמש בכלי זה, אלא ב-pc_display_off הפועל מיד ללא אישור.',
-    parameters: obj(
-      {
-        action: { type: 'string', enum: ['shutdown', 'restart', 'sleep', 'cancel'], description: 'הפעולה: shutdown (כיבוי), restart (הפעלה מחדש), sleep (שינה), cancel (ביטול כיבוי)' },
-        minutes: { type: 'number', description: 'בעוד כמה דקות לבצע (ברירת מחדל 0 = מיד)' },
-      },
-      ['action']
-    ),
-    async run({ action, minutes = 0 }, ctx) {
-      if (action !== 'cancel') {
-        const labels = { shutdown: 'כיבוי', restart: 'הפעלה מחדש של', sleep: 'העברת' }
-        const prompt = `${labels[action] || action} המחשב ${minutes > 0 ? `בעוד ${minutes} דקות` : 'עכשיו'}?`
-        if (!(await approved(ctx, prompt))) return 'המשתמש לא אישר את הפעולה'
-      }
-      return pc.power(action, minutes)
-    },
-  },
-  {
-    name: 'pc_find_files',
-    enabled: () => pc.pcEnabled(),
-    description: 'מחפש קבצים במחשב (שולחן עבודה, הורדות, מסמכים, תמונות וכו\') לפי שם או סיומת.',
-    parameters: obj({ query: str('שם הקובץ או חלק ממנו'), folder: str('נתיב תיקייה ספציפית לחיפוש (אופציונלי)') }, ['query']),
-    async run({ query, folder }) {
-      return pc.findFiles(query, folder)
-    },
-  },
-  {
-    name: 'pc_organize_downloads',
-    enabled: computerEnabled,
-    description: 'מסדר אוטומטית את תיקיית ההורדות במחשב (Downloads) וממיין קבצים לתיקיות לפי סוג. דורש אישור המשתמש בוואטסאפ.',
-    parameters: obj({}),
-    async run(_args, ctx) {
-      if (!(await approved(ctx, 'לסדר את תיקיית ההורדות במחשב לפי סוגי קבצים?'))) return 'המשתמש לא אישר'
-      return pc.organizeDownloads()
-    },
-  },
-  {
-    name: 'pc_winget_search',
-    enabled: computerEnabled,
-    description: 'מחפש תוכנות זמינות להתקנה במחשב דרך מנהל החבילות של Windows (winget).',
-    parameters: obj({ query: str('שם התוכנה לחיפוש') }),
-    async run({ query }) {
-      return pc.wingetSearch(query)
-    },
-  },
-  {
-    name: 'pc_winget_install',
-    enabled: computerEnabled,
-    description: 'מתקין תוכנה במחשב דרך מנהל החבילות של Windows (winget) לפי מזהה החבילה (Id). דורש אישור המשתמש בוואטסאפ.',
-    parameters: obj({ id: str('מזהה החבילה המדויק מתוך pc_winget_search, למשל "VideoLAN.VLC"') }),
-    async run({ id }, ctx) {
-      if (!(await approved(ctx, `להתקין במחשב את "${id}" דרך winget?`))) return 'המשתמש לא אישר את ההתקנה'
-      return pc.wingetInstall(id)
-    },
-  },
-  {
     name: 'get_weather',
     description: 'מזג אוויר נוכחי ותחזית לימים הקרובים לעיר או אזור (בישראל ובעולם). ל"מה מזג האוויר בתל אביב?", "ירד גשם מחר?".',
     parameters: obj({ city: str('שם העיר או היישוב (בעברית או באנגלית)') }),
@@ -908,83 +445,6 @@ ${await askGemini(question)}`
     },
   },
   {
-    name: 'pc_send_file',
-    enabled: () => pc.pcEnabled(),
-    description: 'שולח קובץ מהמחשב (מתיקיית Downloads, Desktop, Documents או נתיב ספציפי) ישירות אל המשתמש בוואטסאפ (מסמכי PDF, תמונות, שירים, סרטונים, קבצי טקסט או ארכיונים). ל"שלח לי את הקובץ X", "תשלח לי לווצאפ את ה-PDF שהורדתי".',
-    parameters: obj({ path: str('נתיב מלא לקובץ או שם הקובץ לחיפוש במחשב'), caption: str('כיתוב שיופיע עם הקובץ בוואטסאפ (אופציונלי)') }, ['path']),
-    async run({ path: filePath, caption }, ctx) {
-      if (!ctx.sendMedia) return 'אין יכולת לשלוח מדיה בשיחה הזאת'
-      const got = await pc.readUserFile(filePath)
-      if (!got || got.error === 'missing') return `לא נמצא קובץ מתאים בשם "${filePath}" בתיקיות המשתמש`
-      if (got.error === 'notfile') return `הנתיב "${got.path}" אינו קובץ`
-      if (got.error === 'toobig') return `הקובץ גדול מדי לשליחה בוואטסאפ (${(got.size / (1024 * 1024)).toFixed(1)} MB, מקסימום 50MB)`
-      await ctx.sendMedia({ buffer: got.data, mime: got.mime, caption: caption || got.name, name: got.name })
-      return `הקובץ "${got.name}" (${(got.size / (1024 * 1024)).toFixed(2)} MB) נשלח בהצלחה לווצאפ!`
-    },
-  },
-  {
-    name: 'pc_webcam_snap',
-    enabled: () => pc.pcEnabled(),
-    description: 'מצלם תמונה בזמן אמת ממצלמת הרשת של המחשב (Webcam) ושולח אותה למשתמש בוואטסאפ. מאפשר בדיקת אבטחה בחדר כשהמשתמש רחוק מהמחשב. ל"תצלם מהמצלמת רשת", "צלם לי את החדר מהמחשב".',
-    parameters: obj({ caption: str('כיתוב שיופיע עם התמונה (אופציונלי)'), device: str('שם מצלמה ספציפי אם יש יותר מאחת (אופציונלי)') }, []),
-    async run({ caption = 'תמונה ממצלמת הרשת במחשב', device }, ctx) {
-      if (!ctx.sendMedia) return 'אין יכולת לשלוח מדיה בשיחה הזאת'
-      const snap = await pc.webcamSnap(device)
-      try {
-        const buffer = fs.readFileSync(snap.file)
-        await ctx.sendMedia({ buffer, mime: 'image/jpeg', caption })
-        return 'התמונה ממצלמת הרשת נשלחה למשתמש בוואטסאפ'
-      } finally {
-        fs.rmSync(snap.file, { force: true })
-      }
-    },
-  },
-  {
-    name: 'pc_screen_record',
-    enabled: () => pc.pcEnabled(),
-    description: 'מקליט סרטון קצר מהמסך (2 עד 6 שניות) ושולח אותו כקובץ וידאו MP4 למשתמש בוואטסאפ. ל"תקליט לי את המסך לכמה שניות", "תראה לי מה קורה במסך בווידאו".',
-    parameters: obj({ seconds: { type: 'number', description: 'מספר שניות להקלטה (2 עד 6, ברירת מחדל 3)' }, caption: str('כיתוב לווידאו (אופציונלי)') }, []),
-    async run({ seconds = 3, caption = 'הקלטת מסך מהמחשב' }, ctx) {
-      if (!ctx.sendMedia) return 'אין יכולת לשלוח מדיה בשיחה הזאת'
-      const rec = await pc.screenRecord(seconds)
-      try {
-        const buffer = fs.readFileSync(rec.file)
-        await ctx.sendMedia({ buffer, mime: 'video/mp4', caption, name: 'screen-recording.mp4' })
-        return 'סרטון הקלטת המסך נשלח למשתמש בוואטסאפ'
-      } finally {
-        fs.rmSync(rec.file, { force: true })
-      }
-    },
-  },
-  {
-    name: 'pc_top_processes',
-    enabled: () => pc.pcEnabled(),
-    description: 'מציג את התהליכים והתוכנות שצורכים הכי הרבה זיכרון (RAM) ומעבד (CPU) במחשב, עם אפשרות לסגור תהליך סורר. ל"מי טוחן לי את המחשב?", "אילו תוכנות לוקחות הכי הרבה RAM?", "תסגור את תהליך מספר X".',
-    parameters: obj(
-      {
-        action: { type: 'string', enum: ['list', 'kill'], description: 'הפעולה: list (הצגת תהליכים מובילים) או kill (סגירת תהליך בכוח)' },
-        target: str('מזהה תהליך (PID) או שם התוכנה לסגירה במקרה של action=kill'),
-        count: { type: 'number', description: 'כמות התהליכים להצגה (ברירת מחדל 10)' },
-      },
-      ['action']
-    ),
-    async run({ action, target, count = 10 }, ctx) {
-      if (action === 'kill') {
-        if (!target) return 'נא לציין PID או שם תהליך לסגירה'
-        if (!(await approved(ctx, `לסגור בכוח את התהליך ${target}?`))) return 'המשתמש לא אישר'
-        return pc.killProcess(target)
-      }
-      const list = await pc.topProcesses(count)
-      if (!list.length) return 'לא נמצאו תהליכים'
-      const lines = ['*התוכנות והתהליכים המובילים בצריכת משאבים:*']
-      for (const p of list) {
-        const title = p.MainWindowTitle ? ` ("${p.MainWindowTitle.slice(0, 35)}")` : ''
-        lines.push(`• *PID ${p.Id}* | ${p.ProcessName}${title}: ${p.MemoryMB} MB RAM | ${p.CpuSeconds}s CPU`)
-      }
-      return lines.join('\n')
-    },
-  },
-  {
     name: 'israel_red_alert',
     description: 'בדיקת התרעות צבע אדום ואזעקות בזמן אמת והיסטוריה לפיקוד העורף בישראל (אפשרות לסינון לפי יישוב, עיר או אזור). ל"היו אזעקות היום?", "יש צבע אדום עכשיו?", "היה צבע אדום בחיפה?".',
     parameters: obj({ city: str('שם עיר או יישוב לסינון (למשל חיפה, קריית שמונה, גליל). ריק = כל הארץ'), days: { type: 'number', description: 'כמה ימים אחורה לבדוק (1 = היום, עד 3 ימים)' } }, []),
@@ -1006,50 +466,6 @@ ${await askGemini(question)}`
     parameters: obj({ line: str('מספר הקו (למשל 16, 1, 480)'), city: str('עיר או אזור לסינון (אופציונלי)') }, ['line']),
     async run({ line, city }) {
       return services.getTransitInfo(line, city)
-    },
-  },
-  {
-    name: 'pc_browser_tabs',
-    enabled: () => pc.pcEnabled(),
-    description: 'ניהול לשוניות בדפדפן (Chrome, Edge וכו\'): הצגת רשימת הלשוניות הפתוחות עם קישורים ישירים לטלפון, פתיחת לשונית חדשה, סגירת לשונית (או הלשונית הפעילה), מעבר בין לשוניות ושחזור לשונית שנסגרה. ל"איזה טאבים פתוחים לי במחשב?", "תסגור את הלשונית של יוטיוב", "פתח לשונית חדשה".',
-    parameters: obj(
-      {
-        action: {
-          type: 'string',
-          enum: ['list', 'close', 'open', 'activate', 'reopen', 'next', 'prev'],
-          description: 'הפעולה: list (רשימת לשוניות), close (סגירת לשונית או הלשונית הפעילה), open (פתיחת לשונית חדשה), activate (מעבר ללשונית), reopen (שחזור לשונית אחרונה שנסגרה), next (לשונית הבאה), prev (לשונית קודמת)',
-        },
-        target: str('כותרת, כתובת URL או מזהה לשונית לסגירה או מעבר (עבור close/activate)'),
-        url: str('כתובת אתר לפתיחה (עבור action=open)'),
-      },
-      ['action']
-    ),
-    async run({ action, target, url }) {
-      if (action === 'list') {
-        const tabs = await pc.getBrowserTabs()
-        if (!tabs.length) return 'לא זוהו לשוניות בדפדפן מחובר. ניתן לפתוח לשונית חדשה (open) או לסגור את הנוכחית (close).'
-        const lines = [`🌐 *לשוניות פתוחות בדפדפן (סה"כ ${tabs.length}):*`]
-        for (const t of tabs) {
-          lines.push(`• *${t.title}*\n  ${t.url}`)
-        }
-        return lines.join('\n')
-      }
-      if (action === 'close') return pc.closeBrowserTab(target)
-      if (action === 'open') return pc.openBrowserTab(url)
-      if (action === 'activate') return pc.activateBrowserTab(target)
-      if (action === 'reopen') {
-        await pc.act({ type: 'key', keys: 'ctrl+shift+t' })
-        return 'נשלחה פקודה לשחזור הלשונית האחרונה שנסגרה (Ctrl+Shift+T)'
-      }
-      if (action === 'next') {
-        await pc.act({ type: 'key', keys: 'ctrl+tab' })
-        return 'מעבר ללשונית הבאה (Ctrl+Tab)'
-      }
-      if (action === 'prev') {
-        await pc.act({ type: 'key', keys: 'ctrl+shift+tab' })
-        return 'מעבר ללשונית הקודמת (Ctrl+Shift+Tab)'
-      }
-      throw new Error(`פעולה לא מוכרת: ${action}`)
     },
   },
   {
@@ -1144,8 +560,12 @@ ${await askGemini(question)}`
   },
 ]
 
+export { firstYouTubeVideo }
+
 const isOn = (t) => !t.enabled || t.enabled()
 
+tools.push(...googleTools)
+tools.push(...pcTools)
 tools.push(...memoryTools)
 tools.push(...phoneTools)
 
@@ -1188,6 +608,8 @@ const BRIEF = {
   list_tasks: 'List scheduled tasks.',
   cancel_task: 'Cancel a scheduled task by id.',
   send_whatsapp: 'Send the user a WhatsApp message right now. For when he is talking to you from elsewhere (Discord) and wants something on WhatsApp. A future reminder is add_reminder, which also arrives on WhatsApp.',
+  study_plan: 'Build a study plan for an exam (topics over the days left, last day review). Show the draft; add_to_calendar=true adds it after his approval.',
+  week_ahead: 'Next week (Sun-Sat): saved exams, Classroom deadlines, calendar. Also sent on its own Saturday evening.',
   get_timetable: 'The user\'s school timetable for a day from Webtop: time, lesson, subject, room, teacher, cancellations. day = today, tomorrow, Hebrew/English weekday or YYYY-MM-DD (this week only). A reminder before each lesson is already sent automatically.',
   send_whatsapp_to: 'Send a WhatsApp message in the user\'s name to someone else (a contact name or a number). Only when he explicitly asked to send it; "draft" means draft only. He approves the exact recipient and text first.',
   send_discord: 'Send the user a private Discord message through his Discord bot; speak=true also says it aloud in the voice room. For when he is on WhatsApp and wants something on Discord.',
@@ -1231,7 +653,7 @@ const BRIEF = {
   pc_launch_app: 'Launch any installed PC application by name.',
   pc_close_app: 'Close a running application on the PC (requires user approval).',
   pc_lock: 'Lock the PC workstation screen.',
-  pc_unlock: 'Wake the screen, lift the lock screen, and enter password (defaults to naorkk132).',
+  pc_unlock: 'Wake the screen, lift the lock screen, and enter the saved password (PC_UNLOCK_PASSWORD).',
   pc_display_off: 'Turn off PC monitors/screens immediately into standby without sleeping the PC.',
   pc_display_on: 'Turn on / wake PC monitors/screens immediately.',
   pc_type: 'Type text or a PIN into the active window or lock screen; press_enter optionally presses Enter.',

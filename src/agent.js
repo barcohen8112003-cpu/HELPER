@@ -7,7 +7,9 @@ const PERSONA_SHORT = path.join(ROOT, 'persona.short.md')
 import { calendarOn } from './calendar.js'
 import { googleAccounts, googleEnabled } from './google.js'
 import { state, save } from './store.js'
-import { llm, ask, LONG_PATIENCE, Aborted } from './llm.js'
+import { llm, ask, LONG_PATIENCE, Aborted, chatModel } from './llm.js'
+import { polish } from './style.js'
+import { recordTurn } from './metrics.js'
 import { activeTools, toolDefs } from './tools.js'
 import { canSpeak } from './media.js'
 import { vmEnabled } from './vm.js'
@@ -65,6 +67,7 @@ Format: reply in the user's language (Hebrew by default), short like a WhatsApp 
 Working rules:
 ${sessionEnabled() ? `- Webtop (${config.webtop.url}): fetch_page on this site reads the user's signed-in session (grades, absences, homework, messages); get_timetable gives his lesson timetable for a day. Read only. If the tool says it is not signed in, tell him to sign in again ${config.webtop.cloud ? 'on the Webtop page of the settings site. Never ask him to send the password in chat' : 'in the Webtop window'}.\n` : ''}- Do everything the message asks. If it asks for two things (a reminder and something to remember), make both tool calls, in the same step.
 - For any weekday or relative date ("Wednesday", "next week"), take the date from the list of coming days above. Do not work it out yourself.
+- Long work (controlling the computer or phone, a shopping errand, research across many sites, code to write and run) goes to start_background_task, so he can keep talking to you. Answer him in one line that it started. Quick lookups you do yourself.
 - Be economical: every tool call costs time. Use the fewest calls that answer the question, at most 3 for a lookup, then answer with what you have and say what you did not check.
 - Older tool output is shortened after you read it. When a page gives you a fact you need (a price, a date), carry it forward in your own words.
 - Save lasting facts with remember without asking. A reminder is a fixed text; schedule_task is a real check you run later.
@@ -115,7 +118,7 @@ ${googleEnabled() ? `• Google - חשבונות מחוברים: ${googleAccount
 ${config.githubToken ? '• GitHub - github_get, קריאה בלבד.' : ''}
 ${vmEnabled() ? '• מחשב משלך - vm_run מריץ פקודות במכונת לינוקס שהיא כולה שלך (Ubuntu, sudo, אינטרנט). השתמש בה בחופשיות ובלי לשאול כשהרצת קוד אמיתי עדיפה על ניחוש: חישובים, סקריפטים, קבצי נתונים, הורדות, ניסויים. אין לה גישה לקבצים של המשתמש. תוצאות שולחים עם vm_send_file.' : ''}
 ${sessionEnabled() ? `• Webtop (${config.webtop.url}): fetch_page על כתובות באתר הזה קורא מהחיבור המחובר של המשתמש (ציונים, היעדרויות, שיעורי בית, הודעות). הוא לא משתנה בשבילך: רק קריאה. אם הכלי אומר שלא מחובר, תגיד למשתמש להיכנס מחדש ${config.webtop.cloud ? `בדף Webtop באתר ההגדרות${config.desktop.enabled ? ', או בשולחן העבודה בענן (עכבר ומקלדת, לא צילום)' : ''}. אל תבקש ממנו לשלוח את הסיסמה בצ׳אט` : 'בחלון ה-Webtop'}.\n` : ''}${config.elevenlabs.apiKey || config.imageModel ? '• ליצור - תמונות (create_image), סרטונים קצרים (create_video), מוזיקה (create_music) ואפקטים קוליים (create_sound). הקובץ נשלח למשתמש ישירות, אל תתאר אותו במקום לשלוח. לא יוצרים תמונות או סרטונים של אנשים אמיתיים בלי שהמשתמש אמר שזה הוא עצמו או שיש לו הסכמה.\n' : ''}${pcEnabled() ? `• שליטה במחשב Windows:
-  - מיידית: pc_media (ווליום, נגינה/עצירה, שיר הבא/הקודם), pc_screenshot (צילום מסך ושליחה בוואטסאפ), pc_screen_record (הקלטת וידאו קצר מהמסך לשליחה בוואטסאפ), pc_webcam_snap (צילום ממצלמת הרשת ושליחה בוואטסאפ), pc_send_file (שליחת קובץ מהמחשב ישירות לוואטסאפ), play_spotify (חיפוש וניגון בספוטיפיי), pc_launch_app (פתיחת כל תוכנה מותקנת), pc_lock (נעילת מסך), pc_unlock (ביטול נעילה, הדלקת המסך והזנת סיסמה, ברירת מחדל naorkk132), pc_display_off (כיבוי מסכים מידי ללא בקשת אישור כלל - מבצע מיד ב"לילה טוב" או "תכבה מסכים"), pc_display_on (הדלקת מסכים מידית ללא אישור), pc_type (הקלדת טקסט, קוד PIN או סיסמה במחשב), pc_press_key (לחיצה על מקש במקלדת, כגון enter, esc, space), pc_status (מעבד, זיכרון, דיסקים וסוללה), pc_top_processes (בדיקת תוכנות זוללות מעבד ו-RAM וסגירתן), pc_browser_tabs (ניהול לשוניות בדפדפן - רשימה, פתיחה, סגירה ומעבר), pc_speak (הקראה ברמקולים), pc_timer (טיימר על המסך עם התראה), pc_clipboard_get / pc_clipboard_set (לוח העתקה), pc_find_files (חיפוש קבצים).
+  - מיידית: pc_media (ווליום, נגינה/עצירה, שיר הבא/הקודם), pc_screenshot (צילום מסך ושליחה בוואטסאפ), pc_screen_record (הקלטת וידאו קצר מהמסך לשליחה בוואטסאפ), pc_webcam_snap (צילום ממצלמת הרשת ושליחה בוואטסאפ), pc_send_file (שליחת קובץ מהמחשב ישירות לוואטסאפ), play_spotify (חיפוש וניגון בספוטיפיי), pc_launch_app (פתיחת כל תוכנה מותקנת), pc_lock (נעילת מסך), pc_unlock (ביטול נעילה, הדלקת המסך והזנת הסיסמה השמורה), pc_display_off (כיבוי מסכים מידי ללא בקשת אישור כלל - מבצע מיד ב"לילה טוב" או "תכבה מסכים"), pc_display_on (הדלקת מסכים מידית ללא אישור), pc_type (הקלדת טקסט, קוד PIN או סיסמה במחשב), pc_press_key (לחיצה על מקש במקלדת, כגון enter, esc, space), pc_status (מעבד, זיכרון, דיסקים וסוללה), pc_top_processes (בדיקת תוכנות זוללות מעבד ו-RAM וסגירתן), pc_browser_tabs (ניהול לשוניות בדפדפן - רשימה, פתיחה, סגירה ומעבר), pc_speak (הקראה ברמקולים), pc_timer (טיימר על המסך עם התראה), pc_clipboard_get / pc_clipboard_set (לוח העתקה), pc_find_files (חיפוש קבצים).
   - בפעולות בעלות השפעה הכלים מבקשים אישור בוואטסאפ בעצמם (אל תשאל לפני בטקסט): pc_close_app (סגירת תוכנה), pc_power (כיבוי/שינה/הפעלה מחדש), pc_organize_downloads (סידור תיקיית ההורדות), pc_winget_search / pc_winget_install (התקנת תוכנות), run_command, read_file, write_file, ו-use_computer (שליטה אוטונומית בעכבר ומקלדת).
 ${process.platform === 'win32' ? '' : '  - אם כלי אומר שהמחשב הביתי לא מחובר, אמור זאת בבירור. אל תמציא שהפעולה בוצעה. להדלקה: wake_pc.\n'}` : '• שליטה במחשב כבויה.\n'}• בית חכם (Google Home) - שליטה במכשירי בית חכם המחוברים ב-Google Home בדפדפן: google_home_devices (בדיקת מצב המכשירים, אורות ורמקולים), google_home_control (הדלקה, כיבוי או החלפת מצב של מכשיר, למשל "תדליק את האור בחדר", "תכבה את האורות", "תפעיל את הרמקול בסלון").${config.googleHome.cloud ? ` אם הכלי אומר ש-Google Home לא מחובר, תגיד להיכנס מדף Google Home באתר ההגדרות${config.desktop.enabled ? ' או משולחן העבודה בענן' : ''}. אל תבקש את הסיסמה בצ׳אט.` : ''}
 ${phoneRoutePrompt(false)}
@@ -262,7 +265,7 @@ async function converse(messages, ctx) {
     const assistant = { role: 'assistant', content: msg.content ?? '' }
     if (msg.tool_calls?.length) assistant.tool_calls = msg.tool_calls
     messages.push(assistant)
-    if (!assistant.tool_calls) return assistant.content
+    if (!assistant.tool_calls) return (assistant.content = polish(assistant.content))
     // Consecutive parallel-safe calls run together; anything else (approvals, writes, anything that changes
     // state) waits its turn, so the order the model asked for is the order things happen in.
     const calls = assistant.tool_calls
@@ -308,7 +311,7 @@ async function closingAnswer(messages) {
     undefined,
     LONG_PATIENCE
   )
-  const reply = msg.content?.trim() || 'לא הצלחתי לסיים את הבדיקה. נסה לשאול שאלה ממוקדת יותר.'
+  const reply = polish(msg.content?.trim() || 'לא הצלחתי לסיים את הבדיקה. נסה לשאול שאלה ממוקדת יותר.')
   messages.push({ role: 'assistant', content: reply })
   return reply
 }
@@ -317,6 +320,7 @@ async function closingAnswer(messages) {
 // image: optional data URL, sent to the model for this turn only and kept out of the saved history.
 export async function runTurn(userText, ctx, image) {
   const mark = state.history.length
+  const started = Date.now()
   const userMsg = { role: 'user', content: image ? [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: image } }] : userText }
   state.history.push(userMsg)
   try {
@@ -325,6 +329,7 @@ export async function runTurn(userText, ctx, image) {
     for (const m of state.history) {
       if (m.role === 'tool' && Array.isArray(m.content)) m.content = m.content.find((p) => p.type === 'text')?.text || 'צילום מסך'
     }
+    recordTurn({ ms: Date.now() - started, tools: state.history.slice(mark).filter((m) => m.role === 'tool').length, model: chatModel() })
     trimHistory()
     save()
     // After the answer is on its way: note lasting facts from this message as candidates. Never blocks or fails the turn.
@@ -348,6 +353,21 @@ export async function runTask(instruction, ctx) {
   const reply = (await converse([{ role: 'user', content: TASK_PROMPT + instruction }], ctx)).trim()
   if (!reply || /^SKIP\b/.test(reply)) return ''
   state.history.push({ role: 'user', content: `[משימה מתוזמנת רצה: ${instruction}]` }, { role: 'assistant', content: reply })
+  trimHistory()
+  save()
+  return reply
+}
+
+const BACKGROUND_PROMPT = `[משימת רקע. המשתמש ביקש אותה בצ'אט וממשיך לדבר איתך בינתיים; הוא לא רואה את השלבים.]
+בצע אותה עם הכלים שלך עד הסוף. פעולה שמשנה משהו בעולם (תשלום, שליחה, מחיקה) מבקשת אישור כרגיל.
+בסוף כתוב הודעה אחת קצרה עם התוצאה: מה עשית, מה מצאת, קישורים, ומה לא הצלחת לבדוק.
+המשימה: `
+
+// A background task: its own conversation (it does not see the chat), and only its result joins the history,
+// so the user can answer it like any other message.
+export async function runBackground(title, instruction, ctx) {
+  const reply = (await converse([{ role: 'user', content: BACKGROUND_PROMPT + instruction }], ctx)).trim()
+  state.history.push({ role: 'user', content: `[משימת רקע הסתיימה: ${title}]` }, { role: 'assistant', content: reply })
   trimHistory()
   save()
   return reply

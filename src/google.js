@@ -24,6 +24,8 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/tasks',
   'https://www.googleapis.com/auth/drive.readonly',
+  // Only the files Helper itself creates: the daily encrypted backup (src/backup.js).
+  'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/classroom.courses.readonly',
   'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
   'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly',
@@ -49,6 +51,7 @@ export async function removeAccount(email) {
   delete accounts[email]
   fs.writeFileSync(FILE, JSON.stringify(accounts, null, 2))
   tokens.delete(email)
+  status.delete(email)
   if (token) await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', body: new URLSearchParams({ token }), signal: AbortSignal.timeout(15000) }).catch(() => {})
 }
 
@@ -72,6 +75,8 @@ export async function connectWithCode(code, redirectUri) {
   const info = await (await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${data.access_token}` }, signal: AbortSignal.timeout(30000) })).json()
   if (!info.email) throw new Error('לא התקבלה כתובת מייל')
   saveAccount(info.email, data.refresh_token)
+  tokens.delete(info.email)
+  status.set(info.email, { ok: true, at: Date.now() })
   return info.email
 }
 
@@ -87,21 +92,51 @@ export function resolveAccounts(account) {
 }
 
 const tokens = new Map()
+// { [email]: { ok, error, at } }: the result of the last real token exchange with Google, per account.
+// A stored key is not proof the account works: Google can expire or revoke it at any time.
+const status = new Map()
 
-export async function accessToken(email) {
+export const googleAccountStatus = (email) => status.get(email) || null
+
+// `fresh` skips the cached access token, so the stored key itself is tested against Google.
+export async function accessToken(email, { fresh = false } = {}) {
   const cached = tokens.get(email)
-  if (cached && cached.expires > Date.now() + 60000) return cached.token
+  if (!fresh && cached && cached.expires > Date.now() + 60000) return cached.token
   const refresh = load()[email]?.refresh_token
   if (!refresh) throw new Error(`החשבון ${email} לא מחובר`)
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    body: new URLSearchParams({ client_id: config.google.clientId, client_secret: config.google.clientSecret, refresh_token: refresh, grant_type: 'refresh_token' }),
-    signal: AbortSignal.timeout(30000),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(`החיבור לגוגל של ${email} נכשל (${data.error}). צריך לחבר מחדש עם npm run google`)
+  let res, data
+  try {
+    res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      body: new URLSearchParams({ client_id: config.google.clientId, client_secret: config.google.clientSecret, refresh_token: refresh, grant_type: 'refresh_token' }),
+      signal: AbortSignal.timeout(30000),
+    })
+    data = await res.json()
+  } catch (e) {
+    // No answer from Google (offline, timeout) says nothing about the key, so the last known state is kept.
+    throw new Error(`אין תשובה מגוגל עבור ${email}: ${e.message}`)
+  }
+  if (!res.ok) {
+    tokens.delete(email)
+    status.set(email, { ok: false, error: data.error || `HTTP ${res.status}`, at: Date.now() })
+    const why = data.error === 'invalid_grant' ? 'המפתח פג או בוטל' : data.error
+    throw Object.assign(new Error(`החיבור לגוגל של ${email} נכשל (${why}). צריך לחבר מחדש עם npm run google`), {
+      hint: `צריך לחבר מחדש את ${email}: באתר ההגדרות, Google Workspace, "הוסף חשבון".`,
+    })
+  }
+  status.set(email, { ok: true, at: Date.now() })
   tokens.set(email, { token: data.access_token, expires: Date.now() + data.expires_in * 1000 })
   return data.access_token
+}
+
+// Tests every connected account against Google, at most once per `maxAgeMs` each. Never throws.
+export async function checkGoogleAccounts({ maxAgeMs = 10 * 60000 } = {}) {
+  await Promise.all(googleAccounts().map(async (email) => {
+    const last = status.get(email)
+    if (last && Date.now() - last.at < maxAgeMs) return
+    await accessToken(email, { fresh: true }).catch(() => {})
+  }))
+  return Object.fromEntries(googleAccounts().map((email) => [email, status.get(email) || null]))
 }
 
 async function api(email, url, { body, text } = {}) {

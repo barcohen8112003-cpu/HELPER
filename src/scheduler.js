@@ -8,6 +8,8 @@ import { inQuietHours } from './outbox.js'
 import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice, webtopKeepAliveFailure } from './session.js'
 import { googleHomeKeepAlive, isGoogleHomeLoginError, planGoogleHomeLoginNotice, clearGoogleHomeLoginNotice } from './google-home.js'
 import { lessonReminders } from './lessons.js'
+import { costTick } from './metrics.js'
+import { weeklyDue, weekAhead, deadlineReminders, isoDay } from './study.js'
 import { phoneEnabled, phoneKeepAlive } from './phone.js'
 
 const NEWS_WINDOW = 4 * 60
@@ -21,7 +23,6 @@ import { googleAccounts, googleEnabled, gmailSince, classroomWork, calendarChang
 const DOWN_AFTER = 3
 const LATE_AFTER = 5 * 60000
 const HOMEWORK_POLL = 5 * 60000
-const NUDGE_BEFORE = 24 * 3600000
 
 const CALENDAR_POLL = 15 * 60000
 const GOOGLE_CALENDAR_POLL = 60000
@@ -302,10 +303,12 @@ async function homework(notify) {
   hw.open = work.filter((w) => !w.submitted && w.due).map((w) => ({ course: w.course, title: w.title, due: dueText(w.due) }))
   if (fresh.length) await notify(`📚 *מטלה חדשה:*\n${fresh.map((w) => `• ${w.title} (${w.course})${w.due ? ` - להגשה ב${dueText(w.due)}` : ''}`).join('\n')}`, false, `homework-new:${fresh.map((w) => w.id).join(',')}`)
 
-  for (const w of work) {
-    if (w.submitted || !w.due || w.due - Date.now() > NUDGE_BEFORE || hw.nudged.includes(w.id)) continue
-    hw.nudged.push(w.id)
-    await notify(`📚 ההגשה של *${w.title}* (${w.course}) היא ב${dueText(w.due)}. אין לי אישור שהוגש.\n${w.link}`, false, `homework-due:${w.id}`)
+  // The day before, and again on the morning it is due. Only while Classroom shows it as not submitted.
+  for (const { w, kind } of deadlineReminders(work, hw.nudged)) {
+    hw.nudged.push(`${w.id}:${kind}`)
+    const when = w.due.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
+    const text = kind === 'morning' ? `📚 היום עד ${when} צריך להגיש את *${w.title}* (${w.course}). עדיין לא רואה שהוגש.` : `📚 ההגשה של *${w.title}* (${w.course}) היא ב${dueText(w.due)}. אין לי אישור שהוגש.`
+    await notify(`${text}\n${w.link}`, false, `homework-${kind}:${w.id}`)
   }
   hw.nudged = hw.nudged.slice(-500)
   save()
@@ -355,6 +358,16 @@ async function checkIn(notify, runTask) {
   await notify(reply)
 }
 
+// Saturday evening: the coming week in one message (assignments, exams, calendar).
+async function weekly(notify) {
+  const s = (state.weekly ??= { lastDate: '' })
+  if (!weeklyDue(new Date(), process.env.WEEKLY_REVIEW_TIME, s.lastDate)) return
+  s.lastDate = isoDay(new Date())
+  save()
+  const text = await weekAhead()
+  if (text) await notify(text, false, `weekly:${s.lastDate}`)
+}
+
 async function news(notify) {
   if (!/^\d{1,2}:\d{2}$/.test(config.newsTime)) return
   const now = new Date()
@@ -386,7 +399,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, costTick, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {

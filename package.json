@@ -8,6 +8,9 @@
     "start": "node src/index.js",
     "google": "node src/google-connect.js",
     "check": "node src/selftest.js",
+    "check:all": "node scripts/check-all.mjs",
+    "check:backup": "node src/backup-selftest.js",
+    "check:style": "node src/style-selftest.js",
     "check:toolkit": "node src/toolkit/_selftest.js",
     "check:memory": "node src/memory-selftest.js",
     "check:errand": "node src/errand-selftest.js",
@@ -17,7 +20,10 @@
     "check:google-home": "node src/google-home-selftest.js",
     "check:phone": "node src/phone-selftest.js",
     "check:desktop": "node src/cloud-desktop-selftest.js",
-    "check:phone-app": "node src/phone-app-selftest.js"
+    "check:phone-app": "node src/phone-app-selftest.js",
+    "check:study": "node src/study-selftest.js",
+    "check:approval": "node src/approval-selftest.js",
+    "check:logs": "node src/logs-selftest.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "~6.7.24",

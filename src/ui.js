@@ -13,13 +13,16 @@ import { setGoogleHomeLoginUrl } from './google-home.js'
 import { captureFrame, ensureCloudBrowser, errandCloudOn, webtopInput } from './webtop-browser.js'
 import { desktopShellHtml, isDesktopPath, proxyDesktopHttp, proxyDesktopUpgrade } from './cloud-desktop.js'
 import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
-import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
+import { googleAccounts, authUrl, connectWithCode, removeAccount, checkGoogleAccounts, googleAccountStatus } from './google.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
-import { chatModel } from './llm.js'
+import { chatModel, llmHealth } from './llm.js'
 import { ago } from './status.js'
 import { handleDashboard } from './dashboard/api.js'
-import { handlePhoneUpgrade } from './phone-app.js'
+import { handlePhoneUpgrade, phoneAppConnected, phoneAppInfo } from './phone-app.js'
+import { bridgeReady, bridgeConnected } from './pc-bridge.js'
+import { backupEnabled, backupAccount, runBackup } from './backup.js'
+import { metricsSummary } from './metrics.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
@@ -29,12 +32,12 @@ const COOKIE = 'helper_session'
 const MAX_BODY = 100000
 
 // Values that are never sent back to the page. The page only learns whether each one is set.
-const SECRETS = ['LLM_API_KEY', 'LLM_BACKUP_API_KEY', 'ELEVENLABS_API_KEY', 'GITHUB_TOKEN', 'GOOGLE_CLIENT_SECRET', 'MAIL_PASS', 'TAVILY_API_KEY', 'VOICE_API_KEY']
+const SECRETS = ['LLM_API_KEY', 'LLM_BACKUP_API_KEY', 'ELEVENLABS_API_KEY', 'GITHUB_TOKEN', 'GOOGLE_CLIENT_SECRET', 'MAIL_PASS', 'TAVILY_API_KEY', 'VOICE_API_KEY', 'GEMINI_API_KEY', 'BACKUP_PASSPHRASE']
 const PLAIN = [
   'LLM_BASE_URL', 'LLM_MODEL', 'LLM_BACKUP_BASE_URL', 'LLM_BACKUP_MODEL', 'LLM_CHEAP_MODEL', 'LLM_STRONG_MODEL', 'LLM_FALLBACK_MODEL', 'LLM_LIGHT', 'IMAGE_MODEL',
-  'BOT_NAME', 'QUIET_HOURS', 'DAILY_BRIEF_TIME', 'NEWS_BRIEF_TIME', 'NEWS_FEEDS', 'TIMEZONE', 'COMPUTER_MODE',
+  'GEMINI_MODEL', 'BACKUP_GOOGLE_ACCOUNT', 'BOT_NAME', 'QUIET_HOURS', 'DAILY_BRIEF_TIME', 'NEWS_BRIEF_TIME', 'NEWS_FEEDS', 'TIMEZONE', 'COMPUTER_MODE',
   'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
-  'MAIL_HOST', 'MAIL_USER', 'MAIL_POLL_MINUTES', 'CALENDAR_ICS_URL',
+  'MAIL_HOST', 'MAIL_USER', 'MAIL_POLL_MINUTES', 'CALENDAR_ICS_URL', 'WEEKLY_REVIEW_TIME', 'MESSAGE_BUDGET', 'LLM_PRICES', 'MONTHLY_COST_LIMIT',
 ]
 // Read once at startup, so a change only takes effect after a restart.
 const NEEDS_RESTART = ['TIMEZONE', 'LLM_LIGHT', 'MAIL_HOST', 'MAIL_USER', 'MAIL_PASS']
@@ -84,6 +87,34 @@ export function bridgeAskLog({ source = '-', status = 0, ms = 0 } = {}) {
   return `[bridge] ask source=${safe} status=${code} ms=${took}`
 }
 
+// Everything else Helper depends on, each from its own live signal rather than from a stored setting.
+// ok: true works, false broken, null not known yet. `note` says what to do when it is broken.
+function liveSources(googleLive) {
+  const out = []
+  const model = llmHealth()
+  const modelBroken = model.errorAt > model.okAt && Date.now() - model.errorAt < 30 * 60000
+  out.push({
+    label: 'מודל AI',
+    ok: model.okAt || model.errorAt ? !modelBroken : null,
+    checked: model.okAt ? ago(model.okAt) : 'עוד לא נבדק',
+    note: modelBroken ? model.error : model.limited.length ? `במכסה כרגע: ${model.limited.join(', ')}` : '',
+  })
+  for (const [email, live] of Object.entries(googleLive))
+    if (live) out.push({ label: `Google ${email}`, ok: live.ok, checked: ago(live.at), note: live.ok ? '' : 'צריך לחבר מחדש (Google Workspace, "חבר מחדש")' })
+  if (state.health.webtop) {
+    const w = state.health.webtop
+    out.push({ label: 'Webtop', ok: !w.down, checked: ago(w.lastOk), note: w.down ? 'צריך להיכנס שוב בחלון ה-Webtop' : '' })
+  }
+  if (backupEnabled()) {
+    const b = state.backup || {}
+    const stale = !b.lastOk || Date.now() - b.lastOk > 36 * 3600 * 1000
+    out.push({ label: `גיבוי ל-Drive (${backupAccount()})`, ok: b.lastOk || b.fails ? !(b.fails && stale) : null, checked: b.lastOk ? ago(b.lastOk) : 'עוד לא גובה', note: b.lastError || '' })
+  }
+  if (bridgeReady()) out.push({ label: 'המחשב הביתי', ok: bridgeConnected(), checked: 'עכשיו', note: bridgeConnected() ? '' : 'הגשר בבית לא מחובר. המחשב כבוי, או ש-pc-bridge לא רץ' })
+  if (phoneEnabled() || phoneAppInfo()) out.push({ label: 'הטלפון', ok: phoneAppConnected(), checked: 'עכשיו', note: phoneAppConnected() ? '' : 'אפליקציית HELPER בטלפון לא מחוברת' })
+  return out
+}
+
 async function snapshot(connectedSince) {
   const health = (label, key) => {
     const h = state.health[key]
@@ -91,6 +122,9 @@ async function snapshot(connectedSince) {
     return { label, ok: h ? !h.down : null, checked: h ? ago(h.lastOk) : 'עוד לא נבדק' }
   }
   const google = googleAccounts()
+  // Tested against Google itself (cached for a few minutes), so the page never shows "connected" for an expired key.
+  if (config.google.clientId && config.google.clientSecret) await Promise.race([checkGoogleAccounts(), new Promise((r) => setTimeout(r, 8000))])
+  const googleLive = Object.fromEntries(google.map((email) => [email, googleAccountStatus(email)]))
   const { ip, isTailscale } = getNetworkIp()
   const appUrl = appConnectTarget({
     appPublicUrl: process.env.APP_PUBLIC_URL,
@@ -112,12 +146,13 @@ async function snapshot(connectedSince) {
     whatsapp: { connected: Boolean(connectedSince), since: connectedSince ? ago(connectedSince).replace('לפני ', '') : '', paired: Boolean(state.owner) },
     model: chatModel(),
     voice: { hear: canHear(), speak: canSpeak() },
-    google: { configured: Boolean(config.google.clientId && config.google.clientSecret), accounts: google.map((email) => ({ email, readOnly: config.google.readOnly.includes(email.toLowerCase()) })) },
+    google: { configured: Boolean(config.google.clientId && config.google.clientSecret), accounts: google.map((email) => ({ email, readOnly: config.google.readOnly.includes(email.toLowerCase()), live: googleLive[email] ? { ok: googleLive[email].ok, error: googleLive[email].error || '', checked: ago(googleLive[email].at) } : null })) },
     settings: Object.fromEntries([...PLAIN.map((k) => [k, process.env[k] || '']), ...SECRETS.map((k) => [k, { set: Boolean(process.env[k]) }])]),
     sources: [
       ...google.flatMap((a) => [health(`Gmail ${a}`, `gmail ${a}`), health(`Classroom ${a}`, `classroom ${a}`)]),
       ...(mailEnabled() ? config.mail.accounts.map((a) => health(`מייל ${a.user}`, `mail ${a.user}`)) : []),
       ...(calendarOn() ? [{ label: 'יומן', ok: true, checked: ago(state.calendar.lastPoll) }] : []),
+      ...liveSources(googleLive),
     ],
     reminders: state.reminders.map((r) => ({ id: r.id, text: r.text, when: time(r.at), repeat: r.repeat })),
     tasks: state.tasks.map((t) => ({ id: t.id, text: t.instruction, when: time(t.at), repeat: t.repeat })),
@@ -125,6 +160,7 @@ async function snapshot(connectedSince) {
     memory: state.memory.map((m) => ({ id: m.id, text: m.fact })),
     homework: state.homework.open,
     waiting: state.outbox.length,
+    metrics: metricsSummary(),
     sent: fs.existsSync(SENT_LOG) ? fs.readFileSync(SENT_LOG, 'utf8').trim().split('\n').slice(-40).reverse() : [],
     appQrDataUrl,
     appUrl,
@@ -226,6 +262,7 @@ export function startUi({ connectedSince, restart, agent }) {
       save()
       return {}
     }
+    if (route === 'backup/now') return { message: await runBackup() }
     if (route === 'restart') return setTimeout(restart, 300), {}
     if (route === 'webtop/input') return await webtopInput(body)
     if (route === 'phone/pair') {

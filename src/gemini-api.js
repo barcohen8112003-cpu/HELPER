@@ -12,7 +12,7 @@ export const geminiApiEnabled = () => Boolean(config.geminiApi.key)
 export async function askGemini(question, { fetchFn = fetch } = {}) {
   const q = String(question || '').trim()
   if (!q) throw new Error('אין שאלה')
-  if (!geminiApiEnabled()) throw new Error('Gemini לא מחובר. צריך למלא GEMINI_API_KEY ב-.env')
+  if (!geminiApiEnabled()) throw new Error('Gemini לא מחובר. צריך להדביק מפתח באתר ההגדרות, בכרטיס Gemini (או GEMINI_API_KEY ב-.env)')
   const url = `${ENDPOINT}/${encodeURIComponent(config.geminiApi.model)}:generateContent`
   const res = await fetchFn(url, {
     method: 'POST',
