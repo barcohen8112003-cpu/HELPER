@@ -21,6 +21,7 @@ const TESTS = [
   'src/phone-app-selftest.js',
   'src/dashboard/_selftest.js',
   'src/backup-selftest.js',
+  'src/style-selftest.js',
 ]
 
 const failed = []

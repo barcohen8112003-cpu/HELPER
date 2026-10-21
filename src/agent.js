@@ -8,6 +8,7 @@ import { calendarOn } from './calendar.js'
 import { googleAccounts, googleEnabled } from './google.js'
 import { state, save } from './store.js'
 import { llm, ask, LONG_PATIENCE, Aborted } from './llm.js'
+import { polish } from './style.js'
 import { activeTools, toolDefs } from './tools.js'
 import { canSpeak } from './media.js'
 import { vmEnabled } from './vm.js'
@@ -262,7 +263,7 @@ async function converse(messages, ctx) {
     const assistant = { role: 'assistant', content: msg.content ?? '' }
     if (msg.tool_calls?.length) assistant.tool_calls = msg.tool_calls
     messages.push(assistant)
-    if (!assistant.tool_calls) return assistant.content
+    if (!assistant.tool_calls) return (assistant.content = polish(assistant.content))
     // Consecutive parallel-safe calls run together; anything else (approvals, writes, anything that changes
     // state) waits its turn, so the order the model asked for is the order things happen in.
     const calls = assistant.tool_calls
@@ -308,7 +309,7 @@ async function closingAnswer(messages) {
     undefined,
     LONG_PATIENCE
   )
-  const reply = msg.content?.trim() || 'לא הצלחתי לסיים את הבדיקה. נסה לשאול שאלה ממוקדת יותר.'
+  const reply = polish(msg.content?.trim() || 'לא הצלחתי לסיים את הבדיקה. נסה לשאול שאלה ממוקדת יותר.')
   messages.push({ role: 'assistant', content: reply })
   return reply
 }

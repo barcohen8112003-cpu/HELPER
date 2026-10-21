@@ -10,6 +10,7 @@
     "check": "node src/selftest.js",
     "check:all": "node scripts/check-all.mjs",
     "check:backup": "node src/backup-selftest.js",
+    "check:style": "node src/style-selftest.js",
     "check:toolkit": "node src/toolkit/_selftest.js",
     "check:memory": "node src/memory-selftest.js",
     "check:errand": "node src/errand-selftest.js",
