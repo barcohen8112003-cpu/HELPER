@@ -13,7 +13,7 @@ import { setGoogleHomeLoginUrl } from './google-home.js'
 import { captureFrame, ensureCloudBrowser, errandCloudOn, webtopInput } from './webtop-browser.js'
 import { desktopShellHtml, isDesktopPath, proxyDesktopHttp, proxyDesktopUpgrade } from './cloud-desktop.js'
 import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
-import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
+import { googleAccounts, authUrl, connectWithCode, removeAccount, checkGoogleAccounts, googleAccountStatus } from './google.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
 import { chatModel } from './llm.js'
@@ -91,6 +91,9 @@ async function snapshot(connectedSince) {
     return { label, ok: h ? !h.down : null, checked: h ? ago(h.lastOk) : 'עוד לא נבדק' }
   }
   const google = googleAccounts()
+  // Tested against Google itself (cached for a few minutes), so the page never shows "connected" for an expired key.
+  if (config.google.clientId && config.google.clientSecret) await Promise.race([checkGoogleAccounts(), new Promise((r) => setTimeout(r, 8000))])
+  const googleLive = Object.fromEntries(google.map((email) => [email, googleAccountStatus(email)]))
   const { ip, isTailscale } = getNetworkIp()
   const appUrl = appConnectTarget({
     appPublicUrl: process.env.APP_PUBLIC_URL,
@@ -112,7 +115,7 @@ async function snapshot(connectedSince) {
     whatsapp: { connected: Boolean(connectedSince), since: connectedSince ? ago(connectedSince).replace('לפני ', '') : '', paired: Boolean(state.owner) },
     model: chatModel(),
     voice: { hear: canHear(), speak: canSpeak() },
-    google: { configured: Boolean(config.google.clientId && config.google.clientSecret), accounts: google.map((email) => ({ email, readOnly: config.google.readOnly.includes(email.toLowerCase()) })) },
+    google: { configured: Boolean(config.google.clientId && config.google.clientSecret), accounts: google.map((email) => ({ email, readOnly: config.google.readOnly.includes(email.toLowerCase()), live: googleLive[email] ? { ok: googleLive[email].ok, error: googleLive[email].error || '', checked: ago(googleLive[email].at) } : null })) },
     settings: Object.fromEntries([...PLAIN.map((k) => [k, process.env[k] || '']), ...SECRETS.map((k) => [k, { set: Boolean(process.env[k]) }])]),
     sources: [
       ...google.flatMap((a) => [health(`Gmail ${a}`, `gmail ${a}`), health(`Classroom ${a}`, `classroom ${a}`)]),

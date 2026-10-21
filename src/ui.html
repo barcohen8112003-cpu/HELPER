@@ -172,7 +172,11 @@ function render(S) {
   const G = S.google
   const googleBody = h('div', {},
     G.accounts.map((a) => h('div', { class: 'row', style: 'padding:10px 0' },
-      h('div', { class: 'grow', style: 'direction:ltr;text-align:right' }, a.email),
+      h('div', { class: 'grow' },
+        h('div', { style: 'direction:ltr;text-align:right' }, a.email),
+        a.live && !a.live.ok && h('div', { class: 'small', style: 'color:var(--bad)' }, a.live.error === 'invalid_grant' ? 'המפתח פג או בוטל. לחץ "חבר מחדש" ואשר את כל ההרשאות.' : 'Google דחה את המפתח (' + a.live.error + '). כדאי לחבר מחדש.')),
+      h('span', { class: 'pill ' + (a.live ? (a.live.ok ? 'ok' : 'bad') : ''), title: a.live ? 'נבדק מול Google ' + a.live.checked : 'לא הייתה תשובה מ-Google' }, a.live ? (a.live.ok ? 'עובד' : 'מנותק') : 'לא ידוע'),
+      a.live && !a.live.ok && h('a', { class: 'btn primary', href: '/google/connect' }, 'חבר מחדש'),
       h('label', { class: 'small', title: 'העוזר קורא מהחשבון, אבל לא שולח ממנו מייל ולא מוסיף בו אירועים או משימות' }, h('input', { type: 'checkbox', checked: a.readOnly, onchange: (e) => act('google/readonly', { email: a.email, readOnly: e.target.checked }) }), ' קריאה בלבד'),
       h('button', { class: 'link', onclick: () => confirm('לנתק את ' + a.email + '?') && act('google/remove', { email: a.email }, 'נותק') }, 'נתק'))),
     G.configured && h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/google/connect' }, G.accounts.length ? 'הוסף חשבון' : 'חבר חשבון Google')),
@@ -220,7 +224,8 @@ function render(S) {
     connector('Google Home', 'אורות, רמקולים ושאר מכשירי הבית', GH.cloud, googleHomeBody),
     connector('טלפון', 'מסך, לחיצות ואפליקציות בטלפון Android', Boolean(P.enabled), phoneBody),
     D.enabled && connector('שולחן עבודה בענן', 'מסך השרת: עכבר ומקלדת לדפדפנים', true, desktopBody),
-    connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.length > 0, googleBody),
+    connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.some((a) => !a.live || a.live.ok), googleBody,
+      G.accounts.some((a) => a.live && !a.live.ok) && h('p', { class: 'small', style: 'margin:10px 0 0;color:var(--bad)' }, 'חשבון מנותק: ' + G.accounts.filter((a) => a.live && !a.live.ok).map((a) => a.email).join(', '))),
     connector('מודל AI', S.model, S.settings.LLM_API_KEY.set, form(S, [
       ['LLM_BASE_URL', 'כתובת הספק', { hint: 'כל ספק תואם OpenAI. Groq: https://api.groq.com/openai/v1' }],
       ['LLM_API_KEY', 'מפתח API', { secret: true }],
