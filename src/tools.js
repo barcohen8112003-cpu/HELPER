@@ -714,10 +714,10 @@ ${await askGemini(question)}`
   {
     name: 'pc_unlock',
     enabled: () => pc.pcEnabled(),
-    description: 'מבטל את נעילת המחשב: מדליק/מעיר את המסך, מעלה את מסך הנעילה לחלון הזנת הסיסמה ומקליד את הסיסמה (ברירת מחדל: naorkk132) עם Enter. ל"תבטל נעילה", "תבטל את הנעילה", "תפתח את המחשב", "תפתח את הנעילה".',
-    parameters: obj({ password: str('הסיסמה להקלדה (ברירת מחדל: naorkk132). כדי לפתוח רק את המסך בלי להזין סיסמה העבר "none"') }, []),
-    async run({ password = 'naorkk132' } = {}) {
-      return pc.unlock(password)
+    description: 'מבטל את נעילת המחשב: מדליק/מעיר את המסך, מעלה את מסך הנעילה לחלון הזנת הסיסמה ומקליד את הסיסמה השמורה בהגדרות (PC_UNLOCK_PASSWORD) עם Enter. אל תבקש את הסיסמה ואל תכתוב אותה. ל"תבטל נעילה", "תבטל את הנעילה", "תפתח את המחשב", "תפתח את הנעילה".',
+    parameters: obj({ password: str('ריק = הסיסמה השמורה בהגדרות. "none" = רק להעלות את מסך ההתחברות בלי להקליד') }, []),
+    async run({ password } = {}) {
+      return pc.unlock(password || undefined)
     },
   },
   {
@@ -1231,7 +1231,7 @@ const BRIEF = {
   pc_launch_app: 'Launch any installed PC application by name.',
   pc_close_app: 'Close a running application on the PC (requires user approval).',
   pc_lock: 'Lock the PC workstation screen.',
-  pc_unlock: 'Wake the screen, lift the lock screen, and enter password (defaults to naorkk132).',
+  pc_unlock: 'Wake the screen, lift the lock screen, and enter the saved password (PC_UNLOCK_PASSWORD).',
   pc_display_off: 'Turn off PC monitors/screens immediately into standby without sleeping the PC.',
   pc_display_on: 'Turn on / wake PC monitors/screens immediately.',
   pc_type: 'Type text or a PIN into the active window or lock screen; press_enter optionally presses Enter.',
