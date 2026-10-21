@@ -29,6 +29,13 @@ export const chatModel = () => state.modelOverride || config.llm.model
 const limitedUntil = new Map()
 const isLimited = (model) => (limitedUntil.get(model) || 0) > Date.now()
 
+// The last real answer and the last failure from the provider, for the settings page.
+const health = { okAt: 0, errorAt: 0, error: '' }
+export function llmHealth() {
+  const limited = [...limitedUntil].filter(([, until]) => until > Date.now()).map(([model]) => model)
+  return { ...health, limited }
+}
+
 // Every configured model has its own rate-limit budget at the provider. When the preferred one is used up, the
 // next takes over at once instead of the user waiting out the minute. A pinned model is never swapped.
 function lineup(preferred) {
@@ -61,6 +68,7 @@ async function request(body, signal) {
   }
   const msg = (await res.json()).choices?.[0]?.message
   if (!msg) throw new Error('תשובה ריקה מהמודל')
+  health.okAt = Date.now()
   return msg
 }
 
@@ -94,6 +102,8 @@ export async function llm(messages, tools, preferred = chatModel(), patience = P
       return await request({ ...body, model }, signal)
     } catch (e) {
       if (signal?.aborted || e instanceof Aborted) throw new Aborted()
+      health.errorAt = Date.now()
+      health.error = `${model}: ${String(e.message).slice(0, 120)}`
       // A bad key or bad request will not get better, on this model or another.
       if (e.retry === false || ++failures > MAX_FAILURES) throw e
       // Out of budget, or a server or network hiccup: this model sits out and the next one is tried.

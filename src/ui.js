@@ -16,10 +16,11 @@ import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, pho
 import { googleAccounts, authUrl, connectWithCode, removeAccount, checkGoogleAccounts, googleAccountStatus } from './google.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
-import { chatModel } from './llm.js'
+import { chatModel, llmHealth } from './llm.js'
 import { ago } from './status.js'
 import { handleDashboard } from './dashboard/api.js'
-import { handlePhoneUpgrade } from './phone-app.js'
+import { handlePhoneUpgrade, phoneAppConnected, phoneAppInfo } from './phone-app.js'
+import { bridgeReady, bridgeConnected } from './pc-bridge.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
@@ -84,6 +85,29 @@ export function bridgeAskLog({ source = '-', status = 0, ms = 0 } = {}) {
   return `[bridge] ask source=${safe} status=${code} ms=${took}`
 }
 
+// Everything else Helper depends on, each from its own live signal rather than from a stored setting.
+// ok: true works, false broken, null not known yet. `note` says what to do when it is broken.
+function liveSources(googleLive) {
+  const out = []
+  const model = llmHealth()
+  const modelBroken = model.errorAt > model.okAt && Date.now() - model.errorAt < 30 * 60000
+  out.push({
+    label: 'מודל AI',
+    ok: model.okAt || model.errorAt ? !modelBroken : null,
+    checked: model.okAt ? ago(model.okAt) : 'עוד לא נבדק',
+    note: modelBroken ? model.error : model.limited.length ? `במכסה כרגע: ${model.limited.join(', ')}` : '',
+  })
+  for (const [email, live] of Object.entries(googleLive))
+    if (live) out.push({ label: `Google ${email}`, ok: live.ok, checked: ago(live.at), note: live.ok ? '' : 'צריך לחבר מחדש (Google Workspace, "חבר מחדש")' })
+  if (state.health.webtop) {
+    const w = state.health.webtop
+    out.push({ label: 'Webtop', ok: !w.down, checked: ago(w.lastOk), note: w.down ? 'צריך להיכנס שוב בחלון ה-Webtop' : '' })
+  }
+  if (bridgeReady()) out.push({ label: 'המחשב הביתי', ok: bridgeConnected(), checked: 'עכשיו', note: bridgeConnected() ? '' : 'הגשר בבית לא מחובר. המחשב כבוי, או ש-pc-bridge לא רץ' })
+  if (phoneEnabled() || phoneAppInfo()) out.push({ label: 'הטלפון', ok: phoneAppConnected(), checked: 'עכשיו', note: phoneAppConnected() ? '' : 'אפליקציית HELPER בטלפון לא מחוברת' })
+  return out
+}
+
 async function snapshot(connectedSince) {
   const health = (label, key) => {
     const h = state.health[key]
@@ -121,6 +145,7 @@ async function snapshot(connectedSince) {
       ...google.flatMap((a) => [health(`Gmail ${a}`, `gmail ${a}`), health(`Classroom ${a}`, `classroom ${a}`)]),
       ...(mailEnabled() ? config.mail.accounts.map((a) => health(`מייל ${a.user}`, `mail ${a.user}`)) : []),
       ...(calendarOn() ? [{ label: 'יומן', ok: true, checked: ago(state.calendar.lastPoll) }] : []),
+      ...liveSources(googleLive),
     ],
     reminders: state.reminders.map((r) => ({ id: r.id, text: r.text, when: time(r.at), repeat: r.repeat })),
     tasks: state.tasks.map((t) => ({ id: t.id, text: t.instruction, when: time(t.at), repeat: t.repeat })),

@@ -257,7 +257,7 @@ function render(S) {
 
   fill($('activeRows'),
     head('מקורות'),
-    S.sources.length ? S.sources.map((s) => item(s.label, 'נבדק בהצלחה: ' + s.checked, null, h('span', { class: 'pill ' + (s.ok === null ? '' : s.ok ? 'ok' : 'bad') }, s.ok === null ? 'ממתין לבדיקה' : s.ok ? 'עובד' : 'לא עובד'))) : empty('אין מקור מחובר עדיין'),
+    S.sources.length ? S.sources.map((s) => item(s.label, (s.ok === false && s.note ? s.note + ' · ' : '') + 'נבדק בהצלחה: ' + s.checked, null, h('span', { class: 'pill ' + (s.ok === null ? '' : s.ok ? 'ok' : 'bad') }, s.ok === null ? 'ממתין לבדיקה' : s.ok ? 'עובד' : 'לא עובד'))) : empty('אין מקור מחובר עדיין'),
     head('תזכורות'),
     S.reminders.length ? S.reminders.map((r) => item(r.text, r.when + repeat[r.repeat], del('reminder', r.id))) : empty('אין תזכורות'),
     head('משימות מתוזמנות'),
