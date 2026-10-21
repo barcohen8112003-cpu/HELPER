@@ -20,7 +20,8 @@
     "check:google-home": "node src/google-home-selftest.js",
     "check:phone": "node src/phone-selftest.js",
     "check:desktop": "node src/cloud-desktop-selftest.js",
-    "check:phone-app": "node src/phone-app-selftest.js"
+    "check:phone-app": "node src/phone-app-selftest.js",
+    "check:study": "node src/study-selftest.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "~6.7.24",

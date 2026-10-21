@@ -24,6 +24,7 @@ const TESTS = [
   'src/style-selftest.js',
   'src/metrics-selftest.js',
   'src/jobs-selftest.js',
+  'src/study-selftest.js',
 ]
 
 const failed = []

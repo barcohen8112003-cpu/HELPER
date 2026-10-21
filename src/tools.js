@@ -26,6 +26,7 @@ import { addFact, removeFact, CATEGORIES } from './memory.js'
 import { memoryTools } from './memory-tools.js'
 import { askGemini, geminiApiEnabled } from './gemini-api.js'
 import { phoneTools } from './phone-tools.js'
+import { planStudy, planText, localStamp, weekAhead } from './study.js'
 
 // The computer tools drive the user's own Windows machine. Locally that is this process. In the cloud
 // (see src/pc-bridge.js) the same calls are forwarded to the home bridge, and only when COMPUTER_MODE is on.
@@ -445,6 +446,46 @@ ${await askGemini(question)}`
     ),
     async run({ account, ...event }) {
       return `האירוע נוסף: ${await google.calendarAdd(writable(account), event)}`
+    },
+  },
+  {
+    name: 'study_plan',
+    description: 'בונה תוכנית למידה למבחן: מפזר את הנושאים על הימים שנשארו, יום אחרון לחזרה כללית. בלי add_to_calendar מחזיר טיוטה להראות למשתמש. עם add_to_calendar=true מוסיף את כל המפגשים ליומן אחרי אישור שלו.',
+    parameters: obj(
+      {
+        exam: str('שם המבחן, למשל "מבחן בהיסטוריה"'),
+        date: str('תאריך המבחן YYYY-MM-DD'),
+        topics: { type: 'array', items: { type: 'string' }, description: 'הנושאים, הקשה ביותר קודם. ריק = מפגש כללי בכל יום' },
+        minutes: { type: 'number', description: 'אורך מפגש בדקות (ברירת מחדל 60)' },
+        start: str('שעת התחלה HH:MM (ברירת מחדל 17:00)'),
+        skip: { type: 'array', items: { type: 'string' }, description: 'ימים בלי למידה, למשל ["שבת"] (ברירת מחדל)' },
+        add_to_calendar: { type: 'boolean', description: 'true רק אחרי שהמשתמש ראה את הטיוטה וביקש להוסיף' },
+        account: ACCOUNT,
+      },
+      ['exam', 'date']
+    ),
+    async run({ add_to_calendar, account, ...args }, ctx) {
+      const sessions = planStudy({ ...args, skip: args.skip ?? ['שבת'] })
+      const text = planText(sessions)
+      if (!add_to_calendar) return `טיוטה (${sessions.length} מפגשים, עוד לא ביומן):\n${text}`
+      if (!google.googleEnabled()) return `אין יומן Google מחובר. הנה התוכנית להעתקה:\n${text}`
+      const email = writable(account)
+      if (!(await ctx.confirm(`להוסיף ליומן ${email} את ${sessions.length} מפגשי הלמידה?\n${text}`))) return 'המשתמש לא אישר. שום דבר לא נוסף ליומן.'
+      let added = 0
+      for (const s of sessions) {
+        await google.calendarAdd(email, { title: s.title, start: localStamp(s.start), end: localStamp(s.end), description: 'תוכנית למידה מ-Helper' })
+        added++
+      }
+      return `נוספו ליומן ${added} מפגשים.`
+    },
+  },
+  {
+    name: 'week_ahead',
+    enabled: () => google.googleEnabled() || calendarOn(),
+    description: 'מה מחכה בשבוע הבא (ראשון עד שבת): מבחנים שמורים, הגשות מ-Classroom ואירועים ביומן. נשלח גם אוטומטית בשבת בערב.',
+    parameters: obj({}, []),
+    async run() {
+      return (await weekAhead()) || 'אין מבחנים, הגשות או אירועים בשבוע הבא.'
     },
   },
   {
@@ -1202,6 +1243,8 @@ const BRIEF = {
   list_tasks: 'List scheduled tasks.',
   cancel_task: 'Cancel a scheduled task by id.',
   send_whatsapp: 'Send the user a WhatsApp message right now. For when he is talking to you from elsewhere (Discord) and wants something on WhatsApp. A future reminder is add_reminder, which also arrives on WhatsApp.',
+  study_plan: 'Build a study plan for an exam (topics over the days left, last day review). Show the draft; add_to_calendar=true adds it after his approval.',
+  week_ahead: 'Next week (Sun-Sat): saved exams, Classroom deadlines, calendar. Also sent on its own Saturday evening.',
   get_timetable: 'The user\'s school timetable for a day from Webtop: time, lesson, subject, room, teacher, cancellations. day = today, tomorrow, Hebrew/English weekday or YYYY-MM-DD (this week only). A reminder before each lesson is already sent automatically.',
   send_whatsapp_to: 'Send a WhatsApp message in the user\'s name to someone else (a contact name or a number). Only when he explicitly asked to send it; "draft" means draft only. He approves the exact recipient and text first.',
   send_discord: 'Send the user a private Discord message through his Discord bot; speak=true also says it aloud in the voice room. For when he is on WhatsApp and wants something on Discord.',
