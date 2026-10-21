@@ -316,10 +316,11 @@ function confirm(question, media) {
 }
 
 // Starts a background task (start_background_task). Its result, or why it failed, arrives as its own message.
-function background(title, instruction) {
+// `run(signal, setStep)` replaces the agent for work done by something else (Claude Code).
+function background(title, instruction, run) {
   return startJob(
     title,
-    (signal, setStep) => runBackground(title, instruction, { confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep }),
+    run || ((signal, setStep) => runBackground(title, instruction, { confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep })),
     async (name, result, error) => {
       if (result) return wa.send(state.owner.jid, `*${name}*\n${result}`)
       if (error) return wa.send(state.owner.jid, `המשימה "${name}" לא הסתיימה: ${humanError(error)}`)

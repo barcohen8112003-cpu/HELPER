@@ -20,6 +20,9 @@ RUN apt-get update \
 
 ENV ADB_PATH=/opt/platform-tools/adb
 
+# Claude Code: build jobs (sites, scripts) on the user's Claude plan, signed in with CLAUDE_CODE_OAUTH_TOKEN.
+RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
