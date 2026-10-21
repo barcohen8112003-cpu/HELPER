@@ -4,7 +4,8 @@ import { randomInt } from 'node:crypto'
 import { config, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
 import { startWhatsApp } from './whatsapp.js'
-import { runTurn, runTask, resetHistory, compact, setSettingsUrl } from './agent.js'
+import { runTurn, runTask, runBackground, resetHistory, compact, setSettingsUrl } from './agent.js'
+import { startJob, stopJobs, jobsText, listJobs, interruptedJobs } from './jobs.js'
 import { startScheduler } from './scheduler.js'
 import { prepare, speak } from './media.js'
 import { setLocation, isLiveUpdate } from './location.js'
@@ -95,7 +96,8 @@ const HELP = `*פקודות*
 /status - מה מחובר ואחרי מה אני עוקב
 /wake - מדליק את המחשב מרחוק
 /watch status - מעקב שקט: מה נצפה, כמה סונן, מה מושתק או מוגבר (/watch לכל הפקודות)
-עצור - מפסיק את מה שאני עושה עכשיו ומוותר על מה שחיכה בתור
+עצור - מפסיק את מה שאני עושה עכשיו, כולל משימות ברקע, ומוותר על מה שחיכה בתור
+מה רץ - המשימות שרצות ברקע עכשיו. עצור את <שם> עוצר רק אחת
 שיחה חדשה (או /new) - מתחיל שיחה חדשה (זיכרון, תזכורות ומעקבים נשארים)
 /voice on - עונה בהודעה קולית על כל הודעה, /voice off חוזר לטקסט
 /compact - מסכם את השיחה כדי לחסוך
@@ -164,7 +166,15 @@ const wa = await startWhatsApp(async (m) => {
     }
     return wa.send(state.owner.jid, await handlePhoneCommand(phoneCmd))
   }
+  // "עצור את <שם משימה>" stops that background task only. Anything else starting with it ("תעצור את השיר") is a
+  // request for the model.
+  const stopOne = text.match(/^ת?עצור את (.+?)[.!]?$/)
+  if (stopOne && listJobs().some((j) => j.title.includes(stopOne[1].trim()))) {
+    const stopped = stopJobs(stopOne[1])
+    return wa.send(state.owner.jid, `עצרתי את ${stopped.map((t) => `"${t}"`).join(', ')}.`)
+  }
   const command = parseCommand(text)
+  if (command === 'jobs') return wa.send(state.owner.jid, jobsText())
   if (command) {
     // A question waiting for approval is answered "no" first, so the turn is not left hanging on it.
     if (pendingConfirm) {
@@ -175,7 +185,8 @@ const wa = await startWhatsApp(async (m) => {
     const running = activeTurn
     stopEpoch++
     running?.ac.abort()
-    if (command === 'stop') return wa.send(state.owner.jid, running ? 'עצרתי.' : 'אין מה לעצור.')
+    const stoppedJobs = stopJobs()
+    if (command === 'stop') return wa.send(state.owner.jid, running || stoppedJobs.length ? `עצרתי${stoppedJobs.length ? `, כולל ${stoppedJobs.map((t) => `"${t}"`).join(', ')} שרץ ברקע` : ''}.` : 'אין מה לעצור.')
     // The stopped turn rolls its own messages back; the history is cleared only after that, never under it.
     if (running) await Promise.race([running.done, new Promise((r) => setTimeout(r, 10000))])
     resetHistory()
@@ -184,8 +195,11 @@ const wa = await startWhatsApp(async (m) => {
   if (pendingConfirm) {
     const resolve = pendingConfirm
     pendingConfirm = null
-    resolve(/^(כן|אשר|מאשר|yes|y|ok|אוקיי|אוקי|👍|✅)(?=$|[\s.,!])/i.test(text))
-    return
+    const yes = /^(כן|אשר|מאשר|yes|y|ok|אוקיי|אוקי|👍|✅)(?=$|[\s.,!])/i.test(text)
+    resolve(yes)
+    // "לא" just cancels. Anything else cancels too, and is then answered as the new message it is, since with
+    // tasks in the background he may be talking about something else.
+    if (yes || /^(לא|בטל|ביטול|no|n|👎|❌)(?=$|[\s.,!])/i.test(text)) return
   }
   if (text === '/help') return wa.send(state.owner.jid, HELP)
   // A shortcut: no model, no queue, no cost. It answers while a long turn is still running.
@@ -241,7 +255,7 @@ const wa = await startWhatsApp(async (m) => {
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
       // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      const reply = await runTurn(input.text, { confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal }, input.image)
+      const reply = await runTurn(input.text, { confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
       // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
       // The text follows only when it has links, or when speech failed.
       const wantsVoice = input.voice || state.voiceMode === 'always'
@@ -292,7 +306,27 @@ const say = (text) => wa.send(state.owner.jid, text)
 
 // `media` ({ buffer, mime }): the question goes out as that image's caption, so a checkout screen and what it asks
 // for arrive as one bubble.
+// One approval is open at a time: with background tasks two could ask at once, and one "כן" must answer one question.
+let confirmChain = Promise.resolve()
 function confirm(question, media) {
+  const asked = confirmChain.then(() => askOnce(question, media))
+  confirmChain = asked.catch(() => {})
+  return asked
+}
+
+// Starts a background task (start_background_task). Its result, or why it failed, arrives as its own message.
+function background(title, instruction) {
+  return startJob(
+    title,
+    (signal, setStep) => runBackground(title, instruction, { confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep }),
+    async (name, result, error) => {
+      if (result) return wa.send(state.owner.jid, `*${name}*\n${result}`)
+      if (error) return wa.send(state.owner.jid, `המשימה "${name}" לא הסתיימה: ${humanError(error)}`)
+    }
+  )
+}
+
+function askOnce(question, media) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       if (pendingConfirm === done) pendingConfirm = null
@@ -313,6 +347,9 @@ const outbox = createOutbox((text) => wa.send(state.owner.jid, text))
 // Once an hour: a daily encrypted backup to Drive, when a passphrase is set (src/backup.js).
 setInterval(() => backupTick((text) => notify(text)).catch((e) => console.log(`[backup] ${e.message}`)), 3600 * 1000).unref()
 setTimeout(() => backupTick((text) => notify(text)).catch(() => {}), 5 * 60000).unref()
+
+const cutShort = interruptedJobs()
+if (cutShort.length) outbox.notify(`${cutShort.length > 1 ? 'המשימות' : 'המשימה'} ${cutShort.map((j) => `"${j.title}"`).join(', ')} ${cutShort.length > 1 ? 'נקטעו' : 'נקטעה'} כי הופעלתי מחדש. אם עדיין צריך, תבקש שוב.`, true).catch(() => {})
 
 // WhatsApp cannot report its own outage, so after WHATSAPP_DOWN_ALERT_MIN minutes without it the alert goes out
 // through Discord, and WhatsApp itself says how long it was gone once it is back.

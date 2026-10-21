@@ -67,6 +67,7 @@ Format: reply in the user's language (Hebrew by default), short like a WhatsApp 
 Working rules:
 ${sessionEnabled() ? `- Webtop (${config.webtop.url}): fetch_page on this site reads the user's signed-in session (grades, absences, homework, messages); get_timetable gives his lesson timetable for a day. Read only. If the tool says it is not signed in, tell him to sign in again ${config.webtop.cloud ? 'on the Webtop page of the settings site. Never ask him to send the password in chat' : 'in the Webtop window'}.\n` : ''}- Do everything the message asks. If it asks for two things (a reminder and something to remember), make both tool calls, in the same step.
 - For any weekday or relative date ("Wednesday", "next week"), take the date from the list of coming days above. Do not work it out yourself.
+- Long work (controlling the computer or phone, a shopping errand, research across many sites, code to write and run) goes to start_background_task, so he can keep talking to you. Answer him in one line that it started. Quick lookups you do yourself.
 - Be economical: every tool call costs time. Use the fewest calls that answer the question, at most 3 for a lookup, then answer with what you have and say what you did not check.
 - Older tool output is shortened after you read it. When a page gives you a fact you need (a price, a date), carry it forward in your own words.
 - Save lasting facts with remember without asking. A reminder is a fixed text; schedule_task is a real check you run later.
@@ -352,6 +353,21 @@ export async function runTask(instruction, ctx) {
   const reply = (await converse([{ role: 'user', content: TASK_PROMPT + instruction }], ctx)).trim()
   if (!reply || /^SKIP\b/.test(reply)) return ''
   state.history.push({ role: 'user', content: `[משימה מתוזמנת רצה: ${instruction}]` }, { role: 'assistant', content: reply })
+  trimHistory()
+  save()
+  return reply
+}
+
+const BACKGROUND_PROMPT = `[משימת רקע. המשתמש ביקש אותה בצ'אט וממשיך לדבר איתך בינתיים; הוא לא רואה את השלבים.]
+בצע אותה עם הכלים שלך עד הסוף. פעולה שמשנה משהו בעולם (תשלום, שליחה, מחיקה) מבקשת אישור כרגיל.
+בסוף כתוב הודעה אחת קצרה עם התוצאה: מה עשית, מה מצאת, קישורים, ומה לא הצלחת לבדוק.
+המשימה: `
+
+// A background task: its own conversation (it does not see the chat), and only its result joins the history,
+// so the user can answer it like any other message.
+export async function runBackground(title, instruction, ctx) {
+  const reply = (await converse([{ role: 'user', content: BACKGROUND_PROMPT + instruction }], ctx)).trim()
+  state.history.push({ role: 'user', content: `[משימת רקע הסתיימה: ${title}]` }, { role: 'assistant', content: reply })
   trimHistory()
   save()
   return reply
