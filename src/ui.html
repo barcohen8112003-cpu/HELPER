@@ -78,7 +78,7 @@
     <section id="active"><h2>מה פעיל</h2><p class="sub">מקורות, תזכורות, משימות ומעקבים</p><div class="rows" id="activeRows"></div></section>
     <section id="memory"><h2>זיכרון</h2><p class="sub">מה שהעוזר זוכר עליך. אפשר למחוק כל פריט בנפרד</p><div class="rows" id="memoryRows"></div></section>
     <section id="prefs"><h2>העדפות</h2><p class="sub">שם, שעות ותזמונים</p><div class="rows" id="prefRows"></div></section>
-    <section id="log"><h2>מה נשלח</h2><p class="sub">ההודעות האחרונות שהעוזר שלח מיוזמתו</p><div class="rows"><div class="log" id="sent"></div></div></section>
+    <section id="log"><h2>מה נשלח</h2><p class="sub">ההודעות האחרונות שהעוזר שלח מיוזמתו</p><div class="rows"><div class="row" id="metrics"></div><div class="log" id="sent"></div></div></section>
   </main>
 </div>
 <div id="toast"></div>
@@ -282,6 +282,10 @@ function render(S) {
     ['COMPUTER_MODE', 'שליטה במחשב', { options: [['ask', 'מבקש אישור לכל פעולה'], ['off', 'כבוי'], ['auto', 'בלי אישור (מסוכן)']] }],
   ])))
 
+  const M = S.metrics
+  if (M) fill($('metrics'), h('div', { class: 'small' },
+    M.turns24h ? `זמן תגובה ב-24 השעות האחרונות: חציון ${M.p50} שניות, 90% מהתשובות תוך ${M.p90} שניות, ${M.turns24h} הודעות, בממוצע ${M.avgTools} כלים להודעה.` : 'עוד אין מדידות של זמן תגובה.',
+    h('br'), `הודעות שנשלחו היום מיוזמתו: ${M.proactiveToday} מתוך ${M.budget}. מה שמעבר לזה מחכה לסיכום הבא.`))
   fill($('sent'), (S.sent.length ? S.sent.map((line) => h('div', {}, line)) : [h('div', {}, 'עוד לא נשלח כלום')]))
 
   const maskToken = (token) => {

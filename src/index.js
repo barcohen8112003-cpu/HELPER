@@ -24,6 +24,7 @@ import { calendarOn, listEvents } from './calendar.js'
 import { getDay } from './day.js'
 import { backupTick } from './backup.js'
 import { humanError } from './style.js'
+import { takeProactiveSlot } from './metrics.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 
 let reconciled = false
@@ -356,8 +357,10 @@ const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, t
 
 // Proactive notices from the rest of the assistant. During quiet hours a non-urgent one is not held to be sent
 // on its own at 08:00: it joins the night's batch and arrives inside the one morning brief.
+// Outside quiet hours, non-urgent notices are also capped per day (MESSAGE_BUDGET, default 6): past the cap they
+// join the next brief instead of buzzing his phone again.
 function notify(text, urgent = false, key) {
-  if (urgent || !inQuietHours()) return outbox.notify(text, urgent, key)
+  if (urgent || (!inQuietHours() && (key && state.sentKeys.includes(key) ? true : takeProactiveSlot()))) return outbox.notify(text, urgent, key)
   if (key) {
     if (state.sentKeys.includes(key)) return Promise.resolve()
     state.sentKeys = [...state.sentKeys, key].slice(-500)

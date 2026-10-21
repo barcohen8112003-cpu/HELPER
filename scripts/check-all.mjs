@@ -22,6 +22,7 @@ const TESTS = [
   'src/dashboard/_selftest.js',
   'src/backup-selftest.js',
   'src/style-selftest.js',
+  'src/metrics-selftest.js',
 ]
 
 const failed = []

@@ -22,6 +22,7 @@ import { handleDashboard } from './dashboard/api.js'
 import { handlePhoneUpgrade, phoneAppConnected, phoneAppInfo } from './phone-app.js'
 import { bridgeReady, bridgeConnected } from './pc-bridge.js'
 import { backupEnabled, backupAccount, runBackup } from './backup.js'
+import { metricsSummary } from './metrics.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
@@ -159,6 +160,7 @@ async function snapshot(connectedSince) {
     memory: state.memory.map((m) => ({ id: m.id, text: m.fact })),
     homework: state.homework.open,
     waiting: state.outbox.length,
+    metrics: metricsSummary(),
     sent: fs.existsSync(SENT_LOG) ? fs.readFileSync(SENT_LOG, 'utf8').trim().split('\n').slice(-40).reverse() : [],
     appQrDataUrl,
     appUrl,

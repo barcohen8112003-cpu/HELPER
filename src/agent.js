@@ -7,8 +7,9 @@ const PERSONA_SHORT = path.join(ROOT, 'persona.short.md')
 import { calendarOn } from './calendar.js'
 import { googleAccounts, googleEnabled } from './google.js'
 import { state, save } from './store.js'
-import { llm, ask, LONG_PATIENCE, Aborted } from './llm.js'
+import { llm, ask, LONG_PATIENCE, Aborted, chatModel } from './llm.js'
 import { polish } from './style.js'
+import { recordTurn } from './metrics.js'
 import { activeTools, toolDefs } from './tools.js'
 import { canSpeak } from './media.js'
 import { vmEnabled } from './vm.js'
@@ -318,6 +319,7 @@ async function closingAnswer(messages) {
 // image: optional data URL, sent to the model for this turn only and kept out of the saved history.
 export async function runTurn(userText, ctx, image) {
   const mark = state.history.length
+  const started = Date.now()
   const userMsg = { role: 'user', content: image ? [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: image } }] : userText }
   state.history.push(userMsg)
   try {
@@ -326,6 +328,7 @@ export async function runTurn(userText, ctx, image) {
     for (const m of state.history) {
       if (m.role === 'tool' && Array.isArray(m.content)) m.content = m.content.find((p) => p.type === 'text')?.text || 'צילום מסך'
     }
+    recordTurn({ ms: Date.now() - started, tools: state.history.slice(mark).filter((m) => m.role === 'tool').length, model: chatModel() })
     trimHistory()
     save()
     // After the answer is on its way: note lasting facts from this message as candidates. Never blocks or fails the turn.
