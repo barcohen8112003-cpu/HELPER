@@ -307,6 +307,14 @@ function confirm(question, media) {
 }
 
 const outbox = createOutbox((text) => wa.send(state.owner.jid, text))
+// scripts/auto-update.sh leaves a note here when it had to roll back a broken update. It is sent once, as soon as
+// WhatsApp is up again, so a failed deploy is never silent.
+const DEPLOY_NOTICE = path.join(DATA_DIR, 'deploy-notice.txt')
+if (fs.existsSync(DEPLOY_NOTICE)) {
+  const text = fs.readFileSync(DEPLOY_NOTICE, 'utf8').trim()
+  fs.rmSync(DEPLOY_NOTICE, { force: true })
+  if (text) outbox.notify(text, true).catch(() => {})
+}
 // Scheduled tasks wait their turn in the same queue as chat messages, so two model runs never interleave.
 const scheduledTask = (instruction) => {
   const run = queue.then(() => runTask(instruction, { confirm, sendMedia, say, patient: true }))
