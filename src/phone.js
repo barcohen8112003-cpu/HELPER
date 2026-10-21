@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process'
 import { config, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
 import { parseSocksProxy, startTcpForward } from './socks-forward.js'
+import { phoneAppConnected, phoneAppInfo } from './phone-app.js'
 
 export const PHONE_DISCONNECT_MS = 12 * 60 * 60 * 1000
 export const ADB_TCP_PORT = 5555
@@ -288,6 +289,33 @@ export function phonePrompt(english = false) {
   return '• טלפון Android (ADB דרך Tailscale): "תשלוט לי בטלפון", "מה יש לי בטלפון", "תפתח לי בטלפון", "תצלם את מסך הטלפון". כלים: phone_screenshot (התמונה חוזרת אליך), phone_ui_dump (רכיבים לחיצים עם קואורדינטות), phone_tap, phone_swipe, phone_type_text (עברית דרך לוח ההעתקה, כי input text לא תומך בעברית; השדה צריך להיות בפוקוס), phone_key, phone_open_app, phone_list_apps, phone_notifications, phone_battery, phone_shell. פעולה שמשנה את הטלפון מבקשת אישור בוואטסאפ בעצמה, אל תשאל לפני. "צמד טלפון <פורט> <קוד>" ו"חבר טלפון <פורט>" מטופלים לפנייך. אחרי החיבור הראשון הטלפון עובר לפורט 5555 עד אתחול, גם בנתונים סלולריים. אחרי אתחול צריך Wi-Fi, ניפוי אלחוטי, ופורט חדש.\n'
 }
 
+// The HELPER app is on the socket: one tool, no ADB, and no "please connect" message.
+export function phoneAppReadyPrompt(english = false) {
+  if (english) {
+    return '- The HELPER app is connected. You have full control of his phone through run_on_phone. Use it for any phone task (alarms, apps, messages, settings, screenshots, notifications). Do not use the phone_* tools and do not ask him to connect anything. Setting an alarm, opening an app or reading the screen does not need WhatsApp approval; run_on_phone asks only before send, pay, call or delete.\n'
+  }
+  return '• האפליקציה של HELPER מחוברת לטלפון. יש לך שליטה מלאה בטלפון דרך run_on_phone. השתמש בו לכל משימה בטלפון (שעון מעורר, אפליקציות, הודעות, הגדרות, מסך, התראות). אל תשתמש בכלי phone_* ואל תבקש ממנו לחבר משהו. שעון מעורר, פתיחת אפליקציה וקריאת המסך לא דורשים אישור בוואטסאפ; run_on_phone מבקש אישור רק לפני שליחה, תשלום, שיחה או מחיקה.\n'
+}
+
+// No app and no ADB. Lead with the app, and mention wireless debugging only as a last fallback.
+export function phoneAppMissingPrompt(english = false) {
+  if (english) {
+    return '- His phone is not connected. For any phone task, ask him to open the HELPER app and make sure its accessibility service ("HELPER: שליטה בטלפון") is on. Do not suggest wireless debugging. ADB ("חבר טלפון") is only a last fallback if the app cannot run.\n'
+  }
+  return '• הטלפון לא מחובר. לכל משימה בטלפון בקש ממנו לפתוח את אפליקציית HELPER ולוודא ששירות הנגישות «HELPER: שליטה בטלפון» דלוק. אל תציע ניפוי אלחוטי. ADB («חבר טלפון») הוא רק מוצא אחרון אם האפליקציה לא יכולה לרוץ.\n'
+}
+
+export function phoneRoutePrompt(english = false) {
+  if (phoneAppConnected()) return phoneAppReadyPrompt(english)
+  if (phoneEnabled()) return phonePrompt(english)
+  return phoneAppMissingPrompt(english)
+}
+
+function appLink() {
+  const info = phoneAppInfo()
+  return { connected: phoneAppConnected(), device: info?.device || '', permissions: info?.perms || {} }
+}
+
 export function planPhoneDisconnectNotice(box = phoneBox(), now = Date.now()) {
   if (box.disconnectOpen) return ''
   const last = Number(box.notifiedAt) || 0
@@ -481,7 +509,10 @@ export async function reconnectPhone() {
 export async function phoneStatus() {
   const box = phoneBox()
   const serial = box.serial
-  const base = { host: box.host || config.phone.host, port: box.port || null, connected: false, model: '', battery: '', line: 'הטלפון לא מחובר' }
+  const app = appLink()
+  const appLine = app.connected ? `אפליקציית HELPER מחוברת${app.device ? ` · ${app.device}` : ''}` : ''
+  const base = { host: box.host || config.phone.host, port: box.port || null, connected: false, model: '', battery: '', app, line: appLine || 'הטלפון לא מחובר' }
+  // `connected` stays the ADB link. The live view only asks for a frame when that is true.
   if (!serial || !(await deviceUp(serial))) return base
   const [model, batteryDump] = await Promise.all([
     runAdb(['-s', serial, 'shell', 'getprop', 'ro.product.model']).catch(() => ''),
@@ -495,7 +526,7 @@ export async function phoneStatus() {
     connected: true,
     model: modelName,
     battery: batteryText,
-    line: ['מחובר', modelName, batteryText && `סוללה ${batteryText}`].filter(Boolean).join(' · '),
+    line: ['מחובר', modelName, batteryText && `סוללה ${batteryText}`, appLine].filter(Boolean).join(' · '),
   }
 }
 

@@ -164,8 +164,8 @@ screenshot. Choose exactly ONE next action.`,
 - {"type": "swipe", "direction": "up|down|left|right"}
 - {"type": "key", "keys": "back|home|recents|enter|notifications|quick_settings"}
 - {"type": "open_app", "package": "<package name>"}  or {"type": "open_app", "name": "<app name>"}
-- {"type": "intent", "kind": "<kind>", ...}         direct shortcuts, faster and surer than tapping:
-    alarm {hour, minute, label?}   timer {seconds, label?}   calendar {title, begin: "YYYY-MM-DDTHH:MM", end?, location?}
+- {"type": "intent", "kind": "alarm", "hour": 7, "minute": 0, "label": "בוקר"}   direct shortcut (numbers, not strings). The phone sets it with AlarmClock and skips the clock UI. Also:
+    timer {seconds, label?}   calendar {title, begin: "YYYY-MM-DDTHH:MM", end?, location?}
     contact {name, phone?}   dial {phone} (opens the dialer, does not call)   sms {phone, text} (opens the composer)
     whatsapp {phone: "9725...", text} (opens the chat with the text, does not send)   navigate {query} (Waze, else Maps)
     url {url}   camera {}   settings {panel: "wifi|bluetooth|internet|volume|display|app|battery"}
@@ -174,9 +174,12 @@ screenshot. Choose exactly ONE next action.`,
 - {"type": "notifications"}                         the current notifications come back as text
 - {"type": "look"}                                  your next observation includes a screenshot (only when the list is not enough)
 - {"type": "wait", "amount": <seconds 1-10>}`,
-    tips: `Use an intent or open_app when one fits, before tapping through screens. Tap by index, not coordinates, unless the
+    tips: `Use an intent or open_app when one fits, before tapping through screens. An alarm is one intent
+{"type":"intent","kind":"alarm","hour":7,"minute":0}; do not open the clock app and do not gate it.
+Tap by index, not coordinates, unless the
 element is missing from the list. After typing in a search field, use key "enter" or tap the search suggestion.
-Pressing the call button, sending a message or an email, ordering a ride or food and paying are commits: gate them.
+Setting an alarm or timer, opening an app, and reading the screen or notifications do not need a gate.
+Pressing the call button, sending a message or an email, ordering a ride or food, paying and deleting are commits: gate them.
 Add "step": 2-4 Hebrew words of what you are doing now ("פותח את Gett", "מחפש כתובת"), shown to the user on the phone.
 When you found out where something lives in an app that would save time next run ("Wolt: search is the magnifier at
 the top, cart at the bottom"), add "learned": "<that, one line>".`,

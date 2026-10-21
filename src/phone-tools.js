@@ -1,5 +1,7 @@
-// Tools the model uses to drive the phone. Reads are allowed under the default PHONE_MODE=ask.
+// ADB tools. Reads are allowed under the default PHONE_MODE=ask.
 // Anything that changes the phone asks in WhatsApp first. Dangerous shell commands always ask.
+// While the HELPER app is on /bridge/phone these stay off, so the model uses run_on_phone instead.
+import { phoneAppConnected } from './phone-app.js'
 import {
   phoneEnabled,
   gatePhone,
@@ -23,10 +25,12 @@ const obj = (properties, required = Object.keys(properties)) => ({ type: 'object
 
 const DENIED = 'הפקודה נחסמה: אין שרשור פקודות, ואין איפוס, מחיקה, הסרת אפליקציה או שינוי הגדרות מערכת בצורה כזאת.'
 
+const adbPhone = () => phoneEnabled() && !phoneAppConnected()
+
 export const phoneTools = [
   {
     name: 'phone_screenshot',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'מצלם את מסך הטלפון. התמונה חוזרת אליך כדי שתראה מה על המסך, ונשלחת גם למשתמש. ל"מה יש לי בטלפון", "תצלם את מסך הטלפון", "תשלוט לי בטלפון" מתחילים מכאן או מ-phone_ui_dump.',
     parameters: obj({}, []),
     async run(_args, ctx) {
@@ -41,7 +45,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_ui_dump',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'קורא את מסך הטלפון כטקסט: רכיבים לחיצים, הטקסט שלהם, ומרכז הגבולות (x,y) ל-phone_tap. עדיף על ניחוש קואורדינטות מצילום.',
     parameters: obj({}, []),
     async run(_args, ctx) {
@@ -52,7 +56,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_tap',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'לוחץ על המסך. x,y בפיקסלים של הצילום, או text עם הטקסט של הרכיב (מחפש אותו במסך ולוחץ במרכז).',
     parameters: obj({ x: num('פיקסל אופקי'), y: num('פיקסל אנכי'), text: str('טקסט של הרכיב ללחוץ עליו, במקום קואורדינטות') }, []),
     async run(args, ctx) {
@@ -63,7 +67,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_swipe',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'מחליק על המסך. direction: up, down, left, right (גלילה). או ארבע נקודות x1,y1,x2,y2.',
     parameters: obj(
       {
@@ -83,7 +87,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_type_text',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'מקליד לשדה שבפוקוס. עברית וסימנים נשלחים דרך לוח ההעתקה ואז הדבקה, כי adb input text תומך רק ב-ASCII. השדה חייב להיות בפוקוס (phone_tap עליו קודם).',
     parameters: obj({ text: str('הטקסט להקליד') }),
     async run({ text }, ctx) {
@@ -94,7 +98,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_key',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'מקש מערכת: back, home, recents, enter, volume_up, volume_down, power.',
     parameters: obj({ key: { type: 'string', enum: ['back', 'home', 'recents', 'enter', 'volume_up', 'volume_down', 'power'], description: 'המקש' } }),
     async run({ key }, ctx) {
@@ -105,7 +109,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_open_app',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'פותח אפליקציה לפי שם (וואטסאפ, הגדרות, מצלמה, כרום) או לפי שם חבילה. אם השם לא נמצא, phone_list_apps מראה את החבילות.',
     parameters: obj({ name: str('שם האפליקציה או שם החבילה') }),
     async run({ name }, ctx) {
@@ -116,7 +120,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_list_apps',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'רשימת חבילות מותקנות בטלפון (package names).',
     parameters: obj({}, []),
     async run(_args, ctx) {
@@ -128,7 +132,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_notifications',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'סיכום ההתראות שמוצגות עכשיו בטלפון: אפליקציה, כותרת וטקסט.',
     parameters: obj({}, []),
     async run(_args, ctx) {
@@ -139,7 +143,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_battery',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'אחוז הסוללה בטלפון, אם היא בטעינה, והטמפרטורה.',
     parameters: obj({}, []),
     async run(_args, ctx) {
@@ -150,7 +154,7 @@ export const phoneTools = [
   },
   {
     name: 'phone_shell',
-    enabled: phoneEnabled,
+    enabled: adbPhone,
     description: 'פקודה אחת ב-adb shell, בלי שרשור (; | & ` $). איפוס, rm, pm uninstall, pm clear, settings put ו-reboot חסומים עד אישור מפורש, גם במצב auto. לקריאה עדיף הכלים הייעודיים.',
     parameters: obj({ command: str('פקודה אחת, בלי תווי שרשור') }),
     async run({ command }, ctx) {
