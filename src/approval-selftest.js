@@ -17,6 +17,8 @@ Object.assign(process.env, {
   COMPUTER_MODE: 'ask',
   PHONE_MODE: 'ask',
   ELEVENLABS_API_KEY: 'test',
+  CLAUDE_CODE_OAUTH_TOKEN: 'test',
+  CLAUDE_CODE_BIN: process.execPath,
 })
 
 const calls = []
@@ -59,6 +61,7 @@ const RISKY = [
   ['use_computer', { goal: INJECTED }],
   ['phone_shell', { command: 'rm -rf /sdcard/DCIM' }],
   ['phone_tap', { text: 'שלח' }],
+  ['claude_code', { title: 'אתר', task: INJECTED }],
 ]
 
 for (const [name, args] of RISKY) {
@@ -73,7 +76,7 @@ for (const [name, args] of RISKY) {
     const asked = []
     let result
     try {
-      result = String(await tool.run({ ...args, ...extra }, { confirm: async (q) => (asked.push(q), false), say: async () => {}, sendMedia: async () => {} }))
+      result = String(await tool.run({ ...args, ...extra }, { confirm: async (q) => (asked.push(q), false), say: async () => {}, sendMedia: async () => {}, background: () => { throw new Error('a background job started without a yes') } }))
     } catch (e) {
       result = `threw: ${e.message}`
     }

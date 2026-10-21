@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { config } from './config.js'
 import { state, save, newId } from './store.js'
@@ -24,6 +25,7 @@ import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
+import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
 
 // The Discord bot counts as linked once it has called the bridge within the last day.
 const discordLinked = () => Date.now() - (state.bridgeSeenAt || 0) < 24 * 3600000
@@ -154,6 +156,34 @@ export const tools = [
       if (!ctx.background) return 'אי אפשר להתחיל משימת רקע מכאן. בצע אותה בעצמך עכשיו.'
       const job = ctx.background(title, instruction)
       return `המשימה "${job.title}" רצה ברקע. אמור למשתמש בשורה אחת שהתחלת ושהתוצאה תגיע, בלי לחכות לה.`
+    },
+  },
+  {
+    name: 'claude_code',
+    enabled: () => true,
+    description: 'מעביר ל-Claude Code (במנוי Claude של המשתמש) משימת בנייה: אתר, דף נחיתה, משחק בדפדפן, סקריפט. רץ ברקע, והקבצים מגיעים בוואטסאפ כ-zip (ו-index.html בנפרד לאתר). לשינוי בפרויקט קיים, אותו project. כשהמשתמש מבקש "ש-Claude יבנה" או אתר/אפליקציה שלמים.',
+    parameters: obj(
+      {
+        title: str('שם קצר בעברית, למשל "אתר לחנות פרחים"'),
+        task: str('הבקשה המלאה עם כל הפרטים מהשיחה: מה לבנות, תוכן, צבעים, שפה. Claude Code לא רואה את השיחה.'),
+        project: str('שם הפרויקט, כדי להמשיך לעבוד על אותם קבצים. ריק = לפי title'),
+      },
+      ['title', 'task']
+    ),
+    async run({ title, task, project }, ctx) {
+      if (!claudeCodeEnabled()) return 'Claude Code עוד לא מחובר. הסבר למשתמש: להריץ פעם אחת במחשב כלשהו "claude setup-token" (אחרי התקנה: npm i -g @anthropic-ai/claude-code), ולהדביק את הטוקן באתר ההגדרות בכרטיס Claude Code.'
+      if (!ctx.background) return 'אי אפשר להתחיל את זה מכאן.'
+      const name = project || title
+      if (!(await ctx.confirm(`להעביר ל-Claude Code (על חשבון המנוי שלך) את "${title}"?\n${task}`))) return 'המשתמש לא אישר. שום דבר לא נשלח ל-Claude Code.'
+      const job = ctx.background(title, task, async (signal, setStep) => {
+        const done = await runClaudeCode(task, { project: name, signal, setStep })
+        if (done.files.length) {
+          await ctx.sendMedia({ buffer: zipFiles(done.dir, done.files), mime: 'application/zip', name: `${projectSlug(name)}.zip`, caption: `${done.files.length} קבצים` })
+          if (done.files.includes('index.html')) await ctx.sendMedia({ buffer: fs.readFileSync(path.join(done.dir, 'index.html')), mime: 'text/html', name: 'index.html', caption: 'לפתוח בדפדפן' })
+        }
+        return done.summary || 'סיימתי.'
+      })
+      return `"${job.title}" עבר ל-Claude Code ורץ ברקע. אמור למשתמש בשורה אחת שהתחיל ושהקבצים יגיעו כאן.`
     },
   },
   {
@@ -608,6 +638,7 @@ const BRIEF = {
   list_tasks: 'List scheduled tasks.',
   cancel_task: 'Cancel a scheduled task by id.',
   send_whatsapp: 'Send the user a WhatsApp message right now. For when he is talking to you from elsewhere (Discord) and wants something on WhatsApp. A future reminder is add_reminder, which also arrives on WhatsApp.',
+  claude_code: 'Hand a build job (website, landing page, browser game, script) to Claude Code on the user\'s Claude plan. Runs in the background; files arrive as a zip.',
   study_plan: 'Build a study plan for an exam (topics over the days left, last day review). Show the draft; add_to_calendar=true adds it after his approval.',
   week_ahead: 'Next week (Sun-Sat): saved exams, Classroom deadlines, calendar. Also sent on its own Saturday evening.',
   get_timetable: 'The user\'s school timetable for a day from Webtop: time, lesson, subject, room, teacher, cancellations. day = today, tomorrow, Hebrew/English weekday or YYYY-MM-DD (this week only). A reminder before each lesson is already sent automatically.',

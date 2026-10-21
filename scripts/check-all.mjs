@@ -27,6 +27,7 @@ const TESTS = [
   'src/study-selftest.js',
   'src/approval-selftest.js',
   'src/logs-selftest.js',
+  'src/claude-code-selftest.js',
 ]
 
 const failed = []

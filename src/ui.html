@@ -255,6 +255,7 @@ function render(S) {
     connector('גיבוי', 'גיבוי מוצפן יומי ל-Google Drive: זיכרון, תזכורות, חשבונות, וואטסאפ והגדרות', S.settings.BACKUP_PASSPHRASE.set, h('div', {},
       form(S, [['BACKUP_PASSPHRASE', 'סיסמת הגיבוי', { secret: true, hint: 'בלעדיה אי אפשר לשחזר. שמור אותה מחוץ ל-Helper (למשל במנהל סיסמאות).' }], ['BACKUP_GOOGLE_ACCOUNT', 'חשבון Google לגיבוי', { hint: 'ריק = החשבון הראשון שלא מסומן "קריאה בלבד"' }]], { clear: 'BACKUP_PASSPHRASE' }),
       S.settings.BACKUP_PASSPHRASE.set && h('div', { style: 'margin:12px 0' }, h('button', { class: 'btn', onclick: () => post('backup/now', {}).then((r) => toast(r.message || r.error || 'נשמר')).catch((e) => toast(e.message)) }, 'גבה עכשיו')))),
+    connector('Claude Code', '"תבקש מ-Claude לבנות לי אתר" בוואטסאפ, על חשבון המנוי שלך ב-Claude, בלי מפתח API. במחשב: npm i -g @anthropic-ai/claude-code, ואז claude setup-token, ואת הטוקן שמתקבל מדביקים כאן.', S.settings.CLAUDE_CODE_OAUTH_TOKEN.set, form(S, [['CLAUDE_CODE_OAUTH_TOKEN', 'טוקן', { secret: true, hint: 'מתחיל ב-sk-ant-oat. תקף לשנה.' }]], { clear: 'CLAUDE_CODE_OAUTH_TOKEN' })),
     connector('Gemini', '"תשאל את ג\'מיני" בוואטסאפ. מפתח חינמי מ-aistudio.google.com/apikey', S.settings.GEMINI_API_KEY.set, form(S, [['GEMINI_API_KEY', 'מפתח API', { secret: true }], ['GEMINI_MODEL', 'מודל', { hint: 'ריק = gemini-2.5-flash' }]], { clear: 'GEMINI_API_KEY' })),
     connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })))
 
