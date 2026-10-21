@@ -20,6 +20,7 @@ const TESTS = [
   'src/cloud-desktop-selftest.js',
   'src/phone-app-selftest.js',
   'src/dashboard/_selftest.js',
+  'src/backup-selftest.js',
 ]
 
 const failed = []

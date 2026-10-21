@@ -22,6 +22,7 @@ import { createMonitoring } from './monitoring/index.js'
 import { inQuietHours } from './outbox.js'
 import { calendarOn, listEvents } from './calendar.js'
 import { getDay } from './day.js'
+import { backupTick } from './backup.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 
 let reconciled = false
@@ -307,6 +308,10 @@ function confirm(question, media) {
 }
 
 const outbox = createOutbox((text) => wa.send(state.owner.jid, text))
+// Once an hour: a daily encrypted backup to Drive, when a passphrase is set (src/backup.js).
+setInterval(() => backupTick((text) => notify(text)).catch((e) => console.log(`[backup] ${e.message}`)), 3600 * 1000).unref()
+setTimeout(() => backupTick((text) => notify(text)).catch(() => {}), 5 * 60000).unref()
+
 // WhatsApp cannot report its own outage, so after WHATSAPP_DOWN_ALERT_MIN minutes without it the alert goes out
 // through Discord, and WhatsApp itself says how long it was gone once it is back.
 const WHATSAPP_DOWN_ALERT_MIN = 10

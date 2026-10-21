@@ -183,6 +183,8 @@ const build = () => ({
     proxy: env('ERRAND_PROXY'),
   },
   // "תשאל את ג'מיני": Google's Gemini through its official API (key from aistudio.google.com/apikey).
+  // Daily encrypted backup to the owner's Google Drive (src/backup.js).
+  backup: { passphrase: process.env.BACKUP_PASSPHRASE || '', account: env('BACKUP_GOOGLE_ACCOUNT').toLowerCase() },
   geminiApi: { key: env('GEMINI_API_KEY'), model: env('GEMINI_MODEL', 'gemini-2.5-flash') },
   classroomWork: {
     mode: ['auto', 'ask', 'off'].includes(env('CLASSROOM_AUTOWORK', 'auto')) ? env('CLASSROOM_AUTOWORK', 'auto') : 'auto',

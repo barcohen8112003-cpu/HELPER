@@ -24,6 +24,8 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/tasks',
   'https://www.googleapis.com/auth/drive.readonly',
+  // Only the files Helper itself creates: the daily encrypted backup (src/backup.js).
+  'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/classroom.courses.readonly',
   'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
   'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly',
