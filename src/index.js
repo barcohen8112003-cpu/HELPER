@@ -307,6 +307,30 @@ function confirm(question, media) {
 }
 
 const outbox = createOutbox((text) => wa.send(state.owner.jid, text))
+// WhatsApp cannot report its own outage, so after WHATSAPP_DOWN_ALERT_MIN minutes without it the alert goes out
+// through Discord, and WhatsApp itself says how long it was gone once it is back.
+const WHATSAPP_DOWN_ALERT_MIN = 10
+let whatsappDownSince = 0
+let whatsappDownAlerted = false
+setInterval(() => {
+  if (!state.owner) return
+  if (wa.connectedSince()) {
+    if (whatsappDownAlerted) {
+      const minutes = Math.round((Date.now() - whatsappDownSince) / 60000)
+      outbox.notify(`וואטסאפ היה מנותק כ-${minutes} דקות וחזר. הודעות שנשלחו לי בזמן הזה אולי לא הגיעו, אז שווה לשלוח שוב את מה שחשוב.`, true).catch(() => {})
+    }
+    whatsappDownSince = 0
+    whatsappDownAlerted = false
+    return
+  }
+  whatsappDownSince ||= Date.now()
+  if (whatsappDownAlerted || Date.now() - whatsappDownSince < WHATSAPP_DOWN_ALERT_MIN * 60000) return
+  whatsappDownAlerted = true
+  console.log(`[whatsapp] מנותק כבר ${WHATSAPP_DOWN_ALERT_MIN} דקות`)
+  state.discordOutbox = [...state.discordOutbox, { text: `⚠️ וואטסאפ של ${config.botName} מנותק כבר ${WHATSAPP_DOWN_ALERT_MIN} דקות. אם זה לא חוזר לבד, ייתכן שצריך לקשר מחדש (מכשירים מקושרים). המצב באתר ההגדרות.`, speak: false, at: Date.now() }].slice(-20)
+  save()
+}, 60000).unref()
+
 // scripts/auto-update.sh leaves a note here when it had to roll back a broken update. It is sent once, as soon as
 // WhatsApp is up again, so a failed deploy is never silent.
 const DEPLOY_NOTICE = path.join(DATA_DIR, 'deploy-notice.txt')
