@@ -47,7 +47,7 @@ function comingDays(now) {
 
 // The same instructions as systemPrompt(), in compact English: a third of the tokens, for small per-minute budgets.
 // The tools describe themselves, so only what they cannot say is spelled out here.
-function lightPrompt(now, memory) {
+function lightPrompt(now, memory, summary) {
   const google = googleAccounts()
   return `You are ${config.botName}, one user's personal assistant in WhatsApp, running on his computer.
 Now: ${now.toLocaleString('en-GB', { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} (${process.env.TZ}).
@@ -75,13 +75,13 @@ Working rules:
 ${config.computerMode === 'ask' ? '- Computer tools ask the user for approval themselves; do not ask first.' : ''}
 
 Memory about the user:
-${memory}${state.summary ? `\n\nEarlier in this conversation:\n${state.summary}` : ''}`
+${memory}${summary ? `\n\nEarlier in this conversation:\n${summary}` : ''}`
 }
 
-function systemPrompt() {
+function systemPrompt(summary = state.summary) {
   const now = new Date()
   const memory = state.memory.length ? state.memory.map((m) => `#${m.id} ${m.fact}`).join('\n') : '(ריק)'
-  if (config.llm.light) return lightPrompt(now, memory)
+  if (config.llm.light) return lightPrompt(now, memory, summary)
   return `אתה ${config.botName}, עוזר אישי בוואטסאפ של משתמש אחד. אתה רץ על המחשב שלו.
 עכשיו: ${now.toLocaleString('he-IL', { weekday: 'long', year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} (תאריך ISO מקומי: ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}).
 
@@ -118,7 +118,7 @@ ${config.computerMode !== 'off' ? `• מחשב - run_command, read_file, write_
 • אם כלי נכשל, אמור מה נכשל ולמה.
 
 זיכרון על המשתמש:
-${memory}${state.summary ? `\n\nסיכום של מה שדובר קודם בשיחה:\n${state.summary}` : ''}`
+${memory}${summary ? `\n\nסיכום של מה שדובר קודם בשיחה:\n${summary}` : ''}`
 }
 
 // Hard cap, in case compaction keeps failing.
@@ -162,13 +162,13 @@ function shortenOldResults(messages) {
 }
 
 // Runs the model over `messages` (appending to it) until it answers without calling a tool. Returns that answer.
-async function converse(messages, ctx) {
+async function converse(messages, ctx, summary = state.summary) {
   const tools = activeTools()
   const defs = toolDefs(tools)
   for (let step = 0; step < MAX_STEPS; step++) {
     shortenOldResults(messages)
     // A scheduled run has nobody waiting on it, so it waits for the main model rather than settle for a weaker one.
-    const msg = await llm([{ role: 'system', content: systemPrompt() }, ...messages], defs, undefined, ctx?.patient ? LONG_PATIENCE : undefined)
+    const msg = await llm([{ role: 'system', content: systemPrompt(summary) }, ...messages], defs, undefined, ctx?.patient ? LONG_PATIENCE : undefined)
     const assistant = { role: 'assistant', content: msg.content ?? '' }
     if (msg.tool_calls?.length) assistant.tool_calls = msg.tool_calls
     messages.push(assistant)
@@ -186,12 +186,12 @@ async function converse(messages, ctx) {
       messages.push({ role: 'tool', tool_call_id: call.id, content: String(result).slice(0, TOOL_RESULT_CHARS) })
     }
   }
-  return closingAnswer(messages)
+  return closingAnswer(messages, summary)
 }
 
 // Out of steps: the turn still ends in an answer. The findings are handed over as plain text in a fresh exchange
 // with no tools, because a model that is mid-way through tool calls will try to make another one if it can.
-async function closingAnswer(messages) {
+async function closingAnswer(messages, summary) {
   const start = messages.findLastIndex((m) => m.role === 'user')
   const question = typeof messages[start].content === 'string' ? messages[start].content : messages[start].content.find((p) => p.type === 'text')?.text || ''
   const findings = messages
@@ -201,7 +201,7 @@ async function closingAnswer(messages) {
     .join('\n\n')
   const msg = await llm(
     [
-      { role: 'system', content: systemPrompt() },
+      { role: 'system', content: systemPrompt(summary) },
       { role: 'user', content: `${question}\n\n---\nYou already looked into this and are out of tool calls. Below is everything you found. Answer the user now from it, with links where you have them, and say plainly what you could not check. Do not call tools.\n\n${findings}` },
     ],
     null,
@@ -266,6 +266,43 @@ export async function runBackground(instruction, ctx) {
 export function record(instruction, reply) {
   state.history.push({ role: 'user', content: `[משימת רקע הסתיימה: ${instruction}]` }, { role: 'assistant', content: reply })
   trimHistory()
+  save()
+}
+
+// Side conversations: the voice app (and any other client) talks to the same assistant, with the same memory and
+// tools, but keeps its own history. Each one runs beside the WhatsApp queue instead of waiting in it, and requests
+// within one conversation still go one at a time, so a conversation never interleaves with itself.
+const SESSION_HISTORY = 30
+const sessionQueues = new Map()
+
+const sessionOf = (id) => ((state.sessions ||= {})[id] ||= { history: [], summary: '' })
+
+// Nobody is at the computer to approve, so by default anything that needs approval is refused.
+const NO_APPROVAL = { confirm: async () => false, sendMedia: async () => {}, say: async () => {}, react: async () => {} }
+
+export function runSession(id, userText, ctx = {}) {
+  const run = async () => {
+    const session = sessionOf(id)
+    const mark = session.history.length
+    session.history.push({ role: 'user', content: userText })
+    try {
+      const reply = await converse(session.history, { ...NO_APPROVAL, ...ctx }, session.summary)
+      while (session.history.length > SESSION_HISTORY) session.history.shift()
+      while (session.history.length && session.history[0].role !== 'user') session.history.shift()
+      save()
+      return reply
+    } catch (e) {
+      session.history.length = mark
+      throw e
+    }
+  }
+  const result = (sessionQueues.get(id) || Promise.resolve()).then(run)
+  sessionQueues.set(id, result.catch(() => {}))
+  return result
+}
+
+export function resetSession(id) {
+  if (state.sessions?.[id]) delete state.sessions[id]
   save()
 }
 

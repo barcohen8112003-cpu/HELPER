@@ -12,6 +12,7 @@ const defaults = {
   tasks: [], // { id, instruction, at, repeat }: scheduled runs of the agent itself
   watchers: [], // { id, name, url, instruction, intervalMin, lastValue, lastRun }
   history: [],
+  sessions: {}, // { [id]: { history, summary } }: side conversations, such as the voice app, kept apart from the WhatsApp chat
   mail: { uids: {}, lastPoll: 0 }, // uids: last seen uid per mailbox
   calendar: { seen: null, lastPoll: 0 }, // seen: event uids already reported
   health: {}, // { [source]: { fails, down } } for mail and Classroom connections
