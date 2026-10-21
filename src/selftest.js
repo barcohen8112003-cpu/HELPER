@@ -1,4 +1,4 @@
-// Offline checks plus one live search. Does not touch WhatsApp or the LLM.
+// Offline checks plus one live search (skipped with HELPER_OFFLINE=1). Does not touch WhatsApp or the LLM.
 import assert from 'node:assert/strict'
 import { htmlToText, webSearch, fetchPage } from './web.js'
 import { nextOccurrence } from './scheduler.js'
@@ -16,6 +16,12 @@ for (const t of tools) {
   for (const r of t.parameters.required) assert.ok(r in t.parameters.properties, `${t.name}: ${r}`)
 }
 console.log('כלים פעילים:', activeTools().map((t) => t.name).join(', '))
+
+// HELPER_OFFLINE=1 (CI) stops here: the live part depends on outside sites, not on this code.
+if (process.env.HELPER_OFFLINE === '1') {
+  console.log('הכול עבר ✔ (בלי הבדיקה החיה)')
+  process.exit(0)
+}
 
 const results = await webSearch('PS5 DualSense controller price')
 console.log(`חיפוש: ${results.length} תוצאות, ראשונה: ${results[0]?.title} | ${results[0]?.url}`)
