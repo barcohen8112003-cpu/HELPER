@@ -1,5 +1,6 @@
 package com.example.helper.phone
 
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 
 /** One action from the server's goal loop, parsed and checked before anything touches the phone. */
@@ -22,7 +23,22 @@ sealed class PhoneAction {
         val KEYS = setOf("back", "home", "recents", "enter", "notifications", "quick_settings")
         val INTENTS = setOf("alarm", "timer", "calendar", "contact", "dial", "sms", "whatsapp", "navigate", "url", "camera", "settings")
 
-        private fun JsonObject.str(k: String) = get(k)?.takeIf { !it.isJsonNull }?.asString?.trim()
+        // Gson numbers are not strings. Hour 7 must become "7", not throw and not "7.0", so the alarm shortcut can read it.
+        private fun JsonElement.argText(): String? {
+            if (isJsonNull || !isJsonPrimitive) return null
+            val p = asJsonPrimitive
+            return when {
+                p.isBoolean -> p.asBoolean.toString()
+                p.isNumber -> {
+                    val n = p.asDouble
+                    if (n.isFinite() && n % 1.0 == 0.0 && n <= Long.MAX_VALUE.toDouble() && n >= Long.MIN_VALUE.toDouble()) n.toLong().toString()
+                    else p.asString
+                }
+                else -> p.asString
+            }
+        }
+
+        private fun JsonObject.str(k: String) = get(k)?.argText()?.trim()
         private fun JsonObject.int(k: String) = get(k)?.takeIf { !it.isJsonNull }?.let { runCatching { it.asDouble.toInt() }.getOrNull() }
 
         fun parse(o: JsonObject): PhoneAction {
@@ -61,7 +77,8 @@ sealed class PhoneAction {
                     require(kind in INTENTS) { "קיצור לא מוכר: $kind" }
                     val args = o.entrySet()
                         .filter { (k, v) -> k != "type" && k != "kind" && v.isJsonPrimitive }
-                        .associate { (k, v) -> k to v.asString }
+                        .mapNotNull { (k, v) -> v.argText()?.let { k to it } }
+                        .toMap()
                     Launch(kind, args)
                 }
                 "device" -> Device(

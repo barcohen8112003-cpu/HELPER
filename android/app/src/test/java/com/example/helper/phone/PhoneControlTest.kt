@@ -105,6 +105,7 @@ class PhoneActionTest {
         assertEquals(PhoneAction.Key("back"), parse("""{"type":"key","keys":"BACK"}"""))
         assertEquals(PhoneAction.OpenApp("com.gett", null), parse("""{"type":"open_app","package":"com.gett"}"""))
         assertEquals(PhoneAction.Launch("alarm", mapOf("hour" to "7", "minute" to "0")), parse("""{"type":"intent","kind":"alarm","hour":7,"minute":0}"""))
+        assertEquals(PhoneAction.Launch("alarm", mapOf("hour" to "7", "minute" to "0", "label" to "בוקר")), parse("""{"type":"intent","kind":"alarm","hour":7.0,"minute":0.0,"label":"בוקר"}"""))
         assertEquals(PhoneAction.Device("flashlight", "on"), parse("""{"type":"device","setting":"flashlight","value":"on"}"""))
         assertEquals(PhoneAction.Notifications, parse("""{"type":"notifications"}"""))
     }

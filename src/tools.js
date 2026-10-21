@@ -1111,7 +1111,7 @@ ${await askGemini(question)}`
   {
     name: 'run_on_phone',
     enabled: phoneAppConnected,
-    description: 'מבצע כל משימה בטלפון של המשתמש מקצה לקצה, דרך אפליקציית HELPER (שירות נגישות): "תזמין לי מונית ב-Gett הביתה", "תשלח לאבא בוואטסאפ שאני בדרך", "תדליק שעון מעורר ל-7", "תנווט הביתה", "מה ההתראות שלי". הסוכן קורא את המסך ובוחר כל צעד בעצמו, ומשתמש בקיצורים ישירים (שעון מעורר, טיימר, יומן, ניווט, חיוג) כשיש. לפני תשלום, הזמנה, שליחה בשמו, שיחה או מחיקה הוא שולח בעצמו בקשת אישור עם צילום מסך, אל תשאל לפני. מחזיר DONE, NEED_USER, DENIED, STOPPED או FAIL. כשהאפליקציה מחוברת, עדיף על כלי ה-phone_* של ADB.',
+    description: 'מבצע כל משימה בטלפון של המשתמש מקצה לקצה, דרך אפליקציית HELPER (שירות נגישות): "תזמין לי מונית ב-Gett הביתה", "תשלח לאבא בוואטסאפ שאני בדרך", "תדליק שעון מעורר ל-7", "תנווט הביתה", "מה ההתראות שלי". הסוכן קורא את המסך ובוחר כל צעד בעצמו, ומשתמש בקיצורים ישירים (שעון מעורר, טיימר, יומן, ניווט, חיוג) כשיש. שעון מעורר, פתיחת אפליקציה וקריאת המסך רצים בלי אישור בוואטסאפ. לפני תשלום, הזמנה, שליחה בשמו, שיחה או מחיקה הוא שולח בעצמו בקשת אישור עם צילום מסך, אל תשאל לפני. מחזיר DONE, NEED_USER, DENIED, STOPPED או FAIL. כשהאפליקציה מחוברת זה הכלי היחיד לטלפון; כלי ה-phone_* של ADB כבויים.',
     parameters: obj(
       {
         goal: str('המטרה במילים של המשתמש, מלאה. בלי הוראות צעד-צעד.'),
@@ -1271,7 +1271,7 @@ const BRIEF = {
   google_home_devices: 'List smart home devices and their state (on/off) from Google Home.',
   google_home_control: 'Turn on, turn off, or toggle smart home devices (lights, speakers) via Google Home.',
   use_computer: 'Autonomous mouse and keyboard agent to operate the PC step by step (requires user approval).',
-  run_on_phone: 'Do any task on the user\'s phone end to end through the HELPER app: order a ride, send a WhatsApp, set an alarm, navigate, read notifications. It picks every step itself and asks him with a screenshot before paying, ordering, sending, calling or deleting; do not ask first. Prefer it over the adb phone_* tools when the app is connected. Returns DONE, NEED_USER, DENIED, STOPPED or FAIL.',
+  run_on_phone: 'Do any task on the user\'s phone end to end through the HELPER app: order a ride, send a WhatsApp, set an alarm, navigate, read notifications. It picks every step itself. Setting an alarm, opening an app or reading the screen does not ask. It asks him with a screenshot only before paying, ordering, sending, calling or deleting; do not ask first. When the app is connected this is the only phone tool. Returns DONE, NEED_USER, DENIED, STOPPED or FAIL.',
   run_errand: 'Order, book or buy in your own browser. For the cheapest product, compare_prices first unless he already asked to order. Before paying or ordering it asks him with a screenshot. Prefer PayPal; he has a debit/prepaid card only, no credit card. Returns DONE, NEED_USER, DENIED or FAIL.',
   compare_prices: 'Market survey only: cheapest exact model. Start at zap.co.il (Israel) and Google Shopping, then 3-5 shops. Compare total INCLUDING shipping, seller and delivery. Ranked Hebrew list with prices and links. Never a cart or checkout.',
 }

@@ -11,6 +11,9 @@ process.env.HELPER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-phon
 
 const { WebSocket } = await import('ws')
 const { state } = await import('./store.js')
+const { config } = await import('./config.js')
+const phoneMod = await import('./phone.js')
+const { activeTools } = await import('./tools.js')
 const app = await import('./phone-app.js')
 const { runOnPhone } = await import('./computer-use.js')
 
@@ -104,6 +107,18 @@ const sendGate = { type: 'gate', kind: 'send', site: 'WhatsApp', items: 'לאב�
 
 await connectPhone()
 ok(app.phoneAppConnected() && app.phoneAppInfo().device === 'Test S25', 'the app connects and says hello')
+config.phone.mode = 'ask'
+config.phone.host = '100.110.143.89'
+{
+  const names = activeTools().map((t) => t.name)
+  const run = activeTools().find((t) => t.name === 'run_on_phone')
+  ok(names.includes('run_on_phone') && !names.some((n) => n.startsWith('phone_')), 'a connected app hides every ADB phone_* tool')
+  ok(run && run.risk !== 'write', 'run_on_phone does not ask WhatsApp before it starts')
+  ok(phoneMod.phoneRoutePrompt(false).includes('run_on_phone') && !phoneMod.phoneRoutePrompt(false).includes('phone_open_app') && !phoneMod.phoneRoutePrompt(false).includes('ניפוי אלחוטי'), 'the prompt with the app connected does not offer ADB')
+  const status = await phoneMod.phoneStatus()
+  ok(status.connected === false && status.app?.connected && status.app.device === 'Test S25' && status.app.permissions.accessibility === true, 'phone status reports the app link without pretending ADB is up')
+  ok(status.line.includes('אפליקציית HELPER מחוברת') && status.line.includes('Test S25'), 'the status line names the connected phone')
+}
 
 // 1. "תשלח לאבא שאני בדרך": tapping send straight away is blocked; the gate asks with a screenshot; a no sends nothing.
 {
@@ -167,10 +182,20 @@ ok(app.phoneAppConnected() && app.phoneAppInfo().device === 'Test S25', 'the app
 // 6. "תדליק שעון מעורר ל-7": one shortcut, its result reaches the model, then done.
 {
   phone.log.acts.length = 0
+  let approvals = 0
   const think = script({ action: { type: 'intent', kind: 'alarm', hour: 7, minute: 0 } }, { action: { type: 'done', summary: 'שעון מעורר ל-07:00' } })
-  const out = await runOnPhone('תדליק שעון מעורר ל-7', '', {}, { think })
-  ok(phone.log.acts.length === 1 && phone.log.acts[0].kind === 'alarm', 'the alarm goes through one intent')
-  ok(out.startsWith('DONE'), 'and the run ends DONE')
+  const out = await runOnPhone('תדליק שעון מעורר ל-7', '', { confirm: async () => { approvals++; return false } }, { think })
+  ok(phone.log.acts.length === 1 && phone.log.acts[0].kind === 'alarm' && phone.log.acts[0].hour === 7 && phone.log.acts[0].minute === 0, 'the alarm goes through one intent with the hour')
+  ok(approvals === 0 && out.startsWith('DONE'), 'setting an alarm does not ask for WhatsApp approval')
+}
+
+// 6b. Opening an app and reading the screen are the same: no approval.
+{
+  phone.log.acts.length = 0
+  let approvals = 0
+  const think = script({ action: { type: 'open_app', name: 'שעון' } }, { action: { type: 'notifications' } }, { action: { type: 'done', summary: 'נפתח' } })
+  const out = await runOnPhone('תפתח את השעון ותקרא את המסך', '', { confirm: async () => { approvals++; return false } }, { think })
+  ok(approvals === 0 && phone.log.acts.some((a) => a.type === 'open_app') && phone.log.acts.some((a) => a.type === 'notifications') && out.startsWith('DONE'), 'opening an app and reading notifications does not ask')
 }
 
 // 7. Notifications come back as text for the model.
@@ -211,6 +236,11 @@ ok(app.phoneAppConnected() && app.phoneAppInfo().device === 'Test S25', 'the app
 phone.ws.close()
 await new Promise((r) => setTimeout(r, 50))
 ok(!app.phoneAppConnected(), 'a closed app is no longer connected')
+ok(activeTools().some((t) => t.name === 'phone_open_app') && !activeTools().some((t) => t.name === 'run_on_phone'), 'ADB tools return once the app disconnects')
+ok(phoneMod.phoneRoutePrompt(false).includes('phone_open_app') && phoneMod.phoneRoutePrompt(false).includes('5555'), 'and the prompt goes back to ADB')
+config.phone.mode = 'off'
+config.phone.host = ''
+ok(phoneMod.phoneRoutePrompt(false).includes('HELPER: שליטה בטלפון') && phoneMod.phoneRoutePrompt(false).includes('אל תציע ניפוי אלחוטי') && !phoneMod.phoneRoutePrompt(false).includes('5555'), 'with neither link, ask him to open the app and its accessibility service')
 server.close()
 console.log(`${failed ? 'FAILED' : 'OK'}: ${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

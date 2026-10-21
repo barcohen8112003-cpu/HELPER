@@ -122,6 +122,15 @@ ok(!phone.phoneEnabled() && !activeTools().some((t) => t.name === 'phone_tap'), 
 config.phone.mode = 'ask'
 ok(activeTools().some((t) => t.name === 'phone_screenshot') && activeTools().some((t) => t.name === 'phone_type_text'), 'ask mode exposes the phone tools')
 ok(phone.phonePrompt(false).includes('תשלוט לי בטלפון') && phone.phonePrompt(false).includes('מה יש לי בטלפון') && phone.phonePrompt(false).includes('5555'), 'the Hebrew prompt routes phone requests and mentions port 5555')
+ok(phone.phoneRoutePrompt(false) === phone.phonePrompt(false), 'with ADB and no app, the prompt stays the ADB one')
+const missing = phone.phoneAppMissingPrompt(false)
+ok(missing.includes('HELPER: שליטה בטלפון') && missing.includes('חבר טלפון') && missing.includes('אל תציע ניפוי אלחוטי') && !missing.includes('5555'), 'without the app, ask for the HELPER accessibility service and mention ADB only as a fallback')
+const ready = phone.phoneAppReadyPrompt(false)
+ok(ready.includes('run_on_phone') && ready.includes('שליטה מלאה') && !ready.includes('phone_open_app') && !ready.includes('חבר טלפון'), 'a connected app is told to use run_on_phone and not to ask him to connect')
+config.phone.mode = 'off'
+ok(phone.phoneRoutePrompt(false).includes('HELPER: שליטה בטלפון') && !activeTools().some((t) => t.name.startsWith('phone_')), 'no ADB and no app asks him to open HELPER, and hides the ADB tools')
+config.phone.mode = 'ask'
+ok(activeTools().some((t) => t.name === 'phone_open_app') && !activeTools().some((t) => t.name === 'run_on_phone'), 'ADB tools are back when the app is not connected')
 ok(JSON.stringify(phone.reconnectPorts(41234)) === JSON.stringify([41234, 5555]) && JSON.stringify(phone.reconnectPorts(5555)) === JSON.stringify([5555]), 'reconnect tries the saved port, then 5555')
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
