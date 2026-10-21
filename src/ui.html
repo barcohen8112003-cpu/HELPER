@@ -252,6 +252,7 @@ function render(S) {
       ['MAIL_PASS', 'סיסמת אפליקציה', { secret: true }],
     ], { clear: 'MAIL_PASS' })),
     connector('יומן (iCal)', 'קריאה בלבד מכתובת iCal סודית', Boolean(S.settings.CALENDAR_ICS_URL), form(S, [['CALENDAR_ICS_URL', 'כתובת iCal']])),
+    connector('Gemini', '"תשאל את ג\'מיני" בוואטסאפ. מפתח חינמי מ-aistudio.google.com/apikey', S.settings.GEMINI_API_KEY.set, form(S, [['GEMINI_API_KEY', 'מפתח API', { secret: true }], ['GEMINI_MODEL', 'מודל', { hint: 'ריק = gemini-2.5-flash' }]], { clear: 'GEMINI_API_KEY' })),
     connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })))
 
   fill($('activeRows'),
