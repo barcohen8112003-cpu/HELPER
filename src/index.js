@@ -1,3 +1,4 @@
+import './secret-logs.js' // first, so every later log line is masked
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomInt } from 'node:crypto'

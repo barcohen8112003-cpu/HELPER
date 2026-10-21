@@ -277,6 +277,10 @@ function render(S) {
     ['QUIET_HOURS', 'שעות שקט', { placeholder: '22:00-08:00', hint: 'בשעות האלה נשלחות רק תזכורות והתראות אבטחה. ריק = כבוי' }],
     ['NEWS_BRIEF_TIME', 'תקציר חדשות', { placeholder: '08:00', hint: 'מה קרה מאז אתמול בערב. ריק = כבוי' }],
     ['DAILY_BRIEF_TIME', 'סיכום בוקר', { placeholder: '08:00', hint: 'תזכורות, יומן ומטלות של היום. ריק = כבוי' }],
+    ['WEEKLY_REVIEW_TIME', 'השבוע הקרוב', { placeholder: '20:00', hint: 'בשבת בשעה הזאת: מבחנים, הגשות ויומן של השבוע. off = כבוי' }],
+    ['MESSAGE_BUDGET', 'הודעות ביוזמתו ביום', { placeholder: '6', hint: 'מה שמעבר לזה מחכה לסיכום הבא. תזכורות ודחופים לא נספרים' }],
+    ['LLM_PRICES', 'מחירי מודלים', { placeholder: 'gpt-4.1-mini=0.4/1.6', hint: 'דולר למיליון טוקנים, קלט/פלט. מודל שלא מופיע נחשב חינמי' }],
+    ['MONTHLY_COST_LIMIT', 'תקרת עלות חודשית ($)', { hint: 'התראה ב-80% וב-100%. ריק = בלי תקרה' }],
     ['NEWS_FEEDS', 'מקורות חדשות', { hint: 'כתובות RSS מופרדות בפסיק. ריק = ynet, מעריב וישראל היום' }],
     ['TIMEZONE', 'אזור זמן', { placeholder: 'Asia/Jerusalem' }],
     ['COMPUTER_MODE', 'שליטה במחשב', { options: [['ask', 'מבקש אישור לכל פעולה'], ['off', 'כבוי'], ['auto', 'בלי אישור (מסוכן)']] }],
@@ -285,7 +289,8 @@ function render(S) {
   const M = S.metrics
   if (M) fill($('metrics'), h('div', { class: 'small' },
     M.turns24h ? `זמן תגובה ב-24 השעות האחרונות: חציון ${M.p50} שניות, 90% מהתשובות תוך ${M.p90} שניות, ${M.turns24h} הודעות, בממוצע ${M.avgTools} כלים להודעה.` : 'עוד אין מדידות של זמן תגובה.',
-    h('br'), `הודעות שנשלחו היום מיוזמתו: ${M.proactiveToday} מתוך ${M.budget}. מה שמעבר לזה מחכה לסיכום הבא.`))
+    h('br'), `הודעות שנשלחו היום מיוזמתו: ${M.proactiveToday} מתוך ${M.budget}. מה שמעבר לזה מחכה לסיכום הבא.`,
+    ...(M.cost ? [h('br'), M.cost + (M.costLimit ? ` התקרה: $${M.costLimit}.` : '')] : [])))
   fill($('sent'), (S.sent.length ? S.sent.map((line) => h('div', {}, line)) : [h('div', {}, 'עוד לא נשלח כלום')]))
 
   const maskToken = (token) => {

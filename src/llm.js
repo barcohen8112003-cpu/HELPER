@@ -1,5 +1,6 @@
 import { config } from './config.js'
 import { state } from './store.js'
+import { recordUsage } from './metrics.js'
 
 const RETRY_DELAYS = [2000, 6000]
 const MAX_WAIT = 70000
@@ -66,7 +67,9 @@ async function request(body, signal) {
     if (res.status === 413) error.message = 'הבקשה גדולה מהמכסה לדקה של המודל הזה. נסה /new כדי לקצר את השיחה, או הודעה קצרה יותר.'
     throw error
   }
-  const msg = (await res.json()).choices?.[0]?.message
+  const data = await res.json()
+  recordUsage(body.model, data.usage)
+  const msg = data.choices?.[0]?.message
   if (!msg) throw new Error('תשובה ריקה מהמודל')
   health.okAt = Date.now()
   return msg
