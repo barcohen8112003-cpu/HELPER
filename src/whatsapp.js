@@ -22,6 +22,26 @@ const BOT_MARK = '​'
 const MAX_MEDIA = 15 * 1024 * 1024
 const logger = pino({ level: 'silent' })
 
+// While WhatsApp is not linked, the settings site shows the current QR and a code to type in. On a server there is
+// no window to scan from, so this is the only way to link there without reading the logs.
+const pairing = { qr: '', code: '', number: '' }
+let askCode = null
+export const pairingInfo = () => ({ ...pairing })
+export async function requestPairing(raw) {
+  if (!askCode) throw new Error('וואטסאפ עוד עולה, נסה שוב בעוד כמה שניות')
+  return askCode(raw)
+}
+
+// "050-123-4567", "+972 50...", "00972..." or "972050..." -> "972501234567". WhatsApp wants the country code and
+// no leading 0; a number typed the Israeli way is the most common reason a pairing code is refused.
+export function pairingNumber(raw) {
+  let d = String(raw || '').replace(/\D/g, '')
+  if (d.startsWith('00')) d = d.slice(2)
+  else if (d.startsWith('0')) d = '972' + d.slice(1)
+  if (d.startsWith('9720')) d = '972' + d.slice(4)
+  return d.length >= 10 && d.length <= 15 ? d : ''
+}
+
 // onMessage({ jids, fromMe, selfChat, key, lateSeconds, text, getMedia, reaction?, location? })
 // onReady({ jid, lid }): the linked account's own ids, each time the connection opens.
 export async function startWhatsApp(onMessage, onReady = () => {}) {
@@ -76,6 +96,20 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
     sock = makeWASocket({ auth: state, version, logger, markOnlineOnConnect: false, syncFullHistory: false, getMessage: async (key) => sent.get(key.id) })
     sock.ev.on('creds.update', saveCreds)
     let codeAsked = false
+    askCode = async (raw) => {
+      const number = pairingNumber(raw)
+      if (!number) throw new Error('מספר לא תקין. כתוב אותו עם קידומת, למשל 0501234567 או 972501234567')
+      if (ready) throw new Error('וואטסאפ כבר מחובר')
+      codeAsked = true
+      const code = await sock.requestPairingCode(number)
+      Object.assign(pairing, { code, number })
+      // Remembered so a restart offers a code for the same number right away.
+      store.wa.pairNumber = number
+      save()
+      fs.writeFileSync(CODE_FILE, code)
+      console.log(`קוד צימוד לוואטסאפ: ${code}`)
+      return { code, number }
+    }
 
     // Names for numbers, from the address book WhatsApp syncs and from the names people give themselves.
     // A saved name wins over a self-given one.
@@ -95,8 +129,10 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
 
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
       if (qr) {
+        pairing.qr = qr
         // Nobody is scanning: stop instead of printing codes forever. Exit code 2 tells start.bat not to restart.
-        if (++qrShown > MAX_QR) {
+        // Only in a window at home: on a server nobody would start it again, and the settings site needs it running.
+        if (++qrShown > MAX_QR && process.stdout.isTTY) {
           console.log('\nהקוד לא נסרק. כשתהיה מוכן לסרוק, הפעל שוב את start.bat.')
           process.exit(2)
         }
@@ -108,12 +144,10 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
         // link, a code to type in is offered as well: Linked devices > Link a device > Link with phone number.
         // On a server there is no screen to scan at all, so the number can also be given up front:
         // WHATSAPP_PAIRING_NUMBER, digits only with the country code.
-        const number = process.env.WHATSAPP_PAIRING_NUMBER?.replace(/\D/g, '') || (/^\d+@s\.whatsapp\.net$/.test(store.owner?.jid || '') && store.owner.jid.split('@')[0])
+        const number = pairingNumber(process.env.WHATSAPP_PAIRING_NUMBER) || store.wa.pairNumber || (/^\d+@s\.whatsapp\.net$/.test(store.owner?.jid || '') && store.owner.jid.split('@')[0])
         if (number && !codeAsked) {
-          codeAsked = true
           try {
-            const code = await sock.requestPairingCode(number)
-            fs.writeFileSync(CODE_FILE, code)
+            const { code } = await askCode(number)
             console.log(`או בלי סריקה: מכשירים מקושרים > קישור מכשיר > קישור עם מספר טלפון, והקלד: ${code}\n`)
           } catch (e) {
             console.log(`[whatsapp] ${e.message}`)
@@ -125,6 +159,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
         attempts = 0
         openedAt = Date.now()
         qrShown = 0
+        Object.assign(pairing, { qr: '', code: '', number: '' })
         fs.rmSync(QR_FILE, { force: true })
         fs.rmSync(CODE_FILE, { force: true })
         console.log('מחובר לוואטסאפ ✔')
@@ -144,6 +179,8 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
       }
       if (connection === 'close') {
         ready = false
+        // A code belongs to the socket that asked for it; the next socket offers a new one.
+        Object.assign(pairing, { qr: '', code: '' })
         const code = lastDisconnect?.error?.output?.statusCode
         if (code === DisconnectReason.loggedOut) {
           fs.rmSync(AUTH_DIR, { recursive: true, force: true })

@@ -13,6 +13,7 @@ import { setGoogleHomeLoginUrl } from './google-home.js'
 import { captureFrame, ensureCloudBrowser, errandCloudOn, webtopInput } from './webtop-browser.js'
 import { desktopShellHtml, isDesktopPath, proxyDesktopHttp, proxyDesktopUpgrade } from './cloud-desktop.js'
 import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
+import { pairingInfo, requestPairing } from './whatsapp.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount } from './google.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
@@ -107,9 +108,13 @@ async function snapshot(connectedSince) {
     }
   }
 
+  // While not linked: the live QR and typed code, so linking works on a server with no window to scan from.
+  const link = connectedSince ? {} : pairingInfo()
+  const linkQr = link.qr ? await QRCode.toDataURL(link.qr, { width: 280 }).catch(() => '') : ''
+
   return {
     botName: config.botName,
-    whatsapp: { connected: Boolean(connectedSince), since: connectedSince ? ago(connectedSince).replace('לפני ', '') : '', paired: Boolean(state.owner) },
+    whatsapp: { connected: Boolean(connectedSince), since: connectedSince ? ago(connectedSince).replace('לפני ', '') : '', paired: Boolean(state.owner), qr: linkQr, code: link.code || '', number: link.number || '' },
     model: chatModel(),
     voice: { hear: canHear(), speak: canSpeak() },
     google: { configured: Boolean(config.google.clientId && config.google.clientSecret), accounts: google.map((email) => ({ email, readOnly: config.google.readOnly.includes(email.toLowerCase()) })) },
@@ -226,6 +231,7 @@ export function startUi({ connectedSince, restart, agent }) {
       save()
       return {}
     }
+    if (route === 'whatsapp/pair') return await requestPairing(body.number)
     if (route === 'restart') return setTimeout(restart, 300), {}
     if (route === 'webtop/input') return await webtopInput(body)
     if (route === 'phone/pair') {

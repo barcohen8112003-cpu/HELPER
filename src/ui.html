@@ -165,7 +165,7 @@ function render(S) {
   $('name').textContent = S.botName
   fill($('meta'),
     h('div', {}, h('span', { class: 'pill ' + (S.whatsapp.connected ? 'ok' : 'bad') }, S.whatsapp.connected ? 'וואטסאפ מחובר' : 'וואטסאפ מנותק')),
-    h('div', { style: 'margin-top:8px' }, S.whatsapp.connected ? 'ברצף ' + S.whatsapp.since : S.whatsapp.paired ? 'מנסה להתחבר' : 'צריך לסרוק QR בחלון העוזר'),
+    h('div', { style: 'margin-top:8px' }, S.whatsapp.connected ? 'ברצף ' + S.whatsapp.since : S.whatsapp.qr ? 'צריך לקשר, ראה למטה' : S.whatsapp.paired ? 'מנסה להתחבר' : 'מתחבר...'),
     h('div', { style: 'margin-top:8px;direction:ltr;text-align:right' }, S.model),
     S.waiting ? h('div', { style: 'margin-top:8px' }, S.waiting + ' הודעות ממתינות') : '')
 
@@ -214,7 +214,23 @@ function render(S) {
     D.enabled && h('a', { class: 'btn primary launch-desktop', href: '/desktop/' }, '🖥️ שליטה מרחוק במחשב בענן'),
     shortcuts.length && h('div', { class: 'launch-links' }, shortcuts))
 
+  const WA = S.whatsapp
+  const waNumber = h('input', { type: 'tel', placeholder: '0501234567', value: WA.number ? '0' + WA.number.replace(/^972/, '') : '', style: 'direction:ltr;max-width:200px' })
+  const waBody = h('div', {},
+    WA.code && h('div', { style: 'margin:12px 0' },
+      h('div', { class: 'small' }, 'בטלפון: וואטסאפ ← מכשירים מקושרים ← קישור מכשיר ← "קישור עם מספר טלפון במקום", והקלד:'),
+      h('div', { style: 'font-size:32px;font-weight:700;letter-spacing:4px;direction:ltr;text-align:center;margin:8px 0' }, WA.code.replace(/^(.{4})(.{4})$/, '$1-$2'))),
+    h('form', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0', onsubmit: (e) => { e.preventDefault(); act('whatsapp/pair', { number: waNumber.value }, 'הקוד מוכן') } },
+      waNumber, h('button', { class: 'primary', type: 'submit' }, WA.code ? 'קוד חדש' : 'קבל קוד צימוד')),
+    h('p', { class: 'small' }, 'הקוד מתחלף אחרי כמה דקות. אם וואטסאפ אומר שהקוד שגוי, לחץ "קוד חדש" והקלד מיד.'),
+    WA.qr && h('details', {}, h('summary', {}, 'או סריקת QR ממכשיר אחר'),
+      h('div', { style: 'text-align:center;margin:12px 0' }, h('img', { src: WA.qr, alt: 'QR', style: 'width:240px;height:240px;background:#fff;padding:8px;border-radius:8px' }))))
   fill($('connectors'),
+    !WA.connected && WA.qr && h('div', { class: 'row block' },
+      h('div', { style: 'display:flex;gap:16px;align-items:center' },
+        h('div', { class: 'grow' }, h('b', {}, 'וואטסאפ'), h('div', { class: 'small' }, 'מקשרים פעם אחת את המספר שהעוזר יעבוד ממנו')),
+        h('span', { class: 'pill bad' }, 'לא מקושר')),
+      waBody),
     connector('Webtop', 'ציונים, מערכת שעות, שיעורי בית והודעות. קריאה בלבד', Boolean(W.enabled), webtopBody,
       W.blocked && h('p', { class: 'small', style: 'margin:10px 0 0' }, W.blockedStatus || 'וובטופ חוסם את כתובת השרת, משתמשים במחשב הביתי')),
     connector('Google Home', 'אורות, רמקולים ושאר מכשירי הבית', GH.cloud, googleHomeBody),
@@ -309,6 +325,8 @@ function render(S) {
   fill($('appQrRows'), appRows.length ? h('div', { class: 'row block', style: 'text-align:center' }, appRows) : h('div', { class: 'row small' }, 'לא נמצאה כתובת רשת זמינה לחיבור.'))
 }
 
+// While WhatsApp waits for a link the QR and code change, so the page refreshes itself until it connects.
+setInterval(() => { if ($('meta').textContent.includes('צריך לקשר') && !document.activeElement?.matches('input')) load() }, 15000)
 async function load() {
   const res = await fetch('/api/state')
   if (!res.ok) return toast('אין גישה. פתח מחדש את הכתובת מחלון העוזר.')
