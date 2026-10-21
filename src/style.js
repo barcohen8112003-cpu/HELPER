@@ -69,6 +69,18 @@ export function polish(reply) {
   return out || reply.trim()
 }
 
+// A failure as Naor should read it: plain words and what to do, never a raw HTTP code or stack message.
+// Messages already written in Hebrew for him pass through.
+export function humanError(e) {
+  const msg = String(e?.message || e || '')
+  if (/LLM HTTP (?:5\d\d|429)/.test(msg)) return 'המודל עמוס כרגע ולא ענה. נסה שוב בעוד דקה.'
+  if (/LLM HTTP 40[13]/.test(msg)) return 'המפתח של מודל ה-AI לא עובד (פג או שגוי). אפשר לעדכן אותו באתר ההגדרות, בכרטיס "מודל AI".'
+  if (/HTTP \d{3}|fetch failed|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|aborted due to timeout|TimeoutError/i.test(msg))
+    return 'שירות חיצוני לא ענה, אז לא הצלחתי לסיים. נסה שוב בעוד רגע.'
+  if (/[\u0590-\u05FF]/.test(msg)) return msg
+  return 'משהו השתבש ולא הצלחתי לסיים. נסה שוב, ואם זה חוזר, תגיד לי מה ביקשת.'
+}
+
 // What still reads like a bot after polishing, for the style check set (src/style-selftest.js).
 const TELLS = [/כמודל שפה/, /אני (?:רק )?(?:מודל|בינה מלאכותית|AI)\b/, /חשוב לציין ש/, /בסופו של דבר,/, /לסיכום,/, /אשמח לעזור/, /במה אוכל לעזור/, /^#{1,6} /m, /\*\*/, / [—–] /]
 export const styleTells = (text) => TELLS.filter((r) => r.test(text)).map((r) => r.source)

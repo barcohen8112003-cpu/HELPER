@@ -1,7 +1,7 @@
 // The style check set: replies written the way models tend to write, and what Naor should actually get.
 // Every change to src/style.js or persona.md is checked against it. Offline, no model.
 import assert from 'node:assert/strict'
-import { polish, styleTells } from './style.js'
+import { polish, styleTells, humanError } from './style.js'
 
 const CASES = [
   // [model wrote, sent]
@@ -49,4 +49,15 @@ for (const [, expected] of CASES.slice(0, 20)) {
 }
 assert.ok(styleTells('כמודל שפה אני לא יכול').length > 0)
 passed++
+for (const [err, want] of [
+  [new Error('LLM HTTP 503: upstream'), /עמוס/],
+  [new Error('LLM HTTP 401: bad key'), /המפתח/],
+  [new Error('fetch failed'), /שירות חיצוני/],
+  [new Error('Google HTTP 500: x'), /שירות חיצוני/],
+  [new Error('החשבון לא מחובר'), /^החשבון לא מחובר$/],
+  [new Error('Cannot read properties of undefined'), /משהו השתבש/],
+]) {
+  assert.match(humanError(err), want)
+  passed++
+}
 console.log(`${passed} בדיקות עברו, 0 נכשלו (${CASES.length} הודעות בסט)`)

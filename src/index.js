@@ -23,6 +23,7 @@ import { inQuietHours } from './outbox.js'
 import { calendarOn, listEvents } from './calendar.js'
 import { getDay } from './day.js'
 import { backupTick } from './backup.js'
+import { humanError } from './style.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 
 let reconciled = false
@@ -252,7 +253,7 @@ const wa = await startWhatsApp(async (m) => {
       if (e instanceof Aborted || ac.signal.aborted) console.log('[agent] הופסק על ידי המשתמש')
       else {
         console.log(`[agent] ${e.message}`)
-        await wa.send(state.owner.jid, `⚠️ ${e.message}`).catch(() => {})
+        await wa.send(state.owner.jid, humanError(e)).catch(() => {})
       }
     } finally {
       clearInterval(typing)
