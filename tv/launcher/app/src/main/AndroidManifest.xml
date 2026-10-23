@@ -11,6 +11,10 @@
     <!-- HELPER: the server link and asking by voice. RECORD_AUDIO is granted with pm grant at install. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Apps window (long press on Home): which apps were used lately, and stopping background ones. Usage access is
+         granted with appops over adb, or in Settings. -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Needed since Android 10 to read the Wi-Fi network name for the network pill. Never requested at
          runtime: build-and-install grants it with pm grant, so lint's Android 12 "ask for COARSE with
@@ -208,6 +212,20 @@
             android:noHistory="false"
             android:screenOrientation="landscape"
             android:windowSoftInputMode="adjustNothing|stateHidden" />
+        <activity
+            android:name=".AppsWindowActivity"
+            android:exported="false"
+            android:theme="@style/Theme.HelperOverlay"
+            android:taskAffinity="com.gathin.tvhome.helper"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape" />
+        <activity
+            android:name=".SidePanelActivity"
+            android:exported="false"
+            android:theme="@style/Theme.HelperOverlay"
+            android:taskAffinity="com.gathin.tvhome.helper"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape" />
         <activity
             android:name=".ButtonsActivity"
             android:exported="false"

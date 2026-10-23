@@ -93,7 +93,10 @@ final class Helper {
 
     /** Package a named button opens, "" for its default. Learned keycodes are stored as "button.learned.<name>". */
     static String buttonApp(Context c, String name) {
-        return prefs(c).getString(BUTTON_PREFIX + name, "");
+        String set = prefs(c).getString(BUTTON_PREFIX + name, null);
+        if (set != null) return set;
+        // With the stock launcher off nothing answers the remote's YouTube button, so it opens YouTube by default.
+        return "youtube".equals(name) ? "com.google.android.youtube.tv" : "";
     }
 
     static void setButtonApp(Context c, String name, String pkg) {

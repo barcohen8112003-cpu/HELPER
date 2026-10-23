@@ -37,6 +37,13 @@ public class InputKeyService extends AccessibilityService {
     private Map<Integer, String> holdAppKeys = Collections.emptyMap();
     private Map<Integer, String> holdAppScancodes = Collections.emptyMap();
     private HelperLink link;
+    private final android.os.Handler homeHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean homeLong;
+    private final Runnable homeHold = () -> {
+        homeLong = true;
+        startActivity(new Intent(this, AppsWindowActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP));
+    };
     /** The button whose DOWN we consumed, so its UP is consumed too and nothing else sees half a press. */
     private String pressed;
 
@@ -81,6 +88,10 @@ public class InputKeyService extends AccessibilityService {
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
         int code = event.getKeyCode();
+        // Arrows, OK, Back, volume: nothing here concerns them. Answer at once, because the system waits for this
+        // service before it delivers each of these keys to the app, so any work here is added to every key press.
+        if (code == KeyEvent.KEYCODE_HOME && learner == null) return onHomeKey(event);
+        if (learner == null && isNavigation(code)) return false;
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0 && !isNavigation(code)) {
             // For finding a new remote's buttons: adb logcat -s HelperKeys
             Log.i(TAG, "key " + KeyEvent.keyCodeToString(code) + " (" + code + ") scan " + event.getScanCode());
@@ -118,6 +129,25 @@ public class InputKeyService extends AccessibilityService {
             } catch (ActivityNotFoundException ignored) {
             }
         }
+        return true;
+    }
+
+    /**
+     * Home: a tap goes Home as usual; holding it opens the apps window. Both are decided here, so the key is taken
+     * and a tap is replayed as the global Home action (an accessibility service may always do that).
+     */
+    private boolean onHomeKey(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (event.getRepeatCount() == 0) {
+                homeLong = false;
+                homeHandler.removeCallbacks(homeHold);
+                homeHandler.postDelayed(homeHold, 600);
+            }
+            return true;
+        }
+        homeHandler.removeCallbacks(homeHold);
+        if (!homeLong && !event.isCanceled()) performGlobalAction(GLOBAL_ACTION_HOME);
+        homeLong = false;
         return true;
     }
 

@@ -566,7 +566,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
             return true;
         });
-        btnSettings.setOnClickListener(v -> open(systemIntent(Settings.ACTION_SETTINGS)));
+        btnSettings.setOnClickListener(v -> startActivity(new Intent(this, SidePanelActivity.class)));
         // HELPER: chat from Home (type, or OK in the overlay to talk). Hold it for the remote buttons screen.
         TextView btnHelper = findViewById(R.id.btnHelper);
         btnHelper.setOnClickListener(v -> HelperOverlayActivity.open(this, "type", null));
@@ -764,6 +764,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onResume() {
         super.onResume();
+        // The side panel's video switch: rebuild Home when it no longer matches what is on screen.
+        if (VideoWallpaper.desired(this) != (videoWallpaper != null)) {
+            recreate();
+            return;
+        }
         if (weather != null) weather.onResume();
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
