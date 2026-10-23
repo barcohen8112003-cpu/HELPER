@@ -94,9 +94,37 @@ public class HelperOverlayActivity extends Activity {
             main.postDelayed(autoClose, CLOSE_AFTER_MS);
         } else if ("type".equals(mode)) {
             startTyping(null);
+        } else if (listening) {
+            // The Assistant button again while listening: "I'm done talking".
+            endSpeech();
         } else {
             startListening();
         }
+    }
+
+    /** The overlay on screen, for the Assistant button's next press (HelperSessionService). */
+    static volatile HelperOverlayActivity current;
+
+    /** The remote's Assistant button while the overlay is up. */
+    void assistantPressed() {
+        main.removeCallbacks(autoClose);
+        if (listening) endSpeech();
+        else if (!busy) startListening();
+    }
+
+    /** True from the start of listening until the words are in (or nothing was heard). */
+    private boolean listening;
+
+    /** Stop the microphone now and answer what was said so far. */
+    private void endSpeech() {
+        if (!listening) return;
+        android.util.Log.i("HelperMic", "end of speech by button");
+        status.setText("חושב…");
+        waves.setMode(WaveView.THINKING);
+        if (recognizer != null && triedGoogle) {
+            try { recognizer.stopListening(); } catch (RuntimeException ignored) { }
+        }
+        mic.finish();
     }
 
     // ---- voice ----
@@ -114,6 +142,7 @@ public class HelperOverlayActivity extends Activity {
         heard.setText("");
         status.setText("מקשיב…");
         waves.setMode(WaveView.LISTENING);
+        listening = true;
         // Google's own online recognizer (the one Google Assistant uses on this TV) knows Hebrew: the words go to
         // HELPER as text, which every HELPER version takes. The recording below is the fallback.
         if (!triedGoogle && startGoogleRecognizer()) return;
@@ -147,6 +176,7 @@ public class HelperOverlayActivity extends Activity {
                     @Override
                     public void onError(int error) {
                         if (isFinishing() || busy) return;
+                        listening = false;
                         if (error == android.speech.SpeechRecognizer.ERROR_NO_MATCH
                                 || error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                             triedGoogle = false;
@@ -157,6 +187,7 @@ public class HelperOverlayActivity extends Activity {
                         }
                         // Google's recognizer is not usable here: record and let HELPER transcribe instead.
                         android.util.Log.i("HelperMic", "Google recognizer error " + error + ", recording instead");
+                        listening = true;
                         recordForHelper();
                     }
 
@@ -169,6 +200,7 @@ public class HelperOverlayActivity extends Activity {
                     @Override
                     public void onResults(Bundle b) {
                         triedGoogle = false;
+                        listening = false;
                         String t = firstResult(b);
                         if (t == null || t.trim().isEmpty()) { onError(android.speech.SpeechRecognizer.ERROR_NO_MATCH); return; }
                         heard.setText(t);
@@ -204,6 +236,7 @@ public class HelperOverlayActivity extends Activity {
 
             @Override
             public void done(byte[] wav) {
+                listening = false;
                 if (isFinishing()) return;
                 if (wav == null) {
                     waves.setMode(WaveView.IDLE);
@@ -216,12 +249,14 @@ public class HelperOverlayActivity extends Activity {
 
             @Override
             public void failed(String why) {
+                listening = false;
                 if (!isFinishing()) startTyping(why + ". אפשר להקליד.");
             }
         });
     }
 
     private void stopListening() {
+        listening = false;
         mic.stop();
         if (recognizer != null) {
             try { recognizer.cancel(); } catch (RuntimeException ignored) { }
@@ -371,7 +406,8 @@ public class HelperOverlayActivity extends Activity {
         main.removeCallbacks(autoClose);
         boolean typing = input.getVisibility() == View.VISIBLE && input.hasFocus();
         if (!typing && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)) {
-            startListening();
+            if (listening) endSpeech();
+            else startListening();
             return true;
         }
         if (!typing && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
@@ -381,16 +417,33 @@ public class HelperOverlayActivity extends Activity {
         return super.onKeyDown(keyCode, event);
     }
 
+    private boolean resumed;
+    /** Another app came to the front: stop and close. A brief pause (the Assistant button's session) is ignored. */
+    private final Runnable closeIfLeft = () -> {
+        if (resumed || isFinishing()) return;
+        stopListening();
+        stopSpeaking();
+        finish();
+    };
+
     @Override
     protected void onPause() {
         super.onPause();
-        stopListening();
-        stopSpeaking();
-        if (!isChangingConfigurations()) finish();
+        resumed = false;
+        if (!isChangingConfigurations()) main.postDelayed(closeIfLeft, 700);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        current = this;
+        main.removeCallbacks(closeIfLeft);
     }
 
     @Override
     protected void onDestroy() {
+        if (current == this) current = null;
         main.removeCallbacksAndMessages(null);
         mic.stop();
         if (recognizer != null) recognizer.destroy();

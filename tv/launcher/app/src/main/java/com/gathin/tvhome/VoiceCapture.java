@@ -37,10 +37,16 @@ final class VoiceCapture {
 
     void stop() { running = false; }
 
+    /** "I'm done": end the recording now and hand over what was said, instead of waiting for the quiet. */
+    void finish() { finishing = true; }
+
+    private volatile boolean finishing;
+
     @SuppressLint("MissingPermission")   // RECORD_AUDIO is granted with pm grant at install, and checked by the caller
     void start(Callback cb) {
         if (running) return;
         running = true;
+        finishing = false;
         new Thread(() -> {
             int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             AudioRecord rec;
@@ -60,7 +66,7 @@ final class VoiceCapture {
             long lastSpeech = 0;
             boolean spoke = false;
             double peak = 0;
-            while (running) {
+            while (running && !finishing) {
                 int n = rec.read(buf, 0, buf.length);
                 if (n <= 0) continue;
                 double sum = 0;

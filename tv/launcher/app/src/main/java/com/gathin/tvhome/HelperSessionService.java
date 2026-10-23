@@ -19,9 +19,23 @@ public class HelperSessionService extends VoiceInteractionSessionService {
         @Override
         public void onShow(Bundle args, int showFlags) {
             super.onShow(args, showFlags);
-            startAssistantActivity(new Intent(getContext(), HelperOverlayActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    .putExtra(HelperOverlayActivity.EXTRA_MODE, "voice"));
+            HelperOverlayActivity open = HelperOverlayActivity.current;
+            if (open != null && !open.isFinishing()) {
+                // The overlay is up: this press means "I'm done talking" (or listen again).
+                open.runOnUiThread(open::assistantPressed);
+            } else {
+                Intent i = new Intent(getContext(), HelperOverlayActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        .putExtra(HelperOverlayActivity.EXTRA_MODE, "voice");
+                try {
+                    getContext().startActivity(i);
+                } catch (RuntimeException e) {
+                    startAssistantActivity(i);
+                }
+            }
+            // Close the session at once: otherwise Android takes the next press as "close the assistant", and the
+            // overlay would never hear it.
+            finish();
         }
 
         @Override
