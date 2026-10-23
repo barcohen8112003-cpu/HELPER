@@ -116,7 +116,7 @@ final class TvActions {
         } catch (Exception ignored) { }
         return "[מהטלוויזיה בסלון, בקול. ענה במשפט או שניים. אם הוא מבקש לעשות משהו בטלוויזיה, או שאתה ממליץ ויש מה להפעיל,"
                 + " הוסף בסוף שורה עם פעולה אחת: [[open:package]] לפתיחת אפליקציה, [[youtube:חיפוש]] לחיפוש והפעלה ביוטיוב,"
-                +  [[key:pause|play|next|previous|back|home]], [[volume:0-100]]."
+                + " [[key:pause|play|next|previous|back|home]], [[volume:0-100]]."
                 + " אל תמציא חבילות. אפליקציות מותקנות: " + apps + "]\n";
     }
 
