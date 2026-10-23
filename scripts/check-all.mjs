@@ -11,6 +11,7 @@ const TESTS = [
   'src/toolkit/_selftest.js',
   'src/memory-selftest.js',
   'src/learning-selftest.js',
+  'src/audit-selftest.js',
   'src/fast-commands-selftest.js',
   'src/morning-selftest.js',
   'src/errand-selftest.js',

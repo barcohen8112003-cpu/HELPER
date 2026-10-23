@@ -21,6 +21,7 @@ import { extendedTools, categories, searchTools, setCoreNameCheck } from './tool
 import { addFact, removeFact, CATEGORIES } from './memory.js'
 import { memoryTools } from './memory-tools.js'
 import { skillTools, builderTools } from './learning-tools.js'
+import { auditTools } from './audit.js'
 import { askGemini, geminiApiEnabled } from './gemini-api.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
@@ -598,7 +599,7 @@ const isOn = (t) => !t.enabled || t.enabled()
 
 tools.push(...googleTools)
 tools.push(...pcTools)
-tools.push(...memoryTools, ...skillTools, ...builderTools)
+tools.push(...memoryTools, ...skillTools, ...builderTools, ...auditTools)
 setCoreNameCheck(() => tools.map((t) => t.name))
 tools.push(...phoneTools)
 tools.push(...tvTools)

@@ -261,7 +261,7 @@ const wa = await startWhatsApp(async (m) => {
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
       // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      const reply = await runTurn(input.text, { confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
+      const reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
       // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
       // The text follows only when it has links, or when speech failed.
       const wantsVoice = input.voice || state.voiceMode === 'always'
@@ -325,7 +325,7 @@ function confirm(question, media) {
 function background(title, instruction, run) {
   return startJob(
     title,
-    run || ((signal, setStep) => runBackground(title, instruction, { confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep })),
+    run || ((signal, setStep) => runBackground(title, instruction, { source: 'job', confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep })),
     async (name, result, error) => {
       if (result) return wa.send(state.owner.jid, `*${name}*\n${result}`)
       if (error) return wa.send(state.owner.jid, `המשימה "${name}" לא הסתיימה: ${humanError(error)}`)
@@ -392,7 +392,7 @@ if (fs.existsSync(DEPLOY_NOTICE)) {
 }
 // Scheduled tasks wait their turn in the same queue as chat messages, so two model runs never interleave.
 const scheduledTask = (instruction, { noAsk = false } = {}) => {
-  const run = queue.then(() => runTask(instruction, { confirm: noAsk ? async () => false : confirm, sendMedia, say, patient: true }))
+  const run = queue.then(() => runTask(instruction, { source: 'task', confirm: noAsk ? async () => false : confirm, sendMedia, say, patient: true }))
   queue = run.catch(() => {})
   return run
 }
@@ -434,7 +434,7 @@ const BRIDGE_NOTE = {
   text: (source) => `[הודעה דרך ${source}. עיצוב רגיל של צ'אט, לא של וואטסאפ.]`,
 }
 const bridgeAsk = (text, { voice, source }) => {
-  const run = queue.then(() => runTurn(`${BRIDGE_NOTE[voice ? 'voice' : 'text'](source)}\n${text}`, { confirm, sendMedia, say }))
+  const run = queue.then(() => runTurn(`${BRIDGE_NOTE[voice ? 'voice' : 'text'](source)}\n${text}`, { source: String(source || 'bridge').slice(0, 30), confirm, sendMedia, say }))
   queue = run.catch(() => {}).then(() => compact().catch(() => {}))
   return run
 }

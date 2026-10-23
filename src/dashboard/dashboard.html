@@ -422,6 +422,35 @@ pages.tools = async (state) => {
   return root
 }
 
+pages.audit = async (state) => {
+  const root = h('div', null, h('h2', null, 'יומן פעילות'))
+  const input = h('input', { class: 'search', type: 'search', placeholder: 'חיפוש לפי כלי, קלט או תוצאה', value: state.q || '', 'aria-label': 'חיפוש ביומן' })
+  const pick = (key, label, options) => {
+    const sel = h('select', { class: 'search', 'aria-label': label }, h('option', { value: '' }, label), ...options.map(([v, t]) => h('option', { value: v, selected: state[key] === v }, t)))
+    sel.addEventListener('change', () => { state[key] = sel.value; load().catch(showError) })
+    return sel
+  }
+  const approvalSel = pick('approval', 'כל האישורים', [['approved', 'אושר'], ['declined', 'סורב']])
+  const sourceSel = pick('source', 'כל המקורות', [['whatsapp', 'וואטסאפ'], ['task', 'משימה מתוזמנת'], ['job', 'משימת רקע'], ['tv', 'טלוויזיה'], ['android_app', 'האפליקציה'], ['discord', 'דיסקורד']])
+  const box = h('div', { style: 'margin-top:14px' })
+  root.append(h('div', { class: 'row' }, input, approvalSel, sourceSel), box)
+  const t = (iso) => new Date(iso).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  async function load() {
+    const d = await api('audit', { q: state.q, approval: state.approval, source: state.source })
+    if (d.error) { box.replaceChildren(card(null, h('div', { class: 'err' }, d.error))); return }
+    const s = d.stats
+    box.replaceChildren(
+      h('div', { class: 'muted small', style: 'margin-bottom:8px' }, 'ב-7 הימים האחרונים: ' + s.total + (s.capped ? '+' : '') + ' פעולות, ' + s.approved + ' אושרו, ' + s.declined + ' סורבו, ' + s.failed + ' נכשלו' + (s.top.length ? '. הכי הרבה: ' + s.top.map((x) => x.tool + ' (' + x.n + ')').join(', ') : '')),
+      ...(d.rows.length ? d.rows.map((r) => card(null,
+        h('div', { class: 'row' }, h('span', { class: 'toolname' }, r.tool), r.approval === 'approved' ? h('span', { class: 'pill' }, 'אושר') : null, r.approval === 'declined' ? h('span', { class: 'pill warn' }, 'סורב') : null, !r.ok && r.approval !== 'declined' ? h('span', { class: 'pill warn' }, 'נכשל') : null, h('span', { class: 'muted small' }, t(r.t) + ' · ' + r.source + ' · ' + r.ms + 'ms')),
+        Object.keys(r.args).length ? h('div', { class: 'params' }, Object.entries(r.args).map(([k, v]) => k + ': ' + v).join(' | ')) : null,
+        h('div', { class: 'muted small' }, r.error ? 'שגיאה: ' + r.error : r.result))) : [card(null, empty('אין פעולות ביומן'))]))
+  }
+  input.addEventListener('input', debounce(() => { state.q = input.value; load().catch(showError) }, 250))
+  await load()
+  return root
+}
+
 // ------------------------------------------------------------------
 // router
 // ------------------------------------------------------------------
@@ -433,6 +462,7 @@ const TABS = [
   ['shopping', 'קניות'],
   ['goals', 'יעדים'],
   ['tools', 'כלים'],
+  ['audit', 'יומן פעילות'],
 ]
 const view = document.getElementById('view')
 const tabs = document.getElementById('tabs')

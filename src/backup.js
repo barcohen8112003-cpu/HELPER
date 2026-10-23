@@ -19,7 +19,7 @@ const EVERY_MS = 24 * 3600 * 1000
 
 // Small files only: browser profiles, the VM and old local backups are large and can be rebuilt.
 const FILES = ['state.json', 'google.json', 'watch-state.json', 'voice-tools.json']
-const DIRS = ['auth']
+const DIRS = ['auth', 'audit']
 
 export const backupEnabled = () => Boolean(config.backup.passphrase && backupAccount())
 

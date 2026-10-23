@@ -21,6 +21,7 @@ import { phoneRoutePrompt } from './phone.js'
 import { tvPrompt } from './tv-tools.js'
 import { memoryBlock } from './memory.js'
 import { learningBlock } from './learning-tools.js'
+import { record as recordAudit } from './audit.js'
 import { learnFrom } from './memory-learn.js'
 
 const MAX_HISTORY = 60
@@ -198,7 +199,7 @@ const PARALLEL_SAFE = new Set([
   'web_search', 'fetch_page', 'get_news', 'check_mail', 'get_calendar', 'gmail_search', 'gmail_read', 'tasks_list',
   'classroom_assignments', 'drive_search', 'drive_read', 'github_get', 'get_weather', 'get_jewish_calendar',
   'get_currency_rate', 'israel_red_alert', 'israel_transit', 'list_reminders', 'list_tasks', 'list_watchers',
-  'get_timetable', 'memory_search', 'skill_search', 'tool_pending', 'tool_learned',
+  'get_timetable', 'memory_search', 'skill_search', 'tool_pending', 'tool_learned', 'audit_search',
 ])
 const webtopHost = () => {
   try {
@@ -224,22 +225,32 @@ const lastUserText = (messages) => {
 async function runCall(call, tools, ctx) {
   const tool = tools.find((t) => t.name === call.function.name)
   let result
+  const started = Date.now()
+  let approval = 'none'
+  let failed = ''
+  let loggedArgs = {}
   try {
     if (!tool) throw new Error('כלי לא קיים')
     const args = JSON.parse(call.function.arguments || '{}')
+    loggedArgs = args
     // The approval does not depend on the tool asking for it itself. A tool on the CONFIRM_ALWAYS list cannot
     // run until the user has said yes in the chat, whatever a web page or mail told the model to do.
     tool.onAsk?.(args)
-    if (needsApproval(tool) && !(await ctx.confirm?.(approvalText(tool.name, args, tool)))) {
+    const asked = needsApproval(tool)
+    const yes = !asked || (await ctx.confirm?.(approvalText(tool.name, args, tool)))
+    if (asked) approval = yes ? 'approved' : 'declined'
+    if (!yes) {
       result = 'המשתמש לא אישר את הפעולה, ולכן היא לא בוצעה. אל תנסה שוב ואל תעקוף.'
     } else {
       result = await tool.run(args, ctx)
     }
   } catch (e) {
     result = `שגיאה: ${e.message}`
+    failed = e.message
   }
   const text = typeof result === 'string' ? result : String(result?.text || '')
   console.log(`[tool] ${call.function.name} -> ${text.slice(0, 120).replace(/\n/g, ' ')}`)
+  recordAudit({ tool: call.function.name, args: loggedArgs, source: ctx?.source, approval, ok: !failed && approval !== 'declined', result: text, error: failed, ms: Date.now() - started })
   if (result && typeof result === 'object' && result.vision) {
     return {
       role: 'tool',
