@@ -278,19 +278,37 @@ public class HelperOverlayActivity extends Activity {
     // ---- HELPER ----
 
     private void askHelper(String text, boolean voice) {
-        busy = true;
         heard.setText(text);
+        // Quick commands ("תפתח נטפליקס", "תגביר", "תחפש ביוטיוב...") run here at once, without HELPER.
+        String quick = TvActions.tryQuick(this, text);
+        if (quick != null) {
+            showReply(quick);
+            waves.setMode(WaveView.SPEAKING);
+            main.postDelayed(() -> waves.setMode(WaveView.IDLE), 900);
+            main.postDelayed(autoClose, 2500);
+            return;
+        }
+        busy = true;
         reply.setVisibility(View.GONE);
         status.setText("חושב…");
         waves.setMode(WaveView.THINKING);
         new Thread(() -> {
             try {
-                Helper.Reply r = Helper.ask(this, text, voice);
+                // HELPER hears what the TV can do, and may end its answer with action tags (TvActions).
+                Helper.Reply r = Helper.askSpoken(this, TvActions.note(this) + text);
+                String said = TvActions.clean(r.text);
+                byte[] audio = null;
+                if (voice && !said.isEmpty()) {
+                    try { audio = Helper.tts(this, said); } catch (Exception ignored) { }
+                }
+                byte[] mp3 = audio;
                 main.post(() -> {
                     busy = false;
                     if (isFinishing()) return;
-                    showReply(r.text);
-                    if (voice && r.audioBase64 != null) speak(r.audioBase64);
+                    showReply(said);
+                    int ran = TvActions.run(this, r.text);
+                    if (ran > 0) { main.postDelayed(autoClose, 4000); return; }
+                    if (mp3 != null) speak(Base64.encodeToString(mp3, Base64.NO_WRAP));
                     else { waves.setMode(WaveView.IDLE); main.postDelayed(autoClose, CLOSE_AFTER_MS * 2); }
                 });
             } catch (Exception e) {
