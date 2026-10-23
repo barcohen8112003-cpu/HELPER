@@ -12,7 +12,10 @@ Write-Host "HELPER: $Url"
 $sec = Read-Host -AsSecureString 'HELPER access code (bridge token)'
 $token = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)).Trim()
 if (-not $token) { Write-Host 'No code typed, nothing changed.'; exit 1 }
-& $adb -s $tv shell am broadcast -a com.gathin.tvhome.HELPER_SETUP -n com.gathin.tvhome/.HelperSetupReceiver --es url $Url --es token $token
+# The bridge token is hex. Anything else was pasted by mistake (a label, the masked dots), so nothing is sent.
+if ($token -notmatch '^[A-Za-z0-9_-]{16,128}$') { Write-Host 'That does not look like the access code (letters and digits only). Nothing changed.'; Read-Host 'Press Enter to close'; exit 1 }
+# One quoted string for the TV's shell, so nothing in it is read as shell syntax.
+& $adb -s $tv shell "am broadcast -a com.gathin.tvhome.HELPER_SETUP -n com.gathin.tvhome/.HelperSetupReceiver --es url '$Url' --es token '$token'"
 Write-Host ''
 Write-Host 'Done. Go back to Claude and say "connected".'
 Read-Host 'Press Enter to close'

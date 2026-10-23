@@ -489,7 +489,12 @@ private fun UpdateCard(version: String, status: String, canInstall: Boolean, onA
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("עדכונים", color = TextHigh, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                    Text("גרסה $version. האפליקציה מתעדכנת לבד מ-GitHub, בלי להתקין מחדש", color = TextLow, fontSize = 12.sp)
+                    Text(
+                        if (Updater.fromAndroidStudio) "גרסה $version, מ-Android Studio. Run מעדכן אותה במקום, בלי להסיר"
+                        else "גרסה $version. האפליקציה מתעדכנת לבד מ-GitHub, בלי להתקין מחדש",
+                        color = TextLow,
+                        fontSize = 12.sp,
+                    )
                     if (status.isNotBlank()) Text(status, color = Cyan, fontSize = 12.sp)
                 }
                 Text(
@@ -500,7 +505,7 @@ private fun UpdateCard(version: String, status: String, canInstall: Boolean, onA
                     modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onCheck).padding(8.dp),
                 )
             }
-            PhoneStep("לאפשר התקנת עדכונים", "פעם אחת: \"אפשר ממקור זה\" עבור HELPER", canInstall, onAllow)
+            if (!Updater.fromAndroidStudio) PhoneStep("לאפשר התקנת עדכונים", "פעם אחת: \"אפשר ממקור זה\" עבור HELPER", canInstall, onAllow)
         }
     }
 }
