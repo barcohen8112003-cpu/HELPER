@@ -168,6 +168,9 @@ const build = () => ({
     upstream: env('CLOUD_DESKTOP_UPSTREAM', 'http://127.0.0.1:6080') || 'http://127.0.0.1:6080',
     vncPassword: env('CLOUD_DESKTOP_VNC_PASSWORD'),
   },
+  // Self-teaching (lessons, tools it writes for itself, the night study). Off unless SELF_LEARNING=on: while it is off
+  // none of its tools exist for the model, nothing is added to the prompt, and nothing runs at night.
+  learning: ['on', '1', 'true', 'yes'].includes(env('SELF_LEARNING').toLowerCase()),
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
   gemini: {

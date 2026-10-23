@@ -8,8 +8,9 @@ import { inQuietHours } from './outbox.js'
 import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice, webtopKeepAliveFailure } from './session.js'
 import { googleHomeKeepAlive, isGoogleHomeLoginError, planGoogleHomeLoginNotice, clearGoogleHomeLoginNotice } from './google-home.js'
 import { lessonReminders } from './lessons.js'
-import { costTick, costSummary } from './metrics.js'
-import { openGaps, clearGaps } from './skills.js'
+import { costTick } from './metrics.js'
+import { openGaps, clearGaps, proposeSkill } from './skills.js'
+import { learnerBackend, research } from './learner.js'
 import { weeklyDue, weekAhead, deadlineReminders, isoDay } from './study.js'
 import { phoneEnabled, phoneKeepAlive } from './phone.js'
 
@@ -342,40 +343,34 @@ const CHECK_IN = `יוזמה עצמית: המשתמש ביקש שתפנה אלי
 // The assistant starts a conversation on its own a few times a day, outside quiet hours.
 // The model may still decline with SKIP: an empty hello is worse than silence.
 
-// Once a night, in quiet hours, HELPER works through what it could not do that day: it researches each request, and
-// writes a lesson for the ones it learned. It sends nothing: the lessons wait for Naor's approval, and are offered the
-// next time he talks to it. It never asks him anything at night, and it stops at 80% of the monthly cost limit.
-const STUDY_PROMPT = `[סשן לימוד לילי - המשתמש לא כתב עכשיו. אף אחד לא מחכה לתשובה.]
-בימים האחרונים לא הצלחת לעשות את הדברים האלה. לכל אחד: חקור איך עושים אותו (web_search, fetch_page, ובמכונה שלך vm_run כדי לנסות בפועל).
-אם למדת איך, כתוב לקח עם skill_propose: מתי הוא רלוונטי, והצעדים שבאמת עבדו או שמקור אמין מתאר. אל תכתוב לקח על משהו שלא ניסית ולא מצאת במקור אמין.
-אל תקרא ל-skill_confirm או לכל כלי שמבקש אישור, ואל תשלח הודעות, ואל תבצע פעולות עבור המשתמש. רק למד.
-עד שלושה נושאים בלילה. בסוף החזר בדיוק SKIP.
-הבקשות:
-`
+// Once a night, in quiet hours, HELPER works through what it could not do that day. The studying is done by Claude Code
+// or Gemini (learner.js), never by the chat model, so it costs the main model nothing. It sends nothing: the lessons
+// wait for Naor's approval and are offered the next time he talks to it.
 const STUDY_FROM_HOUR = 2
 
-// The study session spends only what the day's share of the monthly limit leaves over: month-to-date spend must be
-// under STUDY_BUDGET_PERCENT (80) of the limit's daily share times the days of the month so far. A month that started
-// expensively therefore pauses the study until the pace is back inside the budget. No limit set = no brake.
-export function studyAllowed({ limit, usd, percent = 80, now = new Date() }) {
-  if (!limit) return true
-  const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
-  return usd < ((limit / days) * now.getDate() * percent) / 100
+// The part that does the work, with its dependencies passed in so a test can run it without a clock or a network.
+export async function studyBatch({ gaps, research: learn, propose, clear, limit = 3 }) {
+  const batch = gaps.slice(0, limit)
+  const learned = []
+  for (const g of batch) {
+    try {
+      learned.push(propose(await learn(g.request, { why: g.why, signal: AbortSignal.timeout(10 * 60000) })))
+    } catch (e) {
+      console.log(`[study] ${e.message}`)
+    }
+  }
+  // Each request gets one night of study; what was not learned is let go rather than tried forever.
+  clear(batch.map((g) => g.request))
+  return learned
 }
 
-async function study(notify, runTask) {
-  if (process.env.STUDY_NIGHTLY === 'off' || !inQuietHours() || new Date().getHours() < STUDY_FROM_HOUR || new Date().getHours() >= 7) return
+async function study() {
+  if (!config.learning || process.env.STUDY_NIGHTLY === 'off' || !inQuietHours() || new Date().getHours() < STUDY_FROM_HOUR || new Date().getHours() >= 7) return
   const today = new Date().toDateString()
-  if (state.studyDate === today) return
-  const open = openGaps()
-  if (!open.length) return
-  if (!studyAllowed({ limit: Number(process.env.MONTHLY_COST_LIMIT) || 0, usd: costSummary().usd, percent: Number(process.env.STUDY_BUDGET_PERCENT) || 80 })) return
+  if (state.studyDate === today || !openGaps().length || !learnerBackend()) return
   state.studyDate = today
   save()
-  const batch = open.slice(0, 3)
-  await runTask(STUDY_PROMPT + batch.map((g, i) => `${i + 1}. ${g.request}${g.why ? ` (למה לא הצלחת: ${g.why})` : ''}`).join(String.fromCharCode(10)), { noAsk: true })
-  // Each request gets one night of study; what was not learned is let go rather than tried forever.
-  clearGaps(batch.map((g) => g.request))
+  await studyBatch({ gaps: openGaps(), research, propose: proposeSkill, clear: clearGaps })
 }
 
 async function checkIn(notify, runTask) {

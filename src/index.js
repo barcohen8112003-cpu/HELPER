@@ -398,7 +398,7 @@ const scheduledTask = (instruction, { noAsk = false } = {}) => {
 }
 // Quiet monitoring owns mail, calendar and the morning brief. Its only way out is a message to the owner.
 // The tools HELPER wrote for itself and Naor approved come back with it, each checked again before it loads.
-loadUserTools().then((n) => n && console.log(`[tools] נטענו ${n} כלים שהעוזר כתב לעצמו`)).catch((e) => console.log(`[tools] ${e.message}`))
+if (config.learning) loadUserTools().then((n) => n && console.log(`[tools] נטענו ${n} כלים שהעוזר כתב לעצמו`)).catch((e) => console.log(`[tools] ${e.message}`))
 
 const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, text), getDay })
 

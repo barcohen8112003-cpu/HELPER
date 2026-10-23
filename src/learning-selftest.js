@@ -10,7 +10,9 @@ process.env.HELPER_DATA_DIR = dir
 process.env.SECRET_TEST = 'must-not-reach-the-sandbox'
 
 const { state } = await import('./store.js')
-const { tools, allTools } = await import('./tools.js')
+const { tools, allTools, activeTools } = await import('./tools.js')
+const { config: appConfig } = await import('./config.js')
+const wasOff = appConfig.learning === false
 const sk = await import('./skills.js')
 const tb = await import('./tool-builder.js')
 const reg = await import('./toolkit/registry.js')
@@ -35,6 +37,14 @@ const throws = (fn) => {
 }
 const rejects = async (p) => p.then(() => false, () => true)
 const find = (name) => [...skillTools, ...builderTools].find((t) => t.name === name)
+
+// ── the master switch ────────────────────────────────────────────────────────
+ok(wasOff, 'self-learning is off unless SELF_LEARNING=on')
+const names = () => activeTools().map((t) => t.name)
+ok(!['skill_search', 'skill_propose', 'skill_confirm', 'skill_gap', 'learn_how', 'build_tool', 'tool_install', 'tool_remove'].some((n) => names().includes(n)), 'off: none of its tools exist for the model')
+ok(names().includes('audit_search') && names().includes('memory_search'), 'and the rest of the toolbox is untouched')
+appConfig.learning = true
+ok(['skill_search', 'skill_propose', 'skill_confirm', 'learn_how', 'build_tool', 'tool_install'].every((n) => names().includes(n)), 'on: they all appear')
 
 // ── lessons ──────────────────────────────────────────────────────────────────
 const good = { title: 'לשלוח קובץ מהמחשב לטלוויזיה', when: 'כשמבקשים להעביר קובץ מהמחשב למסך הטלוויזיה בסלון', steps: '1. לפתוח את הקובץ במחשב. 2. לשתף דרך Cast לטלוויזיה. 3. לבדוק שהצליל עובר גם כן.', sources: ['https://support.google.com/chromecast', 'http://localhost/x', 'not a url'] }
@@ -235,16 +245,120 @@ ok(tb.removeUserTool('zz_double') === false, 'once')
   globalThis.fetch = realFetch
 }
 
-// ── the night study's budget ─────────────────────────────────────────────────
+// ── where it learns: Claude Code or Gemini, never the chat model ─────────────
 {
-  const { studyAllowed } = await import('./scheduler.js')
-  const day10 = new Date(2026, 9, 10) // October has 31 days: a daily share of 3.10 on a 96 limit
-  ok(studyAllowed({ limit: 0, usd: 999, now: day10 }) === true, 'no limit set, no brake')
-  ok(studyAllowed({ limit: 93, usd: 20, now: day10 }) === true, 'under 80% of the days so far (10 x 3 x 0.8 = 24): allowed')
-  ok(studyAllowed({ limit: 93, usd: 25, now: day10 }) === false, 'over it: paused')
-  ok(studyAllowed({ limit: 93, usd: 25, now: day10, percent: 100 }) === true, 'the percentage can be changed')
-  ok(studyAllowed({ limit: 93, usd: 1, now: new Date(2026, 9, 1) }) === true && studyAllowed({ limit: 93, usd: 3, now: new Date(2026, 9, 1) }) === false, 'on the first of the month only one daily share is available')
+  const { config } = await import('./config.js')
+  const learner = await import('./learner.js')
+  const gem = await import('./gemini-api.js')
+  const { studyBatch } = await import('./scheduler.js')
+  const realFetch = globalThis.fetch
+  const chatModelCalls = []
+  const geminiBodies = []
+  let geminiStatus = [200]
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith('http://fake.invalid')) (chatModelCalls.push(url), (() => { throw new Error('the chat model was called') })())
+    if (String(url).includes('generativelanguage.googleapis.com')) {
+      geminiBodies.push(JSON.parse(init.body))
+      const status = geminiStatus.length > 1 ? geminiStatus.shift() : geminiStatus[0]
+      return { ok: status === 200, status, json: async () => ({ candidates: [{ content: { parts: [{ text: GEMINI_REPLY }] } }] }) }
+    }
+    return realFetch(url, init)
+  }
+  const LESSON = { title: 'לשלוח פקס מהמחשב', when: 'כשמבקשים לשלוח מסמך בפקס', steps: ['לפתוח שירות פקס אונליין', 'להעלות את המסמך', 'להזין מספר ולשלוח'], sources: ['https://example.com/fax'] }
+  const GEMINI_REPLY = 'הנה: ```json\n' + JSON.stringify(LESSON) + '\n```'
+
+  // reading a lesson
+  const parsed = learner.parseLesson(GEMINI_REPLY)
+  ok(parsed.title === LESSON.title && parsed.steps.startsWith('1. לפתוח שירות פקס') && parsed.steps.includes('\n3. '), 'a lesson is read out of a fenced reply, steps numbered')
+  ok(throws(() => learner.parseLesson('אין כאן שום לקח')) && throws(() => learner.parseLesson('{ broken')), 'a reply with no lesson is an error')
+
+  // no backend: nobody learns, and it says so
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = ''
+  config.geminiApi.key = ''
+  ok(learner.learnerBackend() === null, 'with neither connected there is no learner')
+  ok(await rejects(learner.research('x')), 'so studying fails with a reason')
+  ok(find('build_tool') && (await find('build_tool').run({ goal: 'משהו' }, { background: () => ({ title: 't' }) })) === learner.NO_LEARNER, 'and building a tool says what to connect, instead of using the chat model')
+  ok((await find('learn_how').run({ topic: 'משהו' }, { background: () => ({ title: 't' }) })) === learner.NO_LEARNER, 'and so does learn_how')
+
+  // Claude Code
+  const workDir = path.join(dir, 'claude-work')
+  fs.mkdirSync(workDir, { recursive: true })
+  let asked = ''
+  const fakeClaude = async (task, opts) => ((asked = task), fs.writeFileSync(path.join(workDir, 'lesson.json'), JSON.stringify(LESSON)), { dir: workDir, summary: 'done', files: [] })
+  const viaClaude = await learner.research('לשלוח פקס', { backend: 'claude', claude: fakeClaude })
+  ok(viaClaude.title === LESSON.title && asked.includes('lesson.json') && asked.includes('לשלוח פקס'), 'Claude Code is asked, and its file is read')
+  const noFile = async () => ({ dir: path.join(dir, 'empty'), summary: JSON.stringify(LESSON) })
+  ok((await learner.research('x', { backend: 'claude', claude: noFile })).title === LESSON.title, 'or its reply, when it wrote no file')
+
+  // Gemini
+  config.geminiApi.key = 'test-gemini-key'
+  ok(learner.learnerBackend() === 'gemini', 'with a Gemini key and no Claude Code, Gemini is the learner')
+  const viaGemini = await learner.research('לשלוח פקס', { why: 'אין כלי' })
+  ok(viaGemini.title === LESSON.title, 'Gemini answers with a lesson')
+  ok(geminiBodies.at(-1).tools?.[0]?.google_search && geminiBodies.at(-1).contents[0].parts[0].text.includes('אין כלי'), 'it is allowed to search the web and is told why the last try failed')
+  geminiStatus = [400, 200]
+  const before = geminiBodies.length
+  await learner.research('x')
+  ok(geminiBodies.length === before + 2 && !geminiBodies.at(-1).tools, 'a model without web search is asked again without it')
+  geminiStatus = [200]
+  const long = await gem.askGemini('x', { maxChars: 20 })
+  ok(long.length <= 21, 'the answer can be cut to a size')
+  ok(!fs.readFileSync(new URL('./learner.js', import.meta.url), 'utf8').includes("from './llm.js'") && !fs.readFileSync(new URL('./learning-tools.js', import.meta.url), 'utf8').includes("from './llm.js'"), 'neither module can even reach the chat model')
+
+  // learn_how, end to end
+  let job
+  const ctx = { background: (title, task, run) => ((job = run(new AbortController().signal, () => {})), { title }) }
+  const started = await find('learn_how').run({ topic: 'לשלוח פקס מהמחשב' }, ctx)
+  ok(started.includes('Gemini') && started.includes('אל תחקור בעצמך'), 'learn_how starts in the background and tells the model not to research itself')
+  const finished = await job
+  ok(finished.includes('למדתי') && sk.pendingSkills().length === 1 && sk.allSkills().filter((k) => k.title === LESSON.title).length === 0, 'the lesson waits for approval')
+  sk.rejectSkills()
+
+  // building a tool with Gemini as the writer
+  const GOOD_MODULE = 'export const tools = [{ name: "zz_triple", description: "מכפיל פי שלוש.", parameters: { type: "object", properties: { n: { type: "number", description: "מספר" } }, required: ["n"] }, run({ n }) { return String(n * 3) } }]\nexport const tests = [{ tool: "zz_triple", args: { n: 2 }, check: (r) => r === "6" }]'
+  const savedReply = GEMINI_REPLY
+  let moduleReply = '```js\n' + GOOD_MODULE + '\n```'
+  const origFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => (String(url).includes('generativelanguage') ? { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: moduleReply }] } }] }) } : origFetch(url, init))
+  const built = await find('build_tool').run({ goal: 'כלי שמכפיל פי שלוש' }, ctx)
+  ok(built.includes('רץ ברקע'), 'build_tool starts with Gemini as the writer')
+  const builtResult = await job
+  ok(builtResult.includes('zz_triple') && builtResult.includes('בדיקות עברו') && tb.pendingTools().length === 1, 'and the module Gemini wrote is tested and proposed')
+  tb.rejectModules()
+  void savedReply
+  globalThis.fetch = origFetch
+
+  // the night study
+  const cleared = []
+  const proposed = []
+  const researched = []
+  const gaps = [1, 2, 3, 4].map((n) => ({ request: `בקשה מספר ${n}`, why: '' }))
+  const learned = await studyBatch({
+    gaps,
+    research: async (request) => {
+      researched.push(request)
+      if (request.endsWith('2')) throw new Error('לא נמצא מקור')
+      return { ...LESSON, title: `לקח ${request}` }
+    },
+    propose: (lesson) => (proposed.push(lesson.title), lesson.title),
+    clear: (list) => cleared.push(...list),
+  })
+  ok(researched.length === 3 && !researched.includes('בקשה מספר 4'), 'a night studies at most three requests')
+  ok(proposed.length === 2 && learned.length === 2, 'one that could not be learned does not stop the others')
+  ok(cleared.length === 3 && cleared.includes('בקשה מספר 2') && !cleared.includes('בקשה מספר 4'), 'each studied request is let go, learned or not; the fourth waits for tomorrow')
+  ok(chatModelCalls.length === 0, 'through all of this the chat model was never called')
+
+  globalThis.fetch = realFetch
 }
+
+// ── switched off again ───────────────────────────────────────────────────────
+sk.proposeSkill(good)
+sk.confirmSkills()
+sk.proposeSkill({ title: 'לקרוא דוח נוסף', when: 'כשמבקשים לקרוא עוד דוחות מהמערכת של בית הספר', steps: '1. להיכנס למערכת. 2. לבחור דוח. 3. לסכם את הערכים החשובים.' })
+ok(learningBlock('תעביר קובץ מהמחשב לטלוויזיה', { now: 1e12 }).length > 0, 'on: a fitting lesson and a waiting one reach the prompt')
+appConfig.learning = false
+ok(learningBlock('תעביר קובץ מהמחשב לטלוויזיה', { now: 2e12 }) === '', 'off: nothing about learning reaches the prompt, not even an approved lesson')
+ok(!names().includes('learn_how') && !names().includes('skill_search'), 'off again: the tools are gone')
 
 fs.rmSync(dir, { recursive: true, force: true })
 console.log(`${passed} בדיקות עברו, ${failed} נכשלו`)

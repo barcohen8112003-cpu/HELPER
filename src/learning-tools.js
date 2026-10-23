@@ -4,8 +4,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { state } from './store.js'
-import { llm } from './llm.js'
-import { claudeCodeEnabled, runClaudeCode, projectSlug } from './claude-code.js'
+import { config } from './config.js'
+import { runClaudeCode, projectSlug } from './claude-code.js'
+import { askGemini } from './gemini-api.js'
+import { learnerBackend, research, NO_LEARNER } from './learner.js'
 import {
   proposeSkill, pendingSkills, confirmSkills, rejectSkills, removeSkill, searchSkills, noteGap, skillsBlock,
 } from './skills.js'
@@ -21,7 +23,10 @@ const ASK_EVERY_MS = 4 * 3600e3
 
 // ── lessons ──────────────────────────────────────────────────────────────────
 
-export const skillTools = [
+const learningOn = () => config.learning
+const gated = (list) => list.map((t) => ({ enabled: learningOn, ...t }))
+
+export const skillTools = gated([
   {
     name: 'skill_search',
     description: 'מחפש בלקחים שלמדת קודם ("איך עושים X"). ריק = הלקחים האחרונים.',
@@ -90,31 +95,48 @@ export const skillTools = [
       return removeSkill(id) ? 'נמחק' : 'לא נמצא'
     },
   },
-]
+])
 
 // ── tools it writes for itself ───────────────────────────────────────────────
 
-// The module, written by Claude Code when it is connected, otherwise by the main model.
+// The module, written by Claude Code when it is connected, otherwise by Gemini. Never by the main chat model.
 async function writeModule(goal, feedback, { signal, setStep }) {
   const task = `${WRITER_BRIEF}${goal}${feedback ? `\n\nYour previous attempt was rejected for these reasons. Fix all of them:\n${feedback}` : ''}`
-  if (claudeCodeEnabled()) {
+  const backend = learnerBackend()
+  if (!backend) throw new Error(NO_LEARNER)
+  if (backend === 'claude') {
     setStep('Claude Code כותב את הכלי')
     const done = await runClaudeCode(`${task}\n\nWrite the file as tool.mjs in the current folder, and reply with one line.`, { project: `tool-${projectSlug(goal)}`, signal, setStep })
     const file = path.join(done.dir, 'tool.mjs')
     if (!fs.existsSync(file)) throw new Error('Claude Code לא יצר את הקובץ')
     return fs.readFileSync(file, 'utf8')
   }
-  setStep('המודל כותב את הכלי')
-  const msg = await llm([{ role: 'system', content: 'You write small, correct JavaScript modules exactly to a contract.' }, { role: 'user', content: task }], null, undefined, 45000, {}, signal)
-  return extractModule(msg.content)
+  setStep('Gemini כותב את הכלי')
+  return extractModule(await askGemini(task, { maxChars: 30000 }))
 }
 
-export const builderTools = [
+export const builderTools = gated([
+  {
+    name: 'learn_how',
+    description: 'כשמבקשים ממך משהו שאתה לא יודע איך לעשות: לומד את זה ב-Claude Code או ב-Gemini (לא במודל הראשי), ברקע, וכותב לקח שממתין לאישור המשתמש.',
+    parameters: obj({ topic: str('מה צריך ללמוד, במשפט או שניים, עם הקשר מהבקשה'), why: str('למה לא הצלחת קודם, אם ניסית') }, ['topic']),
+    async run({ topic, why }, ctx) {
+      if (!learnerBackend()) return NO_LEARNER
+      if (!ctx?.background) return 'אי אפשר ללמוד מכאן. זה עובד רק בשיחה.'
+      const job = ctx.background(`לומד: ${String(topic).slice(0, 40)}`, topic, async (signal, setStep) => {
+        const lesson = await research(topic, { why, signal, setStep })
+        const r = proposeSkill(lesson)
+        return r.status === 'known' ? `כבר ידעתי את זה (לקח #${r.id}). תבקש שוב ואעשה.` : `למדתי: ${lesson.title}. הלקח ממתין לאישור שלך (#${r.id}). תבקש שוב ואעשה.`
+      })
+      return `"${job.title}" רץ ברקע ב-${learnerBackend() === 'claude' ? 'Claude Code' : 'Gemini'}. אמור למשתמש בשורה אחת שאתה לומד את זה ושתחזור אליו כשתדע. אל תחקור בעצמך.`
+    },
+  },
   {
     name: 'build_tool',
     description: 'כותב לעצמך כלי חדש בקוד כשאין כלי שמכסה את מה שביקשו (המרה, חישוב, פענוח, עיצוב). רץ ברקע. הכלי נבדק ומותקן רק באישור המשתמש.',
     parameters: obj({ goal: str('מה הכלי צריך לעשות, עם דוגמה לקלט ולפלט. כמה שיותר מדויק') }),
     async run({ goal }, ctx) {
+      if (!learnerBackend()) return NO_LEARNER
       if (!ctx?.background) return 'אי אפשר לבנות כלי מכאן. זה עובד רק בשיחה.'
       const title = `כלי חדש: ${String(goal).slice(0, 40)}`
       const job = ctx.background(title, goal, async (signal, setStep) => {
@@ -189,10 +211,11 @@ export const builderTools = [
       return removed ? `הוסר: ${removed.join(', ')}` : 'אין כלי כזה בין אלה שהתקנתי'
     },
   },
-]
+])
 
 // The learning part of the system prompt for this message: lessons that fit it, and what is waiting for approval.
 export function learningBlock(query = '', opts = {}) {
+  if (!config.learning) return ''
   const lines = [skillsBlock(query, opts)]
   const waiting = pendingTools()
   if (waiting.length && (opts.now ?? Date.now()) - (state.toolsAskedAt || 0) > ASK_EVERY_MS) {
