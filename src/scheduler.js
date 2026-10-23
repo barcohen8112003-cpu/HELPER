@@ -8,7 +8,8 @@ import { inQuietHours } from './outbox.js'
 import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice, webtopKeepAliveFailure } from './session.js'
 import { googleHomeKeepAlive, isGoogleHomeLoginError, planGoogleHomeLoginNotice, clearGoogleHomeLoginNotice } from './google-home.js'
 import { lessonReminders } from './lessons.js'
-import { costTick } from './metrics.js'
+import { costTick, costSummary } from './metrics.js'
+import { openGaps, clearGaps } from './skills.js'
 import { weeklyDue, weekAhead, deadlineReminders, isoDay } from './study.js'
 import { phoneEnabled, phoneKeepAlive } from './phone.js'
 
@@ -340,6 +341,43 @@ const CHECK_IN = `יוזמה עצמית: המשתמש ביקש שתפנה אלי
 
 // The assistant starts a conversation on its own a few times a day, outside quiet hours.
 // The model may still decline with SKIP: an empty hello is worse than silence.
+
+// Once a night, in quiet hours, HELPER works through what it could not do that day: it researches each request, and
+// writes a lesson for the ones it learned. It sends nothing: the lessons wait for Naor's approval, and are offered the
+// next time he talks to it. It never asks him anything at night, and it stops at 80% of the monthly cost limit.
+const STUDY_PROMPT = `[סשן לימוד לילי - המשתמש לא כתב עכשיו. אף אחד לא מחכה לתשובה.]
+בימים האחרונים לא הצלחת לעשות את הדברים האלה. לכל אחד: חקור איך עושים אותו (web_search, fetch_page, ובמכונה שלך vm_run כדי לנסות בפועל).
+אם למדת איך, כתוב לקח עם skill_propose: מתי הוא רלוונטי, והצעדים שבאמת עבדו או שמקור אמין מתאר. אל תכתוב לקח על משהו שלא ניסית ולא מצאת במקור אמין.
+אל תקרא ל-skill_confirm או לכל כלי שמבקש אישור, ואל תשלח הודעות, ואל תבצע פעולות עבור המשתמש. רק למד.
+עד שלושה נושאים בלילה. בסוף החזר בדיוק SKIP.
+הבקשות:
+`
+const STUDY_FROM_HOUR = 2
+
+// The study session spends only what the day's share of the monthly limit leaves over: month-to-date spend must be
+// under STUDY_BUDGET_PERCENT (80) of the limit's daily share times the days of the month so far. A month that started
+// expensively therefore pauses the study until the pace is back inside the budget. No limit set = no brake.
+export function studyAllowed({ limit, usd, percent = 80, now = new Date() }) {
+  if (!limit) return true
+  const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  return usd < ((limit / days) * now.getDate() * percent) / 100
+}
+
+async function study(notify, runTask) {
+  if (process.env.STUDY_NIGHTLY === 'off' || !inQuietHours() || new Date().getHours() < STUDY_FROM_HOUR || new Date().getHours() >= 7) return
+  const today = new Date().toDateString()
+  if (state.studyDate === today) return
+  const open = openGaps()
+  if (!open.length) return
+  if (!studyAllowed({ limit: Number(process.env.MONTHLY_COST_LIMIT) || 0, usd: costSummary().usd, percent: Number(process.env.STUDY_BUDGET_PERCENT) || 80 })) return
+  state.studyDate = today
+  save()
+  const batch = open.slice(0, 3)
+  await runTask(STUDY_PROMPT + batch.map((g, i) => `${i + 1}. ${g.request}${g.why ? ` (למה לא הצלחת: ${g.why})` : ''}`).join(String.fromCharCode(10)), { noAsk: true })
+  // Each request gets one night of study; what was not learned is let go rather than tried forever.
+  clearGaps(batch.map((g) => g.request))
+}
+
 async function checkIn(notify, runTask) {
   const { everyMinutes, maxPerDay } = config.proactive
   if (!maxPerDay || inQuietHours()) return
@@ -399,7 +437,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, costTick, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, costTick, news, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {

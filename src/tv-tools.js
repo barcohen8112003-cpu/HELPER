@@ -14,7 +14,32 @@ async function appList() {
   return apps
 }
 
+// Off is two presses half a second apart: the first wakes the TV's own power prompt (or is swallowed by the projector),
+// the second does it. If the TV is already asleep after the first, its link to HELPER is gone and the second has nothing
+// to land on, which is the expected end, so only a failure of the FIRST press is an error.
+export async function tvPowerOff({ presses = 2, gapMs = 500, call = tvCall, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  await call('key', { key: 'sleep' })
+  for (let i = 1; i < presses; i++) {
+    await sleep(gapMs)
+    try {
+      await call('key', { key: 'sleep' })
+    } catch {
+      // Already off.
+    }
+  }
+}
+
 export const tvTools = [
+  {
+    name: 'tv_power_off',
+    enabled: tvConnected,
+    description: 'מכבה את הטלוויזיה או המקרן: לוחץ פעמיים על כפתור הכיבוי בהפרש של חצי שנייה. "תכבה את הטלוויזיה", "תכבה את המקרן".',
+    parameters: obj({}, []),
+    async run() {
+      await tvPowerOff()
+      return 'כיביתי.'
+    },
+  },
   {
     name: 'tv_open_app',
     enabled: tvConnected,

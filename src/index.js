@@ -13,6 +13,8 @@ import { setLocation, isLiveUpdate } from './location.js'
 import { createOutbox } from './outbox.js'
 import { chatModel, Aborted } from './llm.js'
 import { parseCommand } from './commands.js'
+import { fastCommand } from './fast-commands.js'
+import { loadUserTools } from './tool-builder.js'
 import { status } from './status.js'
 import { maskSettingsUrl, startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
@@ -237,6 +239,9 @@ const wa = await startWhatsApp(async (m) => {
     return announcePairing()
   }
 
+  // "תדליק את האורות": no model and no queue, the light comes on while the turn before it may still be thinking.
+  const quick = await fastCommand(text)
+  if (quick) return wa.send(state.owner.jid, quick.reply)
   const epoch = stopEpoch
   queue = queue.then(async () => {
     if (epoch !== stopEpoch) return // stopped, or a new conversation began, while this was waiting its turn
@@ -386,12 +391,15 @@ if (fs.existsSync(DEPLOY_NOTICE)) {
   if (text) outbox.notify(text, true).catch(() => {})
 }
 // Scheduled tasks wait their turn in the same queue as chat messages, so two model runs never interleave.
-const scheduledTask = (instruction) => {
-  const run = queue.then(() => runTask(instruction, { confirm, sendMedia, say, patient: true }))
+const scheduledTask = (instruction, { noAsk = false } = {}) => {
+  const run = queue.then(() => runTask(instruction, { confirm: noAsk ? async () => false : confirm, sendMedia, say, patient: true }))
   queue = run.catch(() => {})
   return run
 }
 // Quiet monitoring owns mail, calendar and the morning brief. Its only way out is a message to the owner.
+// The tools HELPER wrote for itself and Naor approved come back with it, each checked again before it loads.
+loadUserTools().then((n) => n && console.log(`[tools] נטענו ${n} כלים שהעוזר כתב לעצמו`)).catch((e) => console.log(`[tools] ${e.message}`))
+
 const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, text), getDay })
 
 // Proactive notices from the rest of the assistant. During quiet hours a non-urgent one is not held to be sent

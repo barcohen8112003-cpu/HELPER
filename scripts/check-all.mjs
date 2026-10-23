@@ -10,6 +10,8 @@ const TESTS = [
   'src/selftest.js',
   'src/toolkit/_selftest.js',
   'src/memory-selftest.js',
+  'src/learning-selftest.js',
+  'src/fast-commands-selftest.js',
   'src/morning-selftest.js',
   'src/errand-selftest.js',
   'src/monitoring/selftest.js',
