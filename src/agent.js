@@ -18,6 +18,7 @@ import { pcEnabled } from './pc.js'
 import { locationLine } from './location.js'
 import { sessionEnabled } from './session.js'
 import { phoneRoutePrompt } from './phone.js'
+import { tvPrompt } from './tv-tools.js'
 import { memoryBlock } from './memory.js'
 import { learnFrom } from './memory-learn.js'
 
@@ -82,7 +83,7 @@ ${vmEnabled() ? '- You have a computer of your own: a Linux machine (vm_run). Us
 ${config.computerMode === 'ask' ? '- Computer tools ask the user for approval themselves; do not ask first.' : ''}
 ${pcEnabled() ? `- Windows control: pc_media, pc_screenshot, play_spotify, pc_launch_app, pc_lock, pc_unlock, pc_display_off, pc_display_on, pc_type, pc_press_key, pc_status, pc_speak, pc_timer, pc_clipboard_get/set, pc_find_files, pc_send_file, pc_webcam_snap, pc_screen_record, pc_top_processes, pc_browser_tabs. Tools that need approval (pc_close_app, pc_power, pc_organize_downloads, pc_winget_install, run_command, write_file, use_computer) ask for approval themselves; do not ask first.\n- Good night routine: When user says "לילה טוב", "כיבוי מסכים", "תכבה מסכים" or "הולך לישון", always immediately call pc_display_off to turn off screens without asking for approval.\n${process.platform === 'win32' ? '' : '- If a computer tool says the home PC is disconnected, say that plainly. Do not pretend the action worked. wake_pc turns the PC on when Wake-on-LAN is set up.\n'}- Services: israel_red_alert, track_package, israel_transit, get_weather, get_jewish_calendar, get_currency_rate.` : '- Services: israel_red_alert, track_package, israel_transit, get_weather, get_jewish_calendar, get_currency_rate.'}
 - Smart Home: google_home_devices, google_home_control (Google Home lights, speakers, devices via connected browser). ${config.googleHome.cloud ? 'If it says Google Home is not signed in, tell him to open the Google Home page on the settings site. Never ask for the password in chat. ' : ''}
-${phoneRoutePrompt(true)}
+${phoneRoutePrompt(true)}${tvPrompt()}
 ${locationLine(true) ? `\n${locationLine(true)}\n` : ''}
 Memory about the user:
 ${memory}${state.summary ? `\n\nEarlier in this conversation:\n${state.summary}` : ''}`
@@ -121,7 +122,7 @@ ${sessionEnabled() ? `• Webtop (${config.webtop.url}): fetch_page על כתו�
   - מיידית: pc_media (ווליום, נגינה/עצירה, שיר הבא/הקודם), pc_screenshot (צילום מסך ושליחה בוואטסאפ), pc_screen_record (הקלטת וידאו קצר מהמסך לשליחה בוואטסאפ), pc_webcam_snap (צילום ממצלמת הרשת ושליחה בוואטסאפ), pc_send_file (שליחת קובץ מהמחשב ישירות לוואטסאפ), play_spotify (חיפוש וניגון בספוטיפיי), pc_launch_app (פתיחת כל תוכנה מותקנת), pc_lock (נעילת מסך), pc_unlock (ביטול נעילה, הדלקת המסך והזנת הסיסמה השמורה), pc_display_off (כיבוי מסכים מידי ללא בקשת אישור כלל - מבצע מיד ב"לילה טוב" או "תכבה מסכים"), pc_display_on (הדלקת מסכים מידית ללא אישור), pc_type (הקלדת טקסט, קוד PIN או סיסמה במחשב), pc_press_key (לחיצה על מקש במקלדת, כגון enter, esc, space), pc_status (מעבד, זיכרון, דיסקים וסוללה), pc_top_processes (בדיקת תוכנות זוללות מעבד ו-RAM וסגירתן), pc_browser_tabs (ניהול לשוניות בדפדפן - רשימה, פתיחה, סגירה ומעבר), pc_speak (הקראה ברמקולים), pc_timer (טיימר על המסך עם התראה), pc_clipboard_get / pc_clipboard_set (לוח העתקה), pc_find_files (חיפוש קבצים).
   - בפעולות בעלות השפעה הכלים מבקשים אישור בוואטסאפ בעצמם (אל תשאל לפני בטקסט): pc_close_app (סגירת תוכנה), pc_power (כיבוי/שינה/הפעלה מחדש), pc_organize_downloads (סידור תיקיית ההורדות), pc_winget_search / pc_winget_install (התקנת תוכנות), run_command, read_file, write_file, ו-use_computer (שליטה אוטונומית בעכבר ומקלדת).
 ${process.platform === 'win32' ? '' : '  - אם כלי אומר שהמחשב הביתי לא מחובר, אמור זאת בבירור. אל תמציא שהפעולה בוצעה. להדלקה: wake_pc.\n'}` : '• שליטה במחשב כבויה.\n'}• בית חכם (Google Home) - שליטה במכשירי בית חכם המחוברים ב-Google Home בדפדפן: google_home_devices (בדיקת מצב המכשירים, אורות ורמקולים), google_home_control (הדלקה, כיבוי או החלפת מצב של מכשיר, למשל "תדליק את האור בחדר", "תכבה את האורות", "תפעיל את הרמקול בסלון").${config.googleHome.cloud ? ` אם הכלי אומר ש-Google Home לא מחובר, תגיד להיכנס מדף Google Home באתר ההגדרות${config.desktop.enabled ? ' או משולחן העבודה בענן' : ''}. אל תבקש את הסיסמה בצ׳אט.` : ''}
-${phoneRoutePrompt(false)}
+${phoneRoutePrompt(false)}${tvPrompt()}
 • מידע ושירותים - israel_red_alert (צבע אדום ואזעקות פיקוד העורף בזמן אמת והיסטוריה), track_package (מעקב חבילות ומשלוחים מכל החברות ודואר ישראל), israel_transit (קווי אוטובוס ומסלולים בישראל), get_weather (תחזית ומזג אוויר), get_jewish_calendar (זמני שבת, לוח עברי ופרשת שבוע), get_currency_rate (המרת מטבעות ושערי חליפין).
 
 

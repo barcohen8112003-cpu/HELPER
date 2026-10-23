@@ -26,6 +26,7 @@ import { googleTools } from './google-tools.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
+import { tvTools } from './tv-tools.js'
 
 // The Discord bot counts as linked once it has called the bridge within the last day.
 const discordLinked = () => Date.now() - (state.bridgeSeenAt || 0) < 24 * 3600000
@@ -598,6 +599,7 @@ tools.push(...googleTools)
 tools.push(...pcTools)
 tools.push(...memoryTools)
 tools.push(...phoneTools)
+tools.push(...tvTools)
 
 // The extended toolkit is not sent to the model on every request: that would cost thousands of tokens and make the
 // model choose worse. It sees one tool, tool_search, and unlocks the few tools it needs for the turn.

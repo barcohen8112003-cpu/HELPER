@@ -8,3 +8,12 @@ node_modules/
 home-relay/config.json
 home-relay/pc-bridge.config.json
 .auto-update-bad-commit
+
+# TV launcher build output
+tv/launcher/.gradle/
+tv/launcher/build/
+tv/launcher/app/build/
+tv/launcher/local.properties
+tv/screens/
+# Video wallpapers stay on the TV and in this folder only (large, and not ours to publish).
+tv/theme-now/*.mp4

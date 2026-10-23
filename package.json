@@ -24,7 +24,8 @@
     "check:study": "node src/study-selftest.js",
     "check:approval": "node src/approval-selftest.js",
     "check:logs": "node src/logs-selftest.js",
-    "check:claude-code": "node src/claude-code-selftest.js"
+    "check:claude-code": "node src/claude-code-selftest.js",
+    "check:tv": "node src/tv-app-selftest.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "~6.7.24",

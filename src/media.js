@@ -22,7 +22,7 @@ const ELEVEN = 'https://api.elevenlabs.io/v1'
 async function elevenTranscribe({ buffer, mime }) {
   const form = new FormData()
   form.append('model_id', config.elevenlabs.sttModel)
-  form.append('file', new Blob([buffer], { type: mime || 'audio/ogg' }), 'voice.ogg')
+  form.append('file', new Blob([buffer], { type: mime || 'audio/ogg' }), fileName(mime))
   const res = await fetch(`${ELEVEN}/speech-to-text`, { method: 'POST', headers: { 'xi-api-key': config.elevenlabs.apiKey }, body: form, signal: AbortSignal.timeout(120000) })
   if (!res.ok) throw new Error(`תמלול נכשל, HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
   return ((await res.json()).text || '').trim()
@@ -72,6 +72,12 @@ export async function elevenSpeakMp3(text) {
 export const canHear = () => Boolean(config.elevenlabs.apiKey || config.voice.sttModel)
 export const canSpeak = () => Boolean(config.elevenlabs.apiKey || config.voice.ttsModel)
 
+// Providers pick the decoder by the file name, so a WAV from the TV must not be called voice.ogg.
+const fileName = (mime = '') => (mime.includes('wav') ? 'voice.wav' : mime.includes('mpeg') ? 'voice.mp3' : 'voice.ogg')
+
+// Speech from the HELPER home screen on the TV (a short WAV), as text.
+export const transcribeAudio = (buffer, mime = 'audio/wav') => transcribe({ buffer, mime })
+
 async function transcribe(media) {
   // STT_MODEL, when set, wins over ElevenLabs for understanding speech: it names a transcription model at the
   // voice provider (Whisper on Groq answers in under a second). ElevenLabs still does the speaking.
@@ -84,7 +90,7 @@ async function openaiTranscribe({ buffer, mime }) {
   if (!config.voice.sttModel) throw new Error('קיבלתי הודעה קולית, אבל תמלול לא מוגדר. צריך למלא STT_MODEL בקובץ .env')
   const form = new FormData()
   form.append('model', config.voice.sttModel)
-  form.append('file', new Blob([buffer], { type: mime || 'audio/ogg' }), 'voice.ogg')
+  form.append('file', new Blob([buffer], { type: mime || 'audio/ogg' }), fileName(mime))
   const res = await fetch(config.voice.baseUrl + '/audio/transcriptions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.voice.apiKey}` },

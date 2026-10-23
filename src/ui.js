@@ -15,7 +15,7 @@ import { desktopShellHtml, isDesktopPath, proxyDesktopHttp, proxyDesktopUpgrade 
 import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount, checkGoogleAccounts, googleAccountStatus } from './google.js'
 import { calendarOn } from './calendar.js'
-import { canHear, canSpeak, elevenSpeakMp3 } from './media.js'
+import { canHear, canSpeak, elevenSpeakMp3, transcribeAudio } from './media.js'
 import { chatModel, llmHealth } from './llm.js'
 import { ago } from './status.js'
 import { handleDashboard } from './dashboard/api.js'
@@ -23,6 +23,7 @@ import { handlePhoneUpgrade, phoneAppConnected, phoneAppInfo } from './phone-app
 import { bridgeReady, bridgeConnected } from './pc-bridge.js'
 import { backupEnabled, backupAccount, runBackup } from './backup.js'
 import { metricsSummary } from './metrics.js'
+import { handleTvUpgrade } from './tv-app.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
@@ -30,6 +31,8 @@ const PHONE_PAGE = path.join(ROOT, 'src', 'phone.html')
 const SENT_LOG = path.join(DATA_DIR, 'sent.log')
 const COOKIE = 'helper_session'
 const MAX_BODY = 100000
+// /bridge/ask can carry up to about 20 seconds of 16 kHz speech from the TV.
+const MAX_SPEECH_BODY = 1_500_000
 
 // Values that are never sent back to the page. The page only learns whether each one is set.
 const SECRETS = ['LLM_API_KEY', 'LLM_BACKUP_API_KEY', 'ELEVENLABS_API_KEY', 'GITHUB_TOKEN', 'GOOGLE_CLIENT_SECRET', 'MAIL_PASS', 'TAVILY_API_KEY', 'VOICE_API_KEY', 'GEMINI_API_KEY', 'BACKUP_PASSPHRASE', 'CLAUDE_CODE_OAUTH_TOKEN']
@@ -225,11 +228,11 @@ export function startUi({ connectedSince, restart, agent }) {
   const note = (text) => `<body dir="rtl" style="font-family:system-ui;padding:48px;background:#faf8f5;color:#222"><h2>${text}</h2></body>`
   const signedIn = (req) => (req.headers.cookie || '').split(/;\s*/).some((c) => c.startsWith(COOKIE + '=') && same(c.slice(COOKIE.length + 1), token))
 
-  async function readJson(req) {
+  async function readJson(req, max = MAX_BODY) {
     let raw = ''
     for await (const chunk of req) {
       raw += chunk
-      if (raw.length > MAX_BODY) throw new Error('גוף הבקשה גדול מדי')
+      if (raw.length > max) throw new Error('גוף הבקשה גדול מדי')
     }
     return JSON.parse(raw || '{}')
   }
@@ -323,9 +326,19 @@ export function startUi({ connectedSince, restart, agent }) {
             status = 403
             return send(res, 403, { error: 'bridge token missing or wrong' })
           }
-          const body = await readJson(req)
+          const body = await readJson(req, MAX_SPEECH_BODY)
           source = String(body.source || 'discord').slice(0, 30)
-          const text = String(body.text || '').trim().slice(0, 4000)
+          // The TV sends its microphone recording instead of text: HELPER transcribes it, like a WhatsApp voice note.
+          let heard = null
+          if (body.speech && typeof body.speech === 'string') {
+            if (!canHear()) {
+              status = 400
+              return send(res, 400, { error: 'תמלול לא מוגדר ב-HELPER (STT_MODEL או ElevenLabs בקובץ .env)' })
+            }
+            const audioIn = Buffer.from(body.speech.slice(0, 8_000_000), 'base64')
+            heard = await transcribeAudio(audioIn, String(body.speechMime || 'audio/wav'))
+          }
+          const text = String(heard ?? body.text ?? '').trim().slice(0, 4000)
           if (!text) {
             status = 400
             return send(res, 400, { error: 'empty text' })
@@ -342,7 +355,7 @@ export function startUi({ connectedSince, restart, agent }) {
             }
           }
           status = 200
-          return send(res, 200, { reply, audio })
+          return send(res, 200, { reply, audio, heard })
         } catch (e) {
           status = e.status || 400
           throw e
@@ -455,6 +468,10 @@ export function startUi({ connectedSince, restart, agent }) {
     // The HELPER app's phone link, like the other bridge endpoints: any interface, bridge token only.
     if ((req.url || '').split('?')[0] === '/bridge/phone') {
       return handlePhoneUpgrade(req, socket, head, (r) => same((r.headers.authorization || '').replace(/^Bearer /, ''), bridgeToken))
+    }
+    // The HELPER home screen on the TV (tv/launcher), the same way.
+    if ((req.url || '').split('?')[0] === '/bridge/tv') {
+      return handleTvUpgrade(req, socket, head, (r) => same((r.headers.authorization || '').replace(/^Bearer /, ''), bridgeToken))
     }
     const host = req.headers.host || ''
     const access = policy()

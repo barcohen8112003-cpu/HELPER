@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Play triangle in its four colours; the pill shows it untinted. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp" android:height="22dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FF00D3FF" android:pathData="M4.2,2.6L13.6,12L4.2,21.4C3.8,21.2 3.5,20.8 3.5,20.2V3.8C3.5,3.2 3.8,2.8 4.2,2.6Z" />
+    <path android:fillColor="#FF00F076" android:pathData="M4.2,2.6C4.5,2.4 5,2.4 5.4,2.6L16.6,9L13.6,12Z" />
+    <path android:fillColor="#FFFF3A44" android:pathData="M13.6,12L16.6,15L5.4,21.4C5,21.6 4.5,21.6 4.2,21.4Z" />
+    <path android:fillColor="#FFFFD500" android:pathData="M16.6,9L20,10.9C20.8,11.4 20.8,12.6 20,13.1L16.6,15L13.6,12Z" />
+</vector>

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- HELPER overlay: a band across the top of the screen over whatever is playing, waves along its lower edge. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layoutDirection="rtl">
+
+    <FrameLayout
+        android:id="@+id/helperPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="230dp"
+        android:background="@drawable/helper_panel_bg">
+
+        <com.gathin.tvhome.WaveView
+            android:id="@+id/helperWaves"
+            android:layout_width="match_parent"
+            android:layout_height="120dp"
+            android:layout_gravity="bottom" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="64dp"
+            android:paddingEnd="64dp"
+            android:paddingTop="32dp"
+            android:paddingBottom="72dp">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <View
+                    android:id="@+id/helperDot"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:background="@drawable/helper_dot" />
+
+                <TextView
+                    android:id="@+id/helperStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:fontFamily="@font/outfit_medium"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="15sp"
+                    android:letterSpacing="0.04"
+                    android:text="HELPER" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/helperHeard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/outfit_light"
+                android:textColor="#FFFFFFFF"
+                android:textSize="30sp"
+                android:textDirection="anyRtl"
+                android:maxLines="2"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/helperReply"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:fontFamily="@font/outfit_regular"
+                android:textColor="#E6FFFFFF"
+                android:textSize="22sp"
+                android:lineSpacingMultiplier="1.15"
+                android:textDirection="anyRtl"
+                android:maxLines="6"
+                android:ellipsize="end"
+                android:visibility="gone" />
+
+            <EditText
+                android:id="@+id/helperInput"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/pill_bg"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:fontFamily="@font/outfit_regular"
+                android:textColor="#FFFFFFFF"
+                android:textColorHint="#80FFFFFF"
+                android:textSize="18sp"
+                android:hint="מה תרצה לשאול את HELPER?"
+                android:inputType="text"
+                android:imeOptions="actionSend"
+                android:singleLine="true"
+                android:textDirection="anyRtl"
+                android:visibility="gone" />
+        </LinearLayout>
+    </FrameLayout>
+</FrameLayout>
