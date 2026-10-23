@@ -2,10 +2,8 @@ package com.gathin.tvhome;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
-import android.content.Context;
 import android.content.Intent;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -27,216 +25,191 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /**
- * The settings panel, from the gear on Home, after Google TV's quick settings: a floating rounded panel with a
- * profile row (HELPER and whether it is connected), small two-column tiles with the icon right next to the label,
- * a screensaver tile drawn with waves and a moon, and a wordmark at the foot. The focused tile turns white with dark
- * ink. Everything fits on one screen, so nothing scrolls.
+ * The settings panel from the gear on Home, kept as close to Google TV's quick settings as it goes: a narrow panel
+ * against the edge of the screen, an account row, low tiles in two columns with thin line icons and plain text, a
+ * screensaver tile with its waves, and a darker card at the foot. Focus only turns a tile white; nothing grows.
  *
- * The app does not declare RTL support (Home's Hebrew layout is mirrored by hand in layout-iw), so this panel lays
- * itself out right to left by hand too: in every row the item that reads first is added last.
+ * The app does not declare RTL support (Home's Hebrew layout is mirrored by hand in layout-iw), so rows here are
+ * built right to left by hand: the item that reads first is added last.
  */
 public class SidePanelActivity extends Activity {
 
-    // Colours measured off Google TV's panel: a deep blue slate, tiles a step lighter, white when focused.
-    private static final int PANEL = 0xF2283550;
-    private static final int PANEL_EDGE = 0x1FFFFFFF;
-    private static final int TILE = 0xFF3A4868;
-    private static final int TILE_FOCUSED = 0xFFF1F3F8;
-    private static final int INK = 0xFF1B2232;
-    private static final int TEXT = 0xFFF1F3F8;
-    private static final int TEXT_DIM = 0xB3F1F3F8;
+    private static final int PANEL = 0xF2263148;
+    private static final int TILE = 0x1FFFFFFF;
+    private static final int TILE_FOCUSED = 0xFFE8EAED;
+    private static final int CARD = 0x33000000;
+    private static final int TEXT = 0xFFE8EAED;
+    private static final int TEXT_DIM = 0x99E8EAED;
+    private static final int INK = 0xFF202124;
 
     private float d;
+    private Typeface regular, medium;
     private LinearLayout column;
-    private Tile videoTile;
+    private Tile video;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         d = getResources().getDisplayMetrics().density;
+        regular = getResources().getFont(R.font.outfit_regular);
+        medium = getResources().getFont(R.font.outfit_medium);
 
         FrameLayout root = new FrameLayout(this);
         root.setOnClickListener(v -> finish());
-        // A light veil so the panel reads as above Home, not a hard black.
-        root.setBackgroundColor(0x40000000);
 
         column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(px(20), px(20), px(20), px(14));
-        column.setClipChildren(false);
-        column.setClipToPadding(false);
+        column.setPadding(px(12), px(12), px(12), px(12));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(PANEL);
-        bg.setCornerRadius(px(28));
-        bg.setStroke(px(1), PANEL_EDGE);
+        bg.setCornerRadius(px(24));
         column.setBackground(bg);
-        column.setElevation(px(16));
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px(420), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        lp.leftMargin = px(28);
+        column.setElevation(px(8));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px(332), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.LEFT | Gravity.TOP);
+        lp.leftMargin = px(16);
+        lp.topMargin = px(16);
         root.addView(column, lp);
         setContentView(root);
 
-        // Profile row, like Google TV's account row.
-        boolean connected = Helper.configured(this);
-        Tile profile = new Tile(R.drawable.ic_helper, "HELPER", connected ? "מחובר · לחץ כדי לשאול" : "לא מחובר", true,
+        Tile account = new Tile(R.drawable.ic_qs_spark, "HELPER", Helper.configured(this) ? "מחובר" : "לא מחובר", true,
                 () -> { HelperOverlayActivity.open(this, "type", null); finish(); });
-        add(profile, px(68));
-        space(px(12));
+        column.addView(account.view, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, px(60)));
+        gap(8);
 
         Tile screensaver = new Tile(0, "שומר מסך", null, false, () -> settings("android.settings.DREAM_SETTINGS"));
         screensaver.waves();
-        row(screensaver, new Tile(R.drawable.ic_tile_apps, "אפליקציות", null, false, () -> open(new Intent(this, AppsWindowActivity.class))));
-        row(new Tile(R.drawable.ic_tile_display, "תמונה", null, false, () -> settings(Settings.ACTION_DISPLAY_SETTINGS)),
-                new Tile(R.drawable.ic_tile_sound, "צליל", null, false, () -> settings(Settings.ACTION_SOUND_SETTINGS)));
-        row(new Tile(R.drawable.ic_wifi, "Wi-Fi", null, false, () -> settings(Settings.ACTION_WIFI_SETTINGS)),
-                new Tile(R.drawable.ic_tile_bluetooth, "Bluetooth", null, false, () -> settings(Settings.ACTION_BLUETOOTH_SETTINGS)));
-        row(new Tile(R.drawable.ic_tile_accessibility, "נגישות", null, false, () -> settings(Settings.ACTION_ACCESSIBILITY_SETTINGS)),
-                new Tile(R.drawable.ic_tile_remote, "כפתורי השלט", null, false, () -> open(new Intent(this, ButtonsActivity.class))));
-        videoTile = new Tile(R.drawable.ic_tile_video, "טפט וידאו", null, false, this::toggleVideo);
-        Tile settings = new Tile(R.drawable.ic_settings, "הגדרות", null, false, () -> settings(Settings.ACTION_SETTINGS));
+        row(screensaver, new Tile(R.drawable.ic_qs_input, "אפליקציות", null, false, () -> open(new Intent(this, AppsWindowActivity.class))));
+        row(new Tile(R.drawable.ic_qs_picture, "תמונה", null, false, () -> settings(Settings.ACTION_DISPLAY_SETTINGS)),
+                new Tile(R.drawable.ic_qs_sound, "צליל", null, false, () -> settings(Settings.ACTION_SOUND_SETTINGS)));
+        row(new Tile(R.drawable.ic_qs_wifi, "Wi-Fi", null, false, () -> settings(Settings.ACTION_WIFI_SETTINGS)),
+                new Tile(R.drawable.ic_qs_access, "נגישות", null, false, () -> settings(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        row(new Tile(R.drawable.ic_qs_bt, "Bluetooth", null, false, () -> settings(Settings.ACTION_BLUETOOTH_SETTINGS)),
+                new Tile(R.drawable.ic_qs_remote, "שלט", null, false, () -> open(new Intent(this, ButtonsActivity.class))));
+        video = new Tile(R.drawable.ic_qs_wallpaper, "טפט", null, false, this::toggleVideo);
+        Tile settings = new Tile(R.drawable.ic_qs_gear, "הגדרות", null, false, () -> settings(Settings.ACTION_SETTINGS));
         settings.view.setOnLongClickListener(v -> { open(new Intent(this, LauncherSettingsActivity.class)); return true; });
-        row(videoTile, settings);
+        row(video, settings);
         refreshVideo();
 
-        // Wordmark at the foot, where Google TV puts its own.
-        TextView mark = new TextView(this);
-        mark.setText("HELPER TV");
-        mark.setTextColor(TEXT_DIM);
-        mark.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        mark.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        mark.setLetterSpacing(0.08f);
-        mark.setGravity(Gravity.RIGHT);
-        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        mp.topMargin = px(4);
-        mp.rightMargin = px(6);
-        column.addView(mark, mp);
+        gap(4);
+        // The card at the foot, where Google TV offers AirPlay.
+        Tile ask = new Tile(R.drawable.ic_qs_spark, "לשאול את HELPER", "כפתור העוזר בשלט, ואז לדבר", true,
+                () -> { HelperOverlayActivity.open(this, "voice", null); finish(); });
+        ask.base = CARD;
+        ask.paint(false);
+        column.addView(ask.view, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, px(60)));
 
         column.setAlpha(0f);
-        column.setTranslationX(-px(40));
-        column.animate().alpha(1f).translationX(0).setDuration(220).setInterpolator(new DecelerateInterpolator(1.6f)).start();
-        profile.view.requestFocus();
+        column.setTranslationX(-px(24));
+        column.animate().alpha(1f).translationX(0).setDuration(200).setInterpolator(new DecelerateInterpolator(1.5f)).start();
+        account.view.requestFocus();
     }
 
-    // ---- tiles ----
-
-    /** A tile: an icon (or the profile circle) right next to a label, and an optional second line. */
+    /** A tile: a line icon right beside its label, and a second, dimmer line on the account row and the card. */
     private final class Tile {
         final FrameLayout view;
         final GradientDrawable bg = new GradientDrawable();
-        final TextView title;
-        final TextView subtitle;
+        final TextView title, subtitle;
         final ImageView icon;
         final GradientDrawable circle;
+        int base = TILE;
         WavesDrawable waves;
 
-        Tile(int iconRes, String text, String sub, boolean profile, Runnable action) {
+        Tile(int iconRes, String text, String sub, boolean twoLine, Runnable action) {
             view = new FrameLayout(SidePanelActivity.this);
             view.setFocusable(true);
             view.setClickable(true);
-            bg.setColor(TILE);
-            bg.setCornerRadius(px(profile ? 22 : 18));
+            bg.setCornerRadius(px(16));
             view.setBackground(bg);
             view.setClipToOutline(true);
 
             LinearLayout line = new LinearLayout(SidePanelActivity.this);
             line.setOrientation(LinearLayout.HORIZONTAL);
             line.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-            line.setPadding(px(16), 0, px(16), 0);
+            line.setPadding(px(14), 0, px(14), 0);
 
             LinearLayout texts = new LinearLayout(SidePanelActivity.this);
             texts.setOrientation(LinearLayout.VERTICAL);
             texts.setGravity(Gravity.RIGHT);
-            title = label(text, profile ? 17 : 15, TEXT, "sans-serif-medium");
+            title = label(text, twoLine ? 15 : 14, TEXT, twoLine ? medium : regular);
             texts.addView(title);
-            subtitle = sub == null ? null : label(sub, 12, TEXT_DIM, "sans-serif");
+            subtitle = sub == null ? null : label(sub, 12, TEXT_DIM, regular);
             if (subtitle != null) texts.addView(subtitle);
+            line.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
             icon = new ImageView(SidePanelActivity.this);
-            icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-            if (iconRes != 0) icon.setImageResource(iconRes);
-            icon.setColorFilter(TEXT);
-            int box = px(profile ? 40 : 22);
-            LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(box, box);
-            ip.leftMargin = px(12);
-            circle = profile ? new GradientDrawable() : null;
-            if (circle != null) {
-                circle.setShape(GradientDrawable.OVAL);
-                circle.setColor(0x33FFFFFF);
-                icon.setBackground(circle);
-                icon.setPadding(px(9), px(9), px(9), px(9));
+            icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            circle = twoLine ? new GradientDrawable() : null;
+            if (iconRes != 0) {
+                icon.setImageResource(iconRes);
+                int box = px(twoLine ? 36 : 20);
+                LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(box, box);
+                ip.leftMargin = px(twoLine ? 12 : 10);
+                if (circle != null) {
+                    circle.setShape(GradientDrawable.OVAL);
+                    icon.setBackground(circle);
+                    icon.setPadding(px(8), px(8), px(8), px(8));
+                }
+                line.addView(icon, ip);
             }
-            // Right to left by hand: the texts first, so the icon ends up on the right of them.
-            line.addView(texts, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-            if (iconRes != 0) line.addView(icon, ip);
             view.addView(line, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-
             view.setOnFocusChangeListener((v, focused) -> paint(focused));
             view.setOnClickListener(v -> action.run());
+            paint(false);
         }
 
-        /** Google TV's screensaver tile: rolling waves along the bottom and a moon in the corner. */
         void waves() {
             waves = new WavesDrawable();
             View art = new View(SidePanelActivity.this);
             art.setBackground(waves);
             view.addView(art, 0, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-            ((FrameLayout.LayoutParams) ((View) title.getParent().getParent()).getLayoutParams()).gravity = Gravity.TOP;
         }
 
         void paint(boolean focused) {
-            bg.setColor(focused ? TILE_FOCUSED : TILE);
+            bg.setColor(focused ? TILE_FOCUSED : base);
             title.setTextColor(focused ? INK : TEXT);
-            if (subtitle != null) subtitle.setTextColor(focused ? 0xB31B2232 : TEXT_DIM);
+            if (subtitle != null) subtitle.setTextColor(focused ? 0x99202124 : TEXT_DIM);
             icon.setColorFilter(focused ? INK : TEXT);
-            if (circle != null) circle.setColor(focused ? 0x1F1B2232 : 0x33FFFFFF);
+            if (circle != null) circle.setColor(focused ? 0x14202124 : 0x1FFFFFFF);
             if (waves != null) waves.setFocused(focused);
-            view.animate().scaleX(focused ? 1.03f : 1f).scaleY(focused ? 1.03f : 1f).setDuration(150).start();
         }
     }
 
-    private TextView label(String s, int sp, int color, String family) {
+    private TextView label(String s, int sp, int color, Typeface face) {
         TextView t = new TextView(this);
-        t.setText(s);
+        t.setText("‏" + s);
         t.setTextColor(color);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
-        t.setTypeface(Typeface.create(family, Typeface.NORMAL));
+        t.setTypeface(face);
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.END);
         t.setGravity(Gravity.RIGHT);
-        t.setTextDirection(View.TEXT_DIRECTION_RTL);
+        t.setIncludeFontPadding(false);
         return t;
     }
 
-    private void add(Tile t, int height) {
-        column.addView(t.view, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, height));
-    }
-
-    private void space(int h) {
-        column.addView(new View(this), new LinearLayout.LayoutParams(1, h));
+    private void gap(int dp) {
+        column.addView(new View(this), new LinearLayout.LayoutParams(1, px(dp)));
     }
 
     /** Two tiles side by side: {@code first} reads first, so it goes on the right. */
     private void row(Tile first, Tile second) {
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.HORIZONTAL);
-        r.setClipChildren(false);
-        LinearLayout.LayoutParams a = new LinearLayout.LayoutParams(0, px(first.waves != null ? 64 : 56), 1f);
-        LinearLayout.LayoutParams b = new LinearLayout.LayoutParams(0, px(first.waves != null ? 64 : 56), 1f);
-        a.leftMargin = px(5);
-        b.rightMargin = px(5);
+        LinearLayout.LayoutParams a = new LinearLayout.LayoutParams(0, px(52), 1f);
+        LinearLayout.LayoutParams b = new LinearLayout.LayoutParams(0, px(52), 1f);
+        a.leftMargin = px(4);
+        b.rightMargin = px(4);
         r.addView(second.view, b);
         r.addView(first.view, a);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = px(10);
+        lp.bottomMargin = px(8);
         column.addView(r, lp);
-        // Right to left: Left moves to the second tile, Right back to the first.
         first.view.setId(View.generateViewId());
         second.view.setId(View.generateViewId());
         first.view.setNextFocusLeftId(second.view.getId());
         second.view.setNextFocusRightId(first.view.getId());
     }
-
-    // ---- actions ----
 
     private void open(Intent i) {
         try {
@@ -261,7 +234,7 @@ public class SidePanelActivity extends Activity {
     }
 
     private void refreshVideo() {
-        videoTile.title.setText(VideoWallpaper.enabled(this) ? "טפט וידאו · דלוק" : "טפט וידאו · כבוי");
+        video.title.setText(VideoWallpaper.enabled(this) ? "‏טפט וידאו" : "‏טפט כבוי");
     }
 
     private int px(float dp) {
@@ -274,9 +247,7 @@ public class SidePanelActivity extends Activity {
         if (!isFinishing()) finish();
     }
 
-    // ---- the screensaver tile's art ----
-
-    /** Three soft waves along the bottom and a small moon, in light blue; darker ink when the tile is focused. */
+    /** Google TV's screensaver tile: pale waves across the lower half and a small moon in the far corner. */
     private final class WavesDrawable extends Drawable {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
@@ -288,29 +259,24 @@ public class SidePanelActivity extends Activity {
         public void draw(Canvas c) {
             Rect b = getBounds();
             int w = b.width(), h = b.height();
-            int[] colors = focused
-                    ? new int[]{0x553A6FD8, 0x773A6FD8, 0xAA3A6FD8}
-                    : new int[]{0x3399C2FF, 0x5599C2FF, 0x8899C2FF};
-            for (int i = 0; i < 3; i++) {
-                float base = h * (0.62f + i * 0.12f);
-                float amp = h * (0.07f - i * 0.012f);
+            int tint = focused ? 0x6F8AB4F8 : 0x4D8AB4F8;
+            for (int i = 0; i < 2; i++) {
+                float base = h * (0.70f + i * 0.13f);
+                float amp = h * (0.08f - i * 0.02f);
                 path.rewind();
                 path.moveTo(0, h);
                 path.lineTo(0, base);
-                int steps = 24;
-                for (int s = 0; s <= steps; s++) {
-                    float x = w * s / (float) steps;
-                    float y = base + amp * (float) Math.sin((s / (float) steps) * Math.PI * 2 * (1.2f + i * 0.35f) + i * 1.3f);
-                    path.lineTo(x, y);
+                for (int s = 0; s <= 20; s++) {
+                    float u = s / 20f;
+                    path.lineTo(w * u, base + amp * (float) Math.sin(u * Math.PI * 2 * (1.1f + i * 0.4f) + i * 1.7f));
                 }
                 path.lineTo(w, h);
                 path.close();
-                paint.setColor(colors[i]);
+                paint.setColor(tint);
                 c.drawPath(path, paint);
             }
-            // The moon, top left (the label is on the right).
-            paint.setColor(focused ? 0xCC3A6FD8 : 0xE6DCE8FF);
-            c.drawCircle(px(20), px(18), px(6), paint);
+            paint.setColor(focused ? 0x99202124 : 0xCCE8EAED);
+            c.drawCircle(px(16), px(15), px(4.5f), paint);
         }
 
         @Override public void setAlpha(int alpha) { }
