@@ -114,6 +114,91 @@ public class HelperOverlayActivity extends Activity {
         heard.setText("");
         status.setText("מקשיב…");
         waves.setMode(WaveView.LISTENING);
+        // Google's own online recognizer (the one Google Assistant uses on this TV) knows Hebrew: the words go to
+        // HELPER as text, which every HELPER version takes. The recording below is the fallback.
+        if (!triedGoogle && startGoogleRecognizer()) return;
+        triedGoogle = false;
+        recordForHelper();
+    }
+
+    private static final android.content.ComponentName KATNISS = new android.content.ComponentName(
+            "com.google.android.katniss", "com.google.android.apps.tvsearch.voice.recognition.KatnissRecognitionService");
+    private android.speech.SpeechRecognizer recognizer;
+    private boolean triedGoogle;
+
+    private boolean startGoogleRecognizer() {
+        try {
+            getPackageManager().getServiceInfo(KATNISS, 0);
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+        triedGoogle = true;
+        try {
+            if (recognizer == null) {
+                recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(this, KATNISS);
+                recognizer.setRecognitionListener(new android.speech.RecognitionListener() {
+                    @Override public void onReadyForSpeech(Bundle b) { status.setText("מקשיב…"); }
+                    @Override public void onBeginningOfSpeech() { }
+                    @Override public void onRmsChanged(float db) { waves.setRms(db); }
+                    @Override public void onBufferReceived(byte[] buf) { }
+                    @Override public void onEndOfSpeech() { waves.setMode(WaveView.THINKING); status.setText("חושב…"); }
+                    @Override public void onEvent(int type, Bundle b) { }
+
+                    @Override
+                    public void onError(int error) {
+                        if (isFinishing() || busy) return;
+                        if (error == android.speech.SpeechRecognizer.ERROR_NO_MATCH
+                                || error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                            triedGoogle = false;
+                            waves.setMode(WaveView.IDLE);
+                            status.setText("לא שמעתי. לחץ OK כדי לנסות שוב");
+                            main.postDelayed(autoClose, CLOSE_AFTER_MS);
+                            return;
+                        }
+                        // Google's recognizer is not usable here: record and let HELPER transcribe instead.
+                        android.util.Log.i("HelperMic", "Google recognizer error " + error + ", recording instead");
+                        recordForHelper();
+                    }
+
+                    @Override
+                    public void onPartialResults(Bundle b) {
+                        String t = firstResult(b);
+                        if (t != null) heard.setText(t);
+                    }
+
+                    @Override
+                    public void onResults(Bundle b) {
+                        triedGoogle = false;
+                        String t = firstResult(b);
+                        if (t == null || t.trim().isEmpty()) { onError(android.speech.SpeechRecognizer.ERROR_NO_MATCH); return; }
+                        heard.setText(t);
+                        askHelper(t, true);
+                    }
+                });
+            }
+            Intent i = new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "iw-IL")
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "iw-IL")
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+            recognizer.startListening(i);
+            return true;
+        } catch (RuntimeException e) {
+            triedGoogle = false;
+            return false;
+        }
+    }
+
+    private static String firstResult(Bundle b) {
+        java.util.ArrayList<String> list = b == null ? null : b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+        return list == null || list.isEmpty() ? null : list.get(0);
+    }
+
+    /** The fallback: record here, and HELPER transcribes it (needs the HELPER version with /bridge/ask "speech"). */
+    private void recordForHelper() {
+        status.setText("מקשיב…");
+        waves.setMode(WaveView.LISTENING);
         mic.start(new VoiceCapture.Callback() {
             @Override public void level(float level) { waves.setRms(level * 12f - 2f); }
 
@@ -138,6 +223,10 @@ public class HelperOverlayActivity extends Activity {
 
     private void stopListening() {
         mic.stop();
+        if (recognizer != null) {
+            try { recognizer.cancel(); } catch (RuntimeException ignored) { }
+        }
+        triedGoogle = false;
     }
 
     private void askSpeech(byte[] wav) {
@@ -286,6 +375,7 @@ public class HelperOverlayActivity extends Activity {
     protected void onDestroy() {
         main.removeCallbacksAndMessages(null);
         mic.stop();
+        if (recognizer != null) recognizer.destroy();
         stopSpeaking();
         super.onDestroy();
     }
