@@ -9,6 +9,7 @@ const { execFile } = require('child_process')
 const config = require('./config')
 const brain = require('./brain')
 
+const MODEL = 'eleven_v3'
 const cacheDir = path.join(os.tmpdir(), 'helper-voice-cache')
 try { fs.mkdirSync(cacheDir, { recursive: true }) } catch {}
 
@@ -40,7 +41,7 @@ async function elevenLabs(text) {
   if (!apiKey) return null
 
   // Check disk cache first for 0ms instant playback:
-  const hash = crypto.createHash('md5').update(`${voiceId}:${text}`).digest('hex')
+  const hash = crypto.createHash('md5').update(`${MODEL}:${voiceId}:${text}`).digest('hex')
   const cachePath = path.join(cacheDir, `${hash}.mp3`)
   if (fs.existsSync(cachePath)) {
     try {
@@ -58,10 +59,13 @@ async function elevenLabs(text) {
       },
       body: JSON.stringify({
         text,
-        model_id: 'eleven_multilingual_v2',
+        model_id: MODEL,
+        // eleven_v3 with language_code he is the one that speaks Hebrew as Hebrew: the multilingual v2 model
+        // let the voice drift into Arabic-sounding speech (Whisper heard it as garbled words).
+        language_code: 'he',
         voice_settings: { stability: 0.5, similarity_boost: 0.75 }
       }),
-      signal: AbortSignal.timeout(4500)
+      signal: AbortSignal.timeout(9000)
     })
     if (!res.ok) return null
     const buf = Buffer.from(await res.arrayBuffer())

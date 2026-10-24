@@ -87,7 +87,9 @@
   .row { display: flex; align-items: center; gap: 14px; }
   canvas.waves { width: 68px; height: 42px; flex: none; }
   .main { flex: 1; min-width: 0; }
-  .heard { color: var(--dim); font-size: 13.5px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px; }
+  .heard { display: flex; align-items: baseline; gap: 8px; color: var(--ink); font-size: 16px; line-height: 1.45; font-weight: 600; margin-bottom: 6px; padding: 6px 12px; border-radius: 12px; background: rgba(139, 124, 255, 0.14); }
+  .heard::before { content: 'שמעתי'; flex: none; font-size: 11.5px; font-weight: 500; letter-spacing: 0.02em; color: var(--accent); }
+  .heard span { min-width: 0; overflow-wrap: anywhere; }
   .heard:empty { display: none; }
   .text {
     font-size: 16.5px; line-height: 1.55; font-weight: 500;
@@ -148,7 +150,7 @@
     <div class="row">
       <div class="main">
         <div class="mark hidden" id="mark">🎯 עם מה שסימנת</div>
-        <div class="heard" id="heard"></div>
+        <div class="heard" id="heard"><span id="heardText"></span></div>
         <div class="text" id="text"></div>
         <input class="ask hidden" id="ask" placeholder="מה לעשות? (Enter לשליחה, Esc לסגירה)" autocomplete="off" spellcheck="false">
         <div class="steps" id="steps"></div>

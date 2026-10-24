@@ -480,6 +480,7 @@ async function finish(seq, heard, text, route, started, error = false, voice = f
   voice = voice || spokenAsk === seq
   store.log({ heard, route, ms: Date.now() - started, error, answer: String(text).slice(0, 200) })
   answer(text, { heard, route, error, note })
+  refreshTray()   // the history in the tray menu
   // A spoken ask gets a spoken answer (errors too, so a failure is never silent).
   if (voice && store.settings().speakAnswers) {
     try {
@@ -697,11 +698,28 @@ function trayMenu() {
     { type: 'separator' },
     { label: s.helperToken ? 'HELPER בענן: מחובר' : 'HELPER בענן: לא מחובר (connect.ps1)', enabled: false },
     { label: claude === 'signed-out' ? 'Claude Code: צריך ‎/login' : claude === 'missing' ? 'Claude Code: לא מותקן' : claude === 'ok' ? 'Claude Code: מחובר' : 'Claude Code: עוד לא נבדק', enabled: false },
+    { label: 'מה שמעתי לאחרונה', submenu: recentAsks() },
     { label: 'הקיצורים שלמדתי…', click: () => shell.openPath(path.join(app.getPath('userData'), 'learned.json')) },
     { label: 'התיקייה של HELPER…', click: () => shell.openPath(app.getPath('userData')) },
     { type: 'separator' },
     { label: 'יציאה', click: () => app.quit() },
   ])
+}
+
+/** The last asks (what was heard), newest first; clicking one asks it again. */
+function recentAsks() {
+  try {
+    const lines = fs.readFileSync(path.join(app.getPath('userData'), 'asks.jsonl'), 'utf8').trim().split('\n')
+    const seen = new Set()
+    const items = []
+    for (let i = lines.length - 1; i >= 0 && items.length < 8; i--) {
+      let a; try { a = JSON.parse(lines[i]) } catch { continue }
+      if (!a.heard || seen.has(a.heard)) continue
+      seen.add(a.heard)
+      items.push({ label: a.heard.slice(0, 60), sublabel: String(a.answer || '').slice(0, 80), click: () => handleAsk(a.heard, { voice: false }) })
+    }
+    return items.length ? items : [{ label: 'עוד לא שמעתי כלום', enabled: false }]
+  } catch { return [{ label: 'עוד לא שמעתי כלום', enabled: false }] }
 }
 
 function refreshTray() { if (tray) tray.setContextMenu(trayMenu()) }

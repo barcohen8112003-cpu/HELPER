@@ -1,6 +1,6 @@
 'use strict'
 const $ = (id) => document.getElementById(id)
-const card = $('card'), heard = $('heard'), text = $('text'), ask = $('ask'), steps = $('steps')
+const card = $('card'), heardBox = $('heard'), heard = $('heardText'), text = $('text'), ask = $('ask'), steps = $('steps')
 const buttons = $('buttons'), note = $('note'), markEl = $('mark'), statusDot = $('status-dot')
 let mode = 'hidden'
 
@@ -122,10 +122,12 @@ helper.on('state', (s) => {
   }
   show(true)
   heard.textContent = s.heard || ''
+  heardBox.style.display = s.heard ? 'flex' : 'none'
 
   if (s.mode === 'listening') {
     if (prevMode !== 'listening') playTone('start')
     heard.textContent = ''
+    heardBox.style.display = 'none'
     text.innerHTML = '<span class="status">מקשיב… לחץ שוב לסיום (או שחרר אם החזקת)</span>'
   } else if (s.mode === 'thinking') {
     text.innerHTML = ''
