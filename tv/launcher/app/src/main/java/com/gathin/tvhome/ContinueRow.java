@@ -23,6 +23,9 @@ import java.util.List;
 final class ContinueRow {
 
     private static final int MAX = 8;
+    /** Apps that are not something one watches: left out of Continue watching (still in All apps). */
+    private static final java.util.Set<String> NOT_WATCHING = new java.util.HashSet<>(java.util.Arrays.asList(
+            "com.android.tv.settings", "com.android.vending", "com.google.android.tvrecommendations"));
     final LinearLayout view;
     private final Activity activity;
     private final LinearLayout cards;
@@ -59,6 +62,7 @@ final class ContinueRow {
         cards.setOrientation(LinearLayout.HORIZONTAL);
         cards.setGravity(Gravity.RIGHT);
         cards.setClipChildren(false);
+        cards.setClipToPadding(false);
         cards.setPadding(AppCards.px(a, 50), AppCards.px(a, 8), AppCards.px(a, 50), 0);
         scroll.addView(cards, new HorizontalScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         view.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -81,8 +85,12 @@ final class ContinueRow {
         view.animate().alpha(1f).translationY(0).setDuration(260).setInterpolator(new DecelerateInterpolator(2f)).start();
         // Newest is the rightmost card: start there.
         View first = cards.getChildCount() > 0 ? ((ViewGroup) cards.getChildAt(cards.getChildCount() - 1)).getChildAt(0) : null;
-        scroll.post(() -> scroll.fullScroll(View.FOCUS_RIGHT));
         if (first != null) first.requestFocus();
+        // Show the right end, where the newest card is (fullScroll would also move the focus).
+        scroll.post(() -> {
+            scroll.scrollTo(cards.getWidth(), 0);
+            if (first != null) first.requestFocus();
+        });
     }
 
     void hide(boolean animate) {
@@ -97,6 +105,7 @@ final class ContinueRow {
         List<View> row = new ArrayList<>();       // in reading order: newest first
         for (String[] app : AppCards.byUse(activity)) {
             if (!AppCards.usedLately(app)) break;
+            if (NOT_WATCHING.contains(app[0])) continue;
             row.add(AppCards.app(activity, app[0], app[1], w, h));
             if (row.size() == MAX) break;
         }
