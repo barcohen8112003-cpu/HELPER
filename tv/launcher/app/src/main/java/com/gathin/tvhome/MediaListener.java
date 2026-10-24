@@ -56,7 +56,9 @@ public class MediaListener extends NotificationListenerService {
         try {
             msm.addOnActiveSessionsChangedListener(sessions, me, handler);
             watch(msm.getActiveSessions(me));
-        } catch (SecurityException ignored) { }
+        } catch (SecurityException e) {
+            android.util.Log.w("MediaListener", "no access to media sessions", e);
+        }
         handler.postDelayed(tick, SAVE_EVERY_MS);
     }
 
@@ -70,6 +72,7 @@ public class MediaListener extends NotificationListenerService {
 
     private void watch(List<MediaController> list) {
         if (list == null) return;
+        android.util.Log.i("MediaListener", "sessions: " + list.size());
         for (MediaController mc : list) {
             if (!wanted(mc.getPackageName())) continue;
             boolean known = false;
@@ -101,6 +104,7 @@ public class MediaListener extends NotificationListenerService {
     private void save(MediaController mc) {
         MediaMetadata m = mc.getMetadata();
         PlaybackState st = mc.getPlaybackState();
+        android.util.Log.i("MediaListener", "save " + mc.getPackageName() + " metadata=" + (m != null) + " state=" + (st == null ? -1 : st.getState()));
         if (m == null) return;
         String title = text(m, MediaMetadata.METADATA_KEY_DISPLAY_TITLE, MediaMetadata.METADATA_KEY_TITLE);
         if (title.isEmpty()) return;
@@ -124,6 +128,9 @@ public class MediaListener extends NotificationListenerService {
             for (int i = 0; i < old.length(); i++) if (key.equals(old.getJSONObject(i).optString("key"))) prev = old.getJSONObject(i);
             // Not playing and nothing played yet (a paused app restoring its last title): leave the order alone.
             if (!playing && prev == null && position <= 0) return;
+            // A closing player reports 0: keep where it really was.
+            if (!playing && position <= 0 && prev != null) position = prev.optLong("position");
+            if (duration <= 0 && prev != null) duration = prev.optLong("duration");
             String art = prev != null ? prev.optString("art") : "";
             Bitmap bmp = m.getBitmap(MediaMetadata.METADATA_KEY_ART);
             if (bmp == null) bmp = m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
@@ -141,7 +148,9 @@ public class MediaListener extends NotificationListenerService {
                 if (!key.equals(old.getJSONObject(i).optString("key"))) next.put(old.getJSONObject(i));
             }
             prefs.edit().putString("list", next.toString()).apply();
-        } catch (Exception ignored) { }
+        } catch (Exception e) {
+            android.util.Log.w("MediaListener", "save failed", e);
+        }
     }
 
     private String saveArt(String key, Bitmap bmp) {
