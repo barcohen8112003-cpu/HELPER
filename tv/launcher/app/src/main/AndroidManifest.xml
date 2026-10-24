@@ -237,6 +237,14 @@
             android:excludeFromRecents="true"
             android:screenOrientation="landscape" />
         <activity
+            android:name=".PlayPanelActivity"
+            android:exported="false"
+            android:theme="@style/Theme.HelperOverlay"
+            android:taskAffinity="com.gathin.tvhome.helper"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape"
+            android:windowSoftInputMode="adjustNothing|stateHidden" />
+        <activity
             android:name=".AllAppsActivity"
             android:exported="false"
             android:excludeFromRecents="true"

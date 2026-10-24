@@ -579,9 +579,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Google Play, next to Wi-Fi: the store's TV front page. Its icon keeps the four Play colours.
         TextView btnPlay = findViewById(R.id.btnPlay);
         btnPlay.setCompoundDrawableTintList(null);
-        btnPlay.setOnClickListener(v -> {
-            if (!Helper.openApp(this, "com.android.vending")) open(systemIntent(Settings.ACTION_SETTINGS));
-        });
+        // A panel of Home's own (search, picks for Israel, updates, my apps), not the Play app; hold it for Play itself.
+        btnPlay.setOnClickListener(v -> startActivity(new Intent(this, PlayPanelActivity.class)));
+        btnPlay.setOnLongClickListener(v -> Helper.openApp(this, "com.android.vending"));
         btnReorder = findViewById(R.id.btnReorder);
         btnReorder.setOnClickListener(v -> toggleReorder());
         btnReorder.setVisibility(cfg.reorderButton ? View.VISIBLE : View.GONE);
