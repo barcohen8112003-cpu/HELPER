@@ -24,6 +24,9 @@ let askSeq = 0
 let hideTimer = null
 
 const log = (...a) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'app.log'), new Date().toISOString() + ' ' + a.join(' ') + '\n') } catch { } }
+// Anything that fails at start or later goes to app.log (a silent failure looks like a program that does nothing).
+process.on('uncaughtException', (e) => log('uncaught', e && e.stack || e))
+process.on('unhandledRejection', (e) => log('unhandled', e && e.stack || e))
 
 // ---- screens --------------------------------------------------------------------------------------
 
