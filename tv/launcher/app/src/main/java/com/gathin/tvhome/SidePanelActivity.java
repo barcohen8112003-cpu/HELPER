@@ -67,13 +67,14 @@ import java.util.Set;
  */
 public class SidePanelActivity extends Activity {
 
-    private static final int PANEL = 0xF2263148;
-    private static final int TILE = 0x1FFFFFFF;
-    private static final int TILE_FOCUSED = 0xFFE8EAED;
-    private static final int CARD = 0x33000000;
-    private static final int TEXT = 0xFFE8EAED;
-    private static final int TEXT_DIM = 0x99E8EAED;
-    private static final int INK = 0xFF202124;
+    // Google TV's own quick settings, measured on this TV: panel, tiles, the light blue of a focused tile.
+    private static final int PANEL = 0xFF131D23;
+    private static final int TILE = 0xFF1C262C;
+    private static final int TILE_FOCUSED = 0xFFCCE8FF;
+    private static final int CARD = 0xFF192229;
+    private static final int TEXT = 0xFFE1E3E3;
+    private static final int TEXT_DIM = 0x99E1E3E3;
+    private static final int INK = 0xFF0B1D29;
     private static final int ACCENT = 0xFF8AB4F8;
 
     private float d;
@@ -81,6 +82,9 @@ public class SidePanelActivity extends Activity {
     private LinearLayout panel, body;
     private ScrollView scroller;
     private TextView header;
+    /** Google TV's top of the panel: date and time, HELPER and the settings gear; shown with the tiles only. */
+    private View top;
+    private View gear;
     /** The tile that opened the menu on screen, to focus again on Back; null while the tiles show. */
     private View openedFrom;
     private Runnable refreshMenu;
@@ -96,30 +100,43 @@ public class SidePanelActivity extends Activity {
 
         FrameLayout root = new FrameLayout(this);
         root.setOnClickListener(v -> finish());
+        root.setBackgroundColor(0x99000000);   // Google dims Home behind the panel
 
         panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(px(12), px(12), px(12), px(12));
+        panel.setPadding(px(12), px(9), px(12), px(8));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(PANEL);
-        bg.setCornerRadius(px(24));
+        bg.setCornerRadius(px(20));
         panel.setBackground(bg);
         panel.setElevation(px(8));
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px(332), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.LEFT | Gravity.TOP);
-        lp.leftMargin = px(16);
+        panel.setClipChildren(false);
+        // 272dp wide, the screen's height less 16dp above and below, 24dp in from the left: Google's size.
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px(272), FrameLayout.LayoutParams.MATCH_PARENT, Gravity.LEFT | Gravity.TOP);
+        lp.leftMargin = px(24);
         lp.topMargin = px(16);
         lp.bottomMargin = px(16);
         root.addView(panel, lp);
 
+        top = buildTop();
+        panel.addView(top, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, px(73)));
         header = label("", 17, TEXT, medium);
         header.setPadding(px(10), px(6), px(10), px(12));
         panel.addView(header, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         scroller = new ScrollView(this);
         scroller.setVerticalScrollBarEnabled(false);
+        scroller.setClipChildren(false);
+        scroller.setClipToPadding(false);
         body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
+        body.setClipChildren(false);
+        body.setPadding(0, px(3), 0, px(3));
         scroller.addView(body);
-        panel.addView(scroller, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        panel.addView(scroller, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        // Google's foot: the product name, dim, on the right.
+        TextView foot = label("HELPER TV", 14, TEXT_DIM, medium);
+        foot.setPadding(px(10), px(6), px(10), px(4));
+        panel.addView(foot, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         setContentView(root);
 
         showTiles(null);
@@ -140,12 +157,7 @@ public class SidePanelActivity extends Activity {
         body.removeAllViews();
         List<View> order = new ArrayList<>();
 
-        Tile account = new Tile(R.drawable.ic_qs_spark, "HELPER", Helper.configured(this) ? "מחובר" : "לא מחובר", true,
-                () -> { HelperOverlayActivity.open(this, "type", null); finish(); });
-        body.addView(account.view, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, px(60)));
-        order.add(account.view);
-        gap(8);
-
+        top.setVisibility(View.VISIBLE);
         Tile screensaver = new Tile(0, "שומר מסך", null, false, null);
         screensaver.waves();
         Tile apps = new Tile(R.drawable.ic_qs_input, "אפליקציות", null, false, () -> launch(new Intent(this, AppsWindowActivity.class)));
@@ -156,8 +168,6 @@ public class SidePanelActivity extends Activity {
         Tile bt = new Tile(R.drawable.ic_qs_bt, "Bluetooth", null, false, null);
         Tile remote = new Tile(R.drawable.ic_qs_remote, "שלט", null, false, null);
         Tile wall = new Tile(R.drawable.ic_qs_wallpaper, "טפט", null, false, null);
-        Tile settings = new Tile(R.drawable.ic_qs_gear, "הגדרות", null, false, () -> system(Settings.ACTION_SETTINGS));
-        settings.view.setOnLongClickListener(v -> { launch(new Intent(this, LauncherSettingsActivity.class)); return true; });
 
         menu(screensaver, "שומר מסך", this::screensaverMenu);
         menu(picture, "תמונה", this::pictureMenu);
@@ -168,21 +178,23 @@ public class SidePanelActivity extends Activity {
         menu(remote, "כפתורי השלט", this::remoteMenu);
         menu(wall, "טפט", this::wallpaperMenu);
 
-        tileRow(screensaver, apps, order);
-        tileRow(picture, sound, order);
-        tileRow(wifi, access, order);
-        tileRow(bt, remote, order);
-        tileRow(wall, settings, order);
+        // As on Google TV: the screensaver on the right of the first row, Wi-Fi beside it, Bluetooth under Wi-Fi.
+        tileRow(screensaver, wifi, order);
+        tileRow(sound, bt, order);
+        tileRow(picture, access, order);
+        tileRow(remote, wall, order);
+        tileRow(apps, null, order);
 
-        gap(4);
+        gap(12);
         Tile ask = new Tile(R.drawable.ic_qs_spark, "לשאול את HELPER", "כפתור העוזר בשלט, ואז לדבר", true,
                 () -> { HelperOverlayActivity.open(this, "voice", null); finish(); });
         ask.base = CARD;
         ask.paint(false);
-        body.addView(ask.view, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, px(60)));
+        body.addView(ask.view, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, px(56)));
         order.add(ask.view);
 
-        View focus = focusIndex != null && focusIndex >= 0 && focusIndex < order.size() ? order.get(focusIndex) : account.view;
+        // Google TV opens on its settings gear; back from a menu, on the tile that opened it.
+        View focus = focusIndex != null && focusIndex >= 0 && focusIndex < order.size() ? order.get(focusIndex) : gear;
         focus.requestFocus();
         lastTileOrder = order;
     }
@@ -200,6 +212,7 @@ public class SidePanelActivity extends Activity {
 
     private void openMenu(String title, Runnable build) {
         body.removeAllViews();
+        top.setVisibility(View.GONE);
         header.setText("‏" + title);
         header.setVisibility(View.VISIBLE);
         openedFrom = header;
@@ -607,7 +620,7 @@ public class SidePanelActivity extends Activity {
             view = new FrameLayout(SidePanelActivity.this);
             view.setFocusable(true);
             view.setClickable(true);
-            bg.setCornerRadius(px(16));
+            bg.setCornerRadius(px(14));
             view.setBackground(bg);
             view.setClipToOutline(true);
 
@@ -618,7 +631,7 @@ public class SidePanelActivity extends Activity {
             LinearLayout texts = new LinearLayout(SidePanelActivity.this);
             texts.setOrientation(LinearLayout.VERTICAL);
             texts.setGravity(Gravity.RIGHT);
-            title = label(text, twoLine ? 15 : 14, TEXT, twoLine ? medium : regular);
+            title = label(text, 15, TEXT, twoLine ? medium : regular);
             texts.addView(title);
             subtitle = sub == null ? null : label(sub, 12, TEXT_DIM, regular);
             if (subtitle != null) texts.addView(subtitle);
@@ -640,7 +653,12 @@ public class SidePanelActivity extends Activity {
                 line.addView(icon, ip);
             }
             view.addView(line, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-            view.setOnFocusChangeListener((v, focused) -> paint(focused));
+            view.setOnFocusChangeListener((v, focused) -> {
+                paint(focused);
+                // Google's focused tile grows a little.
+                float sc = focused ? 1.03f : 1f;
+                v.animate().scaleX(sc).scaleY(sc).setDuration(150).start();
+            });
             view.setOnClickListener(v -> { if (action != null) action.run(); });
             paint(false);
         }
@@ -666,21 +684,123 @@ public class SidePanelActivity extends Activity {
     private void tileRow(Tile first, Tile second, List<View> order) {
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams a = new LinearLayout.LayoutParams(0, px(52), 1f);
-        LinearLayout.LayoutParams b = new LinearLayout.LayoutParams(0, px(52), 1f);
-        a.leftMargin = px(4);
-        b.rightMargin = px(4);
-        r.addView(second.view, b);
+        r.setClipChildren(false);
+        // 54dp tiles, 6dp apart: Google's grid. A row of one keeps its tile on the right, half the width.
+        LinearLayout.LayoutParams a = new LinearLayout.LayoutParams(0, px(54), 1f);
+        LinearLayout.LayoutParams b = new LinearLayout.LayoutParams(0, px(54), 1f);
+        a.leftMargin = px(3);
+        b.rightMargin = px(3);
+        if (second != null) r.addView(second.view, b);
+        else r.addView(new View(this), b);
         r.addView(first.view, a);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = px(8);
+        lp.bottomMargin = px(6);
         body.addView(r, lp);
         first.view.setId(View.generateViewId());
+        order.add(first.view);
+        if (second == null) return;
         second.view.setId(View.generateViewId());
         first.view.setNextFocusLeftId(second.view.getId());
         second.view.setNextFocusRightId(first.view.getId());
-        order.add(first.view);
         order.add(second.view);
+    }
+
+    /**
+     * Google TV's top of the panel: the date over the time on the right; on the left a round HELPER button and the
+     * settings gear, "All settings" under it. Focused, a circle turns the tiles' light blue.
+     */
+    private View buildTop() {
+        FrameLayout t = new FrameLayout(this);
+        t.setClipChildren(false);
+        LinearLayout clock = new LinearLayout(this);
+        clock.setOrientation(LinearLayout.VERTICAL);
+        clock.setGravity(Gravity.RIGHT);
+        android.widget.TextClock date = new android.widget.TextClock(this);
+        String pattern = android.text.format.DateFormat.getBestDateTimePattern(new Locale("iw"), "EEEEdMMM");
+        date.setFormat12Hour(pattern);
+        date.setFormat24Hour(pattern);
+        date.setTextColor(TEXT_DIM);
+        date.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        date.setTypeface(regular);
+        date.setGravity(Gravity.RIGHT);
+        android.widget.TextClock time = new android.widget.TextClock(this);
+        time.setFormat12Hour("HH:mm");
+        time.setFormat24Hour("HH:mm");
+        time.setTextColor(TEXT);
+        time.setTextSize(TypedValue.COMPLEX_UNIT_SP, 25);
+        time.setTypeface(medium);
+        time.setGravity(Gravity.RIGHT);
+        clock.addView(date);
+        clock.addView(time);
+        FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        cp.rightMargin = px(3);
+        t.addView(clock, cp);
+
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.HORIZONTAL);
+        left.setClipChildren(false);
+        TextView helper = circle(null, "H", 0xFF5B3FD0, 28);
+        helper.setContentDescription("HELPER");
+        helper.setOnClickListener(v -> { HelperOverlayActivity.open(this, "type", null); finish(); });
+        LinearLayout gearCol = new LinearLayout(this);
+        gearCol.setOrientation(LinearLayout.VERTICAL);
+        gearCol.setGravity(Gravity.CENTER_HORIZONTAL);
+        gearCol.setClipChildren(false);
+        TextView g = circle(getDrawable(R.drawable.ic_qs_gear), null, 0, 31);
+        g.setContentDescription("כל ההגדרות");
+        g.setOnClickListener(v -> system(Settings.ACTION_SETTINGS));
+        g.setOnLongClickListener(v -> { launch(new Intent(this, LauncherSettingsActivity.class)); return true; });
+        gear = g;
+        gearCol.addView(g, new LinearLayout.LayoutParams(px(31), px(31)));
+        TextView all = label("כל ההגדרות", 13, TEXT, regular);
+        all.setGravity(Gravity.CENTER);
+        all.setPadding(0, px(2), 0, 0);
+        gearCol.addView(all, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(px(28), px(28));
+        hp.topMargin = px(2);
+        left.addView(helper, hp);
+        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        gp.leftMargin = px(8);
+        left.addView(gearCol, gp);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.LEFT | Gravity.TOP);
+        lp.topMargin = px(15);
+        t.addView(left, lp);
+        return t;
+    }
+
+    /** A round button with an icon or a letter; focused, it fills with the tiles' light blue. */
+    private TextView circle(Drawable icon, String letter, int fill, int sizeDp) {
+        TextView c = new TextView(this);
+        c.setFocusable(true);
+        c.setClickable(true);
+        c.setGravity(Gravity.CENTER);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setColor(fill);
+        c.setBackground(bg);
+        if (letter != null) {
+            c.setText(letter);
+            c.setTextColor(0xFFFFFFFF);
+            c.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            c.setTypeface(medium);
+        }
+        if (icon != null) {
+            icon = icon.mutate();
+            int s = px(sizeDp * 0.62f);
+            icon.setBounds(0, 0, s, s);
+            c.setCompoundDrawables(icon, null, null, null);
+            c.setPadding((px(sizeDp) - s) / 2, 0, 0, 0);
+            icon.setTint(TEXT);
+        }
+        final Drawable ic = icon;
+        c.setOnFocusChangeListener((v, focused) -> {
+            bg.setColor(focused ? TILE_FOCUSED : fill);
+            if (letter != null) c.setTextColor(focused ? INK : 0xFFFFFFFF);
+            if (ic != null) ic.setTint(focused ? INK : TEXT);
+            float sc = focused ? 1.06f : 1f;
+            v.animate().scaleX(sc).scaleY(sc).setDuration(150).start();
+        });
+        return c;
     }
 
     // =====================================================================================================

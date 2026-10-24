@@ -11,6 +11,7 @@ final class Taglines {
     static {
         LINES.put("com.netflix.ninja", new String[]{"Legen... wait for it... dary.", "עוד פרק אחד. רק אחד.", "Are you still watching?"});
         LINES.put("com.google.android.youtube.tv", new String[]{"עוד סרטון אחד ואני הולך לישון.", "Like and subscribe.", "מה נראה היום?"});
+        LINES.put("com.disney.disneyplus", new String[]{"To infinity and beyond.", "Hakuna matata.", "I am your father."});
         LINES.put("com.disneyplus.mea", new String[]{"To infinity and beyond.", "Hakuna matata.", "I am your father."});
         LINES.put("com.keshet.mako.VODAndroidTV", new String[]{"כל מה שפספסת ב-12.", "החדשות, הריאליטי והדרמות.", "מה רץ הערב ב-12?"});
         LINES.put("com.applicaster.iReshet", new String[]{"רשת 13, מתי שבא לך.", "כל התוכניות של 13 במקום אחד."});

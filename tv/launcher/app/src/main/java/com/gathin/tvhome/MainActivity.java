@@ -768,6 +768,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onResume() {
         super.onResume();
+        // Every half hour, Google TV's rows (Disney+, YouTube) are read for Continue watching, under a still of Home.
+        handler.removeCallbacks(readGoogleRows);
+        android.util.Log.i("GtvRows", "resume: available=" + GtvRows.available(this) + " stale=" + GtvRows.stale(this));
+        if (nowDesign && GtvRows.available(this) && GtvRows.stale(this)) handler.postDelayed(readGoogleRows, 2500);
         // The side panel's video switch: rebuild Home when it no longer matches what is on screen.
         if (VideoWallpaper.desired(this) != (videoWallpaper != null)) {
             recreate();
@@ -954,6 +958,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onPause() {
         super.onPause();
+        handler.removeCallbacks(readGoogleRows);
         if (weather != null) weather.onPause();
         hideContinue(false);
         root.removeCallbacks(showIdleClock);
@@ -1745,6 +1750,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (newF != tabs[page]) tabs[page].requestFocus();
         });
     }
+
+    private final Runnable readGoogleRows = () -> {
+        InputKeyService service = InputKeyService.instance;
+        android.util.Log.i("GtvRows", "home: service=" + (service != null) + " busy=" + GtvRows.busy + " focus=" + hasWindowFocus() + " page=" + page);
+        if (service == null || GtvRows.busy || isFinishing() || !hasWindowFocus() || page != PAGE_HOME
+                || continueRow != null && continueRow.shown || root.getWidth() == 0) return;
+        Bitmap still = Bitmap.createBitmap(root.getWidth(), root.getHeight(), Bitmap.Config.ARGB_8888);
+        android.view.PixelCopy.request(getWindow(), still, result -> {
+            if (result == android.view.PixelCopy.SUCCESS && InputKeyService.instance != null && hasWindowFocus()) {
+                GtvRows.refresh(InputKeyService.instance, still);
+            }
+        }, handler);
+    };
 
     /** Down (or OK) from a tab: into the page it shows, the dock or the gallery's first app. */
     private void enterPage() {

@@ -13,6 +13,12 @@ import android.content.Intent;
 public class HelperSetupReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
+        // From the computer: read Google TV's rows again now (--ez gtv_refresh true).
+        if (intent.getBooleanExtra("gtv_refresh", false)) {
+            context.getSharedPreferences("gtv_rows", Context.MODE_PRIVATE).edit().remove("time").remove("tried").apply();
+            setResultData("Google TV rows will be read when Home is next shown");
+            return;
+        }
         Helper.save(context, intent.getStringExtra("url"), intent.getStringExtra("token"));
         InputKeyService service = InputKeyService.instance;
         if (service != null) service.reconnectHelper();

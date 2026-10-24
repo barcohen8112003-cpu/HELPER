@@ -51,8 +51,8 @@ final class Brand {
         return c == null ? 0 : c;
     }
 
-    /** Old apps that a newer one replaces: the old Disney+ asks to install the new one. */
-    private static final String[][] REPLACED = {{"com.disney.disneyplus", "com.disneyplus.mea"}};
+    /** Old apps that a newer one replaces: the old Disney+ (com.disneyplus.mea) only asks to install the new one. */
+    private static final String[][] REPLACED = {{"com.disneyplus.mea", "com.disney.disneyplus"}};
 
     /** True for an old app whose replacement is installed: it stays off Home and the app lists. */
     static boolean replaced(android.content.Context c, String pkg) {

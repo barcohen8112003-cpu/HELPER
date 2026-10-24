@@ -68,13 +68,13 @@ public class AppsStoreActivity extends Activity {
     /** Rows of apps worth having, chosen by hand: {title, package, package, ...}. Names come from Play. */
     private static final String[][] ROWS = {
             {"מומלצות בישראל", "com.applicaster.il.ch1", "com.keshet.mako.VODAndroidTV", "com.applicaster.iReshet",
-                    "il.co.yes.yesplus", "il.co.stingtv.atv", "com.netflix.ninja", "com.disneyplus.mea"},
-            {"סטרימינג", "com.netflix.ninja", "com.disneyplus.mea", "com.amazon.amazonvideo.livingroom",
+                    "il.co.yes.yesplus", "il.co.stingtv.atv", "com.netflix.ninja", "com.disney.disneyplus"},
+            {"סטרימינג", "com.netflix.ninja", "com.disney.disneyplus", "com.amazon.amazonvideo.livingroom",
                     "com.apple.atve.androidtv.appletv", "com.wbd.stream", "com.cbs.ott", "tv.pluto.android",
                     "com.tubitv", "com.crunchyroll.crunchyroid", "com.plexapp.android"},
             {"מוזיקה", "com.spotify.tv.android", "com.google.android.youtube.tvmusic", "com.aspiro.tidal",
                     "deezer.android.tv"},
-            {"ילדים", "com.google.android.youtube.tvkids", "com.disneyplus.mea", "org.pbskids.video"},
+            {"ילדים", "com.google.android.youtube.tvkids", "com.disney.disneyplus", "org.pbskids.video"},
             {"כלים", "org.videolan.vlc", "org.xbmc.kodi", "tv.twitch.android.app", "com.yablio.sendfilestotv",
                     "com.esaba.downloader", "com.cloudmosa.puffinTV", "com.lonelycatgames.Xplore"},
     };

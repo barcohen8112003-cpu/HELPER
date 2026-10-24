@@ -21,7 +21,7 @@
         <item>com.google.android.youtube.tv</item>
         <item>com.keshet.mako.VODAndroidTV</item>
         <item>com.applicaster.iReshet</item>
-        <item>com.disneyplus.mea</item>
+        <item>com.disney.disneyplus</item>
         <item>com.stremio.one</item>
     </string-array>
     <!-- With fewer dock_apps than columns (or a dock app that is not installed), the free dock slots take

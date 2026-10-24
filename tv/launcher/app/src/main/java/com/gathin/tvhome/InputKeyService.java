@@ -2,6 +2,7 @@ package com.gathin.tvhome;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 import android.view.KeyEvent;
@@ -88,6 +89,8 @@ public class InputKeyService extends AccessibilityService {
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
         int code = event.getKeyCode();
+        // Google's Home is up under a cover for a moment (GtvRows): no key may reach it.
+        if (GtvRows.busy) return true;
         // Arrows, OK, Back, volume: nothing here concerns them. Answer at once, because the system waits for this
         // service before it delivers each of these keys to the app, so any work here is added to every key press.
         if (code == KeyEvent.KEYCODE_HOME && learner == null) return onHomeKey(event);
@@ -146,9 +149,23 @@ public class InputKeyService extends AccessibilityService {
             return true;
         }
         homeHandler.removeCallbacks(homeHold);
-        if (!homeLong && !event.isCanceled()) performGlobalAction(GLOBAL_ACTION_HOME);
+        if (!homeLong && !event.isCanceled()) goHome(this);
         homeLong = false;
         return true;
+    }
+
+    /**
+     * Our Home, started directly: with Google TV's own Home enabled (for GtvRows), the system's Home action and
+     * the way back from apps lead to Google's, whatever the default.
+     */
+    static void goHome(Context c) {
+        try {
+            c.startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                    .setClassName(c.getPackageName(), MainActivity.class.getName())
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED));
+        } catch (Exception e) {
+            Log.w(TAG, "cannot open Home", e);
+        }
     }
 
     /** The Assistant button is always HELPER's; other buttons only once an app is chosen for them. */
@@ -166,6 +183,13 @@ public class InputKeyService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || event.getPackageName() == null) return;
         String pkg = event.getPackageName().toString();
+        if (pkg.equals(GtvRows.GTV)) Log.i(TAG, "gtv window " + event.getClassName() + " busy=" + GtvRows.busy);
+        // Google's Home came up by itself (Back out of an app, the system's Home): ours instead, at once.
+        if (pkg.equals(GtvRows.GTV) && !GtvRows.busy && event.getClassName() != null
+                && event.getClassName().toString().contains("HomeActivity")) {
+            goHome(this);
+            return;
+        }
         // The keyboard, the volume bar and our own overlay are not "the app that is open".
         if (pkg.equals("com.android.systemui") || pkg.contains("inputmethod")) return;
         if (pkg.equals(getPackageName())) {

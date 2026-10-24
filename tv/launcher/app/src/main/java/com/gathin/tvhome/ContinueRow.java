@@ -158,12 +158,17 @@ final class ContinueRow {
         } else {
             watching.addAll(Titles.watching(activity));
         }
-        // What played in Netflix, Disney+ and YouTube, mixed in by when it was watched.
+        // What played in Netflix, Disney+ and YouTube, mixed in by when it was watched, and Disney+'s and
+        // Netflix's own rows from Google TV's Home.
         watching.addAll(MediaListener.played(activity));
+        watching.addAll(GtvRows.items(activity, "com.disney.disneyplus"));
+        watching.addAll(GtvRows.items(activity, "com.netflix.ninja"));
         watching.sort((x, y) -> Long.compare(y.time, x.time));
         if (!linked) watching.add(0, CONNECT);
         if (!watching.isEmpty()) addRow("‏המשך צפייה", watching, true);
         boolean nothing = watching.isEmpty() || !linked && watching.size() == 1;
+        List<Titles.Title> youtube = GtvRows.items(activity, "com.google.android.youtube.tv");
+        if (!youtube.isEmpty()) addRow("‏YouTube בשבילך", youtube, false);
         if (!series.isEmpty()) addRow(nothing ? "‏סדרות מומלצות בשבילך" : "‏סדרות מומלצות", series, false);
         if (!movies.isEmpty()) addRow("‏סרטים מומלצים", movies, false);
         if (rows.isEmpty()) {
@@ -322,6 +327,7 @@ final class ContinueRow {
 
         frame.setOnClickListener(v -> {
             if (connect) c.startActivity(new android.content.Intent(c, StremioLinkActivity.class));
+            else if (t.gtvDesc != null && InputKeyService.instance != null) GtvRows.open(InputKeyService.instance, t.gtvDesc, t.pkg);
             else if (t.pkg != null) Helper.openApp(c, t.pkg);
             else Titles.open(c, t);
         });

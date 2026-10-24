@@ -43,6 +43,8 @@ final class Titles {
         /** Played in an app (MediaListener): that app, which opens on OK. When it was watched, for the order. */
         String pkg;
         long time;
+        /** Read from Google TV's Home (GtvRows): the card's description there, to click it again. */
+        String gtvDesc;
         Title(String id, String type, String name, String background, String logo, String year, String rating) {
             this.id = id; this.type = type; this.name = name; this.background = background; this.logo = logo;
             this.year = year; this.rating = rating;
