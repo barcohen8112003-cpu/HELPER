@@ -977,6 +977,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onStop() {
         super.onStop();
+        if (page != PAGE_HOME) showPage(PAGE_HOME, false);   // back on Home, Home shows the dock
         started = false;
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
@@ -1064,6 +1065,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (handleSettingsKey(event)) return true;
+        if (page != PAGE_HOME && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            // Back from the gallery: up to its tab first, then the dock.
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (!tabs[page].isFocused()) tabs[page].requestFocus();
+                else { showPage(PAGE_HOME, true); focusTile(Math.min(lastFocused, COLUMNS - 1)); }
+            }
+            return true;
+        }
         if (continueRow != null && !reordering) {
             int code = event.getKeyCode();
             boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
@@ -1623,16 +1632,28 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroName.setTextDirection(View.TEXT_DIRECTION_ANY_RTL);
     }
 
+    /** NOW tabs: the page Home shows (the dock, the app gallery or the live-TV apps) and the tab for each page. */
+    private static final int PAGE_APPS = 0, PAGE_LIVE = 1, PAGE_HOME = 2;
+    private int page = PAGE_HOME;
+    private final TextView[] tabs = new TextView[4];
+    private LinearLayout tabPill;
+    private FrameLayout pageView;
+    private LinearLayout pageColumn;
+    private android.widget.ScrollView pageScroll;
+    private View pageFirst;
+
     /**
-     * NOW: Google TV's tabs in one dark pill beside the Wi-Fi and settings icons, read right to left: HELPER, Home
-     * (the selected tab), Live (the live-channel apps) and Apps (the Apps screen). They stand in for the HELPER and
-     * Play icons, whose long presses they keep.
+     * NOW: Google TV's tabs in one dark pill beside the Play, Wi-Fi and settings icons, read right to left: HELPER,
+     * Home, Live and Apps. Moving onto Home, Live or Apps switches the page under them at once, no OK needed: Live
+     * and Apps show the app gallery in place of the dock. HELPER opens on OK. The Play icon opens Google Play.
      */
     private void addNowTabs(TextView btnHelper, TextView btnPlay) {
         LinearLayout bar = findViewById(R.id.topButtons);
         btnHelper.setVisibility(View.GONE);
-        btnPlay.setVisibility(View.GONE);
+        btnPlay.setOnClickListener(v -> Helper.openApp(this, "com.android.vending"));
+        btnPlay.setOnLongClickListener(null);
         LinearLayout pill = new LinearLayout(this);
+        tabPill = pill;
         pill.setOrientation(LinearLayout.HORIZONTAL);
         pill.setGravity(Gravity.CENTER_VERTICAL);
         int p4 = Math.round(4 * density);
@@ -1645,16 +1666,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         pill.setClipChildren(false);
         // Left to right on screen, so HELPER ends up on the right where a Hebrew reader starts.
         String[] names = {"‏אפליקציות", "‏שידור חי", "‏בית", "HELPER"};
-        View.OnClickListener[] clicks = {
-                v -> startActivity(new Intent(this, AppsStoreActivity.class)),
-                v -> startActivity(new Intent(this, AllAppsActivity.class).putExtra(AllAppsActivity.EXTRA_LIVE, true)),
-                v -> focusTile(Math.min(lastFocused, COLUMNS - 1)),
-                v -> btnHelper.performClick(),
-        };
-        View.OnLongClickListener[] longs = {v -> btnPlay.performLongClick(), null, null, v -> btnHelper.performLongClick()};
         int last = names.length - 1;
         for (int i = 0; i < names.length; i++) {
             TextView tab = new TextView(this);
+            tabs[i] = tab;
             tab.setText(names[i]);
             tab.setTextSize(15);
             tab.setTypeface(getResources().getFont(R.font.outfit_medium));
@@ -1665,7 +1680,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             tab.setPadding(px, 0, px, 0);
             tab.setFocusable(true);
             tab.setClickable(true);
-            tab.setSelected(i == 2);
+            tab.setSelected(i == PAGE_HOME);
             android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
             states.addState(new int[]{android.R.attr.state_focused}, tabShape(0xFFF1F3F4));
             states.addState(new int[]{android.R.attr.state_selected}, tabShape(0x2EFFFFFF));
@@ -1673,14 +1688,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             tab.setBackground(states);
             tab.setTextColor(new android.content.res.ColorStateList(
                     new int[][]{{android.R.attr.state_focused}, {}}, new int[]{0xFF202124, 0xE6FFFFFF}));
-            tab.setOnClickListener(clicks[i]);
-            if (longs[i] != null) tab.setOnLongClickListener(longs[i]);
+            final int index = i;
+            if (i == last) {
+                tab.setOnClickListener(v -> btnHelper.performClick());
+                tab.setOnLongClickListener(v -> btnHelper.performLongClick());
+            } else {
+                // OK goes down into the page, like Down.
+                tab.setOnClickListener(v -> enterPage());
+                // A short wait, so sliding across the tabs does not build every page on the way.
+                tab.setOnFocusChangeListener((v, has) -> {
+                    if (has) handler.postDelayed(() -> { if (v.isFocused()) showPage(index, true); }, 140);
+                });
+            }
             final boolean end = i == last;
             tab.setOnKeyListener((v, keyCode, event) -> {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
                 if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
                 if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                    focusTile(lastFocused % COLUMNS);
+                    enterPage();
                     return true;
                 }
                 return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && end;
@@ -1691,6 +1716,81 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         lp.setMarginStart(Math.round(16 * density));
         lp.gravity = Gravity.CENTER_VERTICAL;
         bar.addView(pill, lp);
+
+        // The page for Apps and Live: the gallery under the top bar, over a dark veil.
+        pageView = new FrameLayout(this);
+        pageView.setBackground(new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0x00000000, 0x99000000, 0xCC000000}));
+        pageScroll = new android.widget.ScrollView(this);
+        pageScroll.setVerticalScrollBarEnabled(false);
+        pageScroll.setClipToPadding(false);
+        pageScroll.setFocusable(false);
+        pageColumn = new LinearLayout(this);
+        pageColumn.setOrientation(LinearLayout.VERTICAL);
+        pageColumn.setClipChildren(false);
+        pageColumn.setClipToPadding(false);
+        int side = Math.round(56 * density);
+        pageColumn.setPadding(side, Math.round(24 * density), side, Math.round(40 * density));
+        pageScroll.addView(pageColumn);
+        pageView.addView(pageScroll, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        plp.topMargin = Math.round(150 * density);
+        pageView.setVisibility(View.GONE);
+        root.addView(pageView, plp);
+
+        // Coming up into the pill from below lands on the tab of the page on screen, not on whichever tab is nearest.
+        getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
+            if (newF == null || newF.getParent() != tabPill || oldF == null || oldF.getParent() == tabPill) return;
+            if (oldF.getParent() == bar) return;   // from the icons beside the pill: stay where the focus went
+            if (newF != tabs[page]) tabs[page].requestFocus();
+        });
+    }
+
+    /** Down (or OK) from a tab: into the page it shows, the dock or the gallery's first app. */
+    private void enterPage() {
+        if (page == PAGE_HOME) focusTile(Math.min(lastFocused, COLUMNS - 1));
+        else if (pageFirst != null) pageFirst.requestFocus();
+    }
+
+    /** Switches the page under the tabs: the dock, the app gallery or the live-TV apps. */
+    private void showPage(int p, boolean animate) {
+        if (pageView == null || p == page) return;
+        page = p;
+        for (int i = 0; i < 3; i++) tabs[i].setSelected(i == p);
+        if (p == PAGE_HOME) {
+            pageView.animate().cancel();
+            if (animate) pageView.animate().alpha(0f).setDuration(160).withEndAction(() -> { if (page == PAGE_HOME) pageView.setVisibility(View.GONE); }).start();
+            else pageView.setVisibility(View.GONE);
+            grid.setVisibility(View.VISIBLE);
+            hero.setVisibility(View.VISIBLE);
+            for (View v : new View[]{grid, hero}) {
+                v.animate().cancel();
+                if (animate) { v.setAlpha(0f); v.animate().alpha(1f).setDuration(200).start(); } else v.setAlpha(1f);
+            }
+            return;
+        }
+        hideContinue(false);
+        pageColumn.removeAllViews();
+        TextView title = new TextView(this);
+        title.setText(p == PAGE_LIVE ? "‏שידור חי" : "‏האפליקציות שלך");
+        title.setTextColor(0xFFFFFFFF);
+        title.setTextSize(22);
+        title.setTypeface(getResources().getFont(R.font.outfit_light));
+        title.setGravity(Gravity.RIGHT);
+        title.setPadding(0, 0, Math.round(8 * density), Math.round(14 * density));
+        pageColumn.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        int width = root.getWidth() - pageColumn.getPaddingLeft() - pageColumn.getPaddingRight();
+        pageFirst = AppsGallery.fill(this, pageColumn, p == PAGE_LIVE, width);
+        pageScroll.scrollTo(0, 0);
+        pageView.animate().cancel();
+        pageView.setVisibility(View.VISIBLE);
+        if (animate) { pageView.setAlpha(0f); pageView.animate().alpha(1f).setDuration(200).start(); } else pageView.setAlpha(1f);
+        // The dock steps aside so the focus cannot fall onto it behind the gallery.
+        hideGlass();
+        grid.animate().cancel();
+        grid.setVisibility(View.INVISIBLE);
+        hero.animate().cancel();
+        hero.setVisibility(View.INVISIBLE);   // the tagline keeps changing; hidden, it cannot show through
     }
 
     private android.graphics.drawable.GradientDrawable tabShape(int color) {

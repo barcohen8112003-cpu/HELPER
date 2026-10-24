@@ -141,7 +141,7 @@ final class AppCards {
         item.addView(frame, new LinearLayout.LayoutParams(w, h));
 
         TextView name = new TextView(c);
-        name.setText("‏" + label);
+        name.setText(label.matches(".*[\u0590-\u05FF].*") ? "‏" + label : label);   // RTL mark only for Hebrew names
         name.setTextColor(0xF2FFFFFF);
         name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         name.setTypeface(c.getResources().getFont(R.font.outfit_medium));
