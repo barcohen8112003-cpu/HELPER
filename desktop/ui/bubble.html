@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' data: blob:; img-src 'self' data:">
+<title>HELPER</title>
+<style>
+  :root {
+    --bg: rgba(17, 19, 26, 0.94);
+    --edge: rgba(255, 255, 255, 0.09);
+    --ink: #F2F3F7;
+    --dim: rgba(242, 243, 247, 0.62);
+    --faint: rgba(242, 243, 247, 0.38);
+    --accent: #8B7CFF;
+    --accent2: #4FD1FF;
+    --danger: #FF7A7A;
+    --ok: #6EE7A8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color: var(--ink); -webkit-font-smoothing: antialiased; user-select: none;
+    display: flex; justify-content: center; align-items: flex-start; padding: 6px 20px 30px;
+  }
+  .card {
+    width: 100%; max-width: 640px; background: var(--bg); border: 1px solid var(--edge); border-radius: 26px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.35);
+    padding: 14px 18px 14px 16px; opacity: 0; transform: translateY(-10px) scale(0.98);
+    transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .card.on { opacity: 1; transform: none; }
+  .row { display: flex; align-items: center; gap: 14px; }
+  canvas.waves { width: 64px; height: 40px; flex: none; }
+  .main { flex: 1; min-width: 0; }
+  .heard { color: var(--dim); font-size: 13.5px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .heard:empty { display: none; }
+  .text { font-size: 17px; line-height: 1.5; font-weight: 500; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; cursor: default; }
+  .text.copyable { cursor: pointer; }
+  .text.error { color: var(--danger); }
+  .text::-webkit-scrollbar { width: 6px; }
+  .text::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+  .status { font-size: 15px; color: var(--dim); }
+  .steps { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .steps div { font-size: 12.5px; color: var(--faint); }
+  .steps div::before { content: "• "; }
+  .note { margin-top: 8px; font-size: 12px; color: var(--faint); }
+  .note:empty { display: none; }
+  .badge { font-size: 11px; color: var(--faint); margin-inline-start: 8px; }
+  input.ask {
+    width: 100%; border: none; outline: none; background: transparent; color: var(--ink);
+    font: 500 17px "Segoe UI Variable Text", "Segoe UI", sans-serif; padding: 6px 0; direction: rtl;
+  }
+  input.ask::placeholder { color: var(--faint); }
+  .buttons { display: flex; gap: 10px; margin-top: 12px; }
+  button {
+    font: 600 14px "Segoe UI", sans-serif; border-radius: 14px; padding: 8px 20px; border: 1px solid var(--edge);
+    background: rgba(255,255,255,0.06); color: var(--ink); cursor: pointer; transition: background 0.12s;
+  }
+  button:hover, button:focus-visible { background: rgba(255,255,255,0.12); outline: none; }
+  button.primary { background: linear-gradient(135deg, var(--accent), #6D5BFF); border-color: transparent; }
+  button.primary:hover, button.primary:focus-visible { filter: brightness(1.12); }
+  .kbd { font-size: 11.5px; color: var(--faint); margin-top: 8px; }
+  .mark { display: inline-block; font-size: 12px; color: var(--accent2); margin-bottom: 4px; }
+  .hidden { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { .card { transition: none; } }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="row">
+      <div class="main">
+        <div class="mark hidden" id="mark">🎯 עם מה שסימנת</div>
+        <div class="heard" id="heard"></div>
+        <div class="text" id="text"></div>
+        <input class="ask hidden" id="ask" placeholder="מה לעשות? (Enter לשליחה, Esc לסגירה)" autocomplete="off" spellcheck="false">
+        <div class="steps" id="steps"></div>
+        <div class="buttons hidden" id="buttons">
+          <button class="primary" id="yes">כן</button>
+          <button id="no">לא</button>
+        </div>
+        <div class="note" id="note"></div>
+      </div>
+      <canvas class="waves" id="waves" width="128" height="80"></canvas>
+    </div>
+  </div>
+  <audio id="voice"></audio>
+<script src="recorder.js"></script>
+<script src="bubble.js"></script>
+</body>
+</html>
