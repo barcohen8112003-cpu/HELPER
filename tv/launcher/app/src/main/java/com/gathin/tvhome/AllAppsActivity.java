@@ -21,6 +21,12 @@ import java.util.List;
 public class AllAppsActivity extends Activity {
 
     private static final int PER_ROW = 5;
+    /** Extra: true opens the "Live" tab, the apps with live TV channels. */
+    static final String EXTRA_LIVE = "live";
+    private static final java.util.Set<String> LIVE = new java.util.HashSet<>(java.util.Arrays.asList(
+            "com.applicaster.il.ch1", "com.keshet.mako.VODAndroidTV", "com.applicaster.iReshet", "il.co.stingtv.atv",
+            "il.co.yes.yesplus", "il.co.hot.hottv", "com.google.android.tv", "com.partner.tv", "il.co.cellcom.tv",
+            "com.kan.kan", "il.co.i24news", "tv.pluto.android", "com.tubitv"));
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -40,7 +46,8 @@ public class AllAppsActivity extends Activity {
         setContentView(root);
 
         TextView title = new TextView(this);
-        title.setText("‏כל האפליקציות");
+        boolean live = getIntent().getBooleanExtra(EXTRA_LIVE, false);
+        title.setText(live ? "‏שידור חי" : "‏כל האפליקציות");
         title.setTextColor(0xFFFFFFFF);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 30);
         title.setTypeface(getResources().getFont(R.font.outfit_light));
@@ -49,6 +56,7 @@ public class AllAppsActivity extends Activity {
         col.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         List<String[]> apps = AppCards.byUse(this);
+        if (live) apps.removeIf(a -> !LIVE.contains(a[0]));
         apps.sort((a, b) -> a[1].compareToIgnoreCase(b[1]));
         int width = getResources().getDisplayMetrics().widthPixels - 2 * side;
         int gap = AppCards.px(this, 22);

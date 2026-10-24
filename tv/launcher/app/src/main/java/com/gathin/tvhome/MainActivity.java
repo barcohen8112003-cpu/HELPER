@@ -484,8 +484,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
         // NOW design: no band behind the dock, only the logos (getItemOffsets still spaces the row).
         if (dockRow && !nowDesign) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass));
-        // NOW: one big frosted glass panel holds the dock's glass tiles.
-        if (dockRow && nowDesign) grid.addItemDecoration(new DockDecoration(COLUMNS, density, false, false, 0, true));
         // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too).
         if (animations && !reducedMotion) {
             grid.setLayoutAnimation(new LayoutAnimationController(
@@ -644,6 +642,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
         if (nowDesign) applyNowDesign(new TextView[]{btnHelper, (TextView) btnInputs, btnPlay, btnWifi, (TextView) btnSettings});
+        if (nowDesign) addNowTabs(btnHelper, btnPlay);
         if (nowDesign && dockRow) continueRow = new ContinueRow(this, root, this::transitionAmbient);
 
         // Hide the glass when focus leaves the tiles.
@@ -1069,11 +1068,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             int code = event.getKeyCode();
             boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
             if (continueRow.shown) {
-                if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_BACK) {
+                // Up and Down move between the rows; Up from the first row (or Back) puts the rows away.
+                if (code == KeyEvent.KEYCODE_DPAD_UP) {
+                    if (down && !continueRow.rowUp()) hideContinue(true);
+                    return true;
+                }
+                if (code == KeyEvent.KEYCODE_BACK) {
                     if (down) hideContinue(true);
                     return true;
                 }
-                if (code == KeyEvent.KEYCODE_DPAD_DOWN) return true;
+                if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    if (down) continueRow.rowDown();
+                    return true;
+                }
             } else if (down && code == KeyEvent.KEYCODE_DPAD_DOWN && grid.hasFocus()) {
                 int pos = focusedTilePosition();
                 if (pos >= 0 && pos < COLUMNS) {
@@ -1616,12 +1623,90 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroName.setTextDirection(View.TEXT_DIRECTION_ANY_RTL);
     }
 
+    /**
+     * NOW: Google TV's tabs in one dark pill beside the Wi-Fi and settings icons, read right to left: HELPER, Home
+     * (the selected tab), Live (the live-channel apps) and Apps (the Apps screen). They stand in for the HELPER and
+     * Play icons, whose long presses they keep.
+     */
+    private void addNowTabs(TextView btnHelper, TextView btnPlay) {
+        LinearLayout bar = findViewById(R.id.topButtons);
+        btnHelper.setVisibility(View.GONE);
+        btnPlay.setVisibility(View.GONE);
+        LinearLayout pill = new LinearLayout(this);
+        pill.setOrientation(LinearLayout.HORIZONTAL);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        int p4 = Math.round(4 * density);
+        pill.setPadding(p4, p4, p4, p4);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(0x73202124);
+        bg.setCornerRadius(24 * density);
+        bg.setStroke(Math.max(1, Math.round(density)), 0x1AFFFFFF);
+        pill.setBackground(bg);
+        pill.setClipChildren(false);
+        // Left to right on screen, so HELPER ends up on the right where a Hebrew reader starts.
+        String[] names = {"‏אפליקציות", "‏שידור חי", "‏בית", "HELPER"};
+        View.OnClickListener[] clicks = {
+                v -> startActivity(new Intent(this, AppsStoreActivity.class)),
+                v -> startActivity(new Intent(this, AllAppsActivity.class).putExtra(AllAppsActivity.EXTRA_LIVE, true)),
+                v -> focusTile(Math.min(lastFocused, COLUMNS - 1)),
+                v -> btnHelper.performClick(),
+        };
+        View.OnLongClickListener[] longs = {v -> btnPlay.performLongClick(), null, null, v -> btnHelper.performLongClick()};
+        int last = names.length - 1;
+        for (int i = 0; i < names.length; i++) {
+            TextView tab = new TextView(this);
+            tab.setText(names[i]);
+            tab.setTextSize(15);
+            tab.setTypeface(getResources().getFont(R.font.outfit_medium));
+            tab.setGravity(Gravity.CENTER);
+            tab.setSingleLine(true);
+            tab.setIncludeFontPadding(false);
+            int px = Math.round(18 * density);
+            tab.setPadding(px, 0, px, 0);
+            tab.setFocusable(true);
+            tab.setClickable(true);
+            tab.setSelected(i == 2);
+            android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
+            states.addState(new int[]{android.R.attr.state_focused}, tabShape(0xFFF1F3F4));
+            states.addState(new int[]{android.R.attr.state_selected}, tabShape(0x2EFFFFFF));
+            states.addState(new int[]{}, tabShape(0x00000000));
+            tab.setBackground(states);
+            tab.setTextColor(new android.content.res.ColorStateList(
+                    new int[][]{{android.R.attr.state_focused}, {}}, new int[]{0xFF202124, 0xE6FFFFFF}));
+            tab.setOnClickListener(clicks[i]);
+            if (longs[i] != null) tab.setOnLongClickListener(longs[i]);
+            final boolean end = i == last;
+            tab.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    focusTile(lastFocused % COLUMNS);
+                    return true;
+                }
+                return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && end;
+            });
+            pill.addView(tab, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Math.round(36 * density)));
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMarginStart(Math.round(16 * density));
+        lp.gravity = Gravity.CENTER_VERTICAL;
+        bar.addView(pill, lp);
+    }
+
+    private android.graphics.drawable.GradientDrawable tabShape(int color) {
+        android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(20 * density);
+        return d;
+    }
+
     /** Down from the dock: Home slides up and "Continue watching" comes in under it. */
     private void showContinue() {
         int lift = continueRow.lift();
         for (View v : new View[]{grid, hero}) {
             v.animate().translationY(-lift).setDuration(260).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
         }
+        hero.animate().alpha(0f).setDuration(200).start();   // the rows take the room the tagline had
         ambient.animate().alpha(0.4f).setDuration(260).start();
         continueRow.show();
     }
@@ -1630,8 +1715,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (continueRow == null || !continueRow.shown) return;
         continueRow.hide(animate);
         for (View v : new View[]{grid, hero}) {
-            if (animate) v.animate().translationY(0).setDuration(220).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
-            else { v.animate().cancel(); v.setTranslationY(0); }
+            if (animate) v.animate().translationY(0).alpha(1f).setDuration(220).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+            else { v.animate().cancel(); v.setTranslationY(0); v.setAlpha(1f); }
         }
         ambient.animate().alpha(1f).setDuration(220).start();
         focusTile(Math.min(lastFocused, COLUMNS - 1));

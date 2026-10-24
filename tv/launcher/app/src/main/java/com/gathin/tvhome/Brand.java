@@ -51,6 +51,23 @@ final class Brand {
         return c == null ? 0 : c;
     }
 
+    /** Old apps that a newer one replaces: the old Disney+ asks to install the new one. */
+    private static final String[][] REPLACED = {{"com.disney.disneyplus", "com.disneyplus.mea"}};
+
+    /** True for an old app whose replacement is installed: it stays off Home and the app lists. */
+    static boolean replaced(android.content.Context c, String pkg) {
+        for (String[] r : REPLACED) {
+            if (!r[0].equals(pkg)) continue;
+            try {
+                c.getPackageManager().getPackageInfo(r[1], 0);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return false;
+    }
+
     /** The colour mixed toward white by t (0..1). */
     static int lighter(int color, float t) {
         int r = Color.red(color), g = Color.green(color), b = Color.blue(color);

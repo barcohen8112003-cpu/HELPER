@@ -221,7 +221,7 @@ final class HelperLink {
             List<ResolveInfo> list = pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(category), 0);
             for (ResolveInfo ri : list) {
                 String pkg = ri.activityInfo.packageName;
-                if (pkg.equals(c.getPackageName()) || !seen.add(pkg)) continue;
+                if (pkg.equals(c.getPackageName()) || Brand.replaced(c, pkg) || !seen.add(pkg)) continue;
                 out.put(new JSONObject().put("pkg", pkg).put("label", String.valueOf(ri.loadLabel(pm))));
             }
         }
