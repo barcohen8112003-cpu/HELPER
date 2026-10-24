@@ -484,6 +484,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
         // NOW design: no band behind the dock, only the logos (getItemOffsets still spaces the row).
         if (dockRow && !nowDesign) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass));
+        // NOW: one big frosted glass panel holds the dock's glass tiles.
+        if (dockRow && nowDesign) grid.addItemDecoration(new DockDecoration(COLUMNS, density, false, false, 0, true));
         // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too).
         if (animations && !reducedMotion) {
             grid.setLayoutAnimation(new LayoutAnimationController(
@@ -642,7 +644,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
         if (nowDesign) applyNowDesign(new TextView[]{btnHelper, (TextView) btnInputs, btnPlay, btnWifi, (TextView) btnSettings});
-        if (nowDesign && dockRow) continueRow = new ContinueRow(this, root);
+        if (nowDesign && dockRow) continueRow = new ContinueRow(this, root, this::transitionAmbient);
 
         // Hide the glass when focus leaves the tiles.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
@@ -1800,19 +1802,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             } else if (nowDesign) {
                 // NOW: a wide oval (1.7x wider than tall) centred 250dp in from the start side and 30dp below the
                 // dock's top, in the focused app's colour: 24% at the centre, 6% halfway, gone at the edge.
-                boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
-                float sx = w / (float) Math.max(1, root.getWidth() > 0 ? root.getWidth() : getResources().getDisplayMetrics().widthPixels);
-                float cx = 250 * density * sx;
-                if (rtl) cx = w - cx;
-                float cy = h * 0.76f;
-                float ry = 840 * density * sx / 2f / 1.7f;
-                RadialGradient oval = new RadialGradient(0, 0, ry,
-                        new int[]{0x3DFFFFFF, 0x0FFFFFFF, 0x00FFFFFF}, new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP);
-                android.graphics.Matrix m = new android.graphics.Matrix();
-                m.setScale(1.7f, 1f);
-                m.postTranslate(cx, cy);
-                oval.setLocalMatrix(m);
-                paint.setShader(oval);
+                // NOW: the whole screen takes on the focused app's colour, a little stronger toward the dock.
+                paint.setShader(new LinearGradient(0, 0, 0, h,
+                        new int[]{0x2EFFFFFF, 0x3DFFFFFF, 0x66FFFFFF}, new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
+                canvas.drawRect(0, 0, w, h, paint);
+                paint.setShader(new RadialGradient(w * 0.5f, h * 1.05f, w * 0.6f,
+                        new int[]{0x4DFFFFFF, 0x00FFFFFF}, null, Shader.TileMode.CLAMP));
             } else {
                 paint.setShader(new RadialGradient(
                         w * 0.32f, h * 0.42f, w * 0.62f,

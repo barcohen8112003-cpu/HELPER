@@ -399,7 +399,21 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             v.setPadding(v.getPaddingLeft(), pad, v.getPaddingRight(), pad);
         }
         name.setLayoutParams(nameLp);
-        return new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot);
+        if (nowDesign && dockRow) {
+            // NOW glass dock: a soft halo behind the tile, tinted with the focused app's colour.
+            int spread = Math.round(22 * density);
+            android.widget.ImageView glow = new android.widget.ImageView(ctx);
+            glow.setTag("glow");
+            glow.setImageBitmap(Brand.glow(w, h, spread, cornerRadius(w, density)));
+            glow.setAlpha(0f);
+            android.widget.FrameLayout.LayoutParams glp = new android.widget.FrameLayout.LayoutParams(w + 2 * spread, h + 2 * spread,
+                    android.view.Gravity.CENTER_HORIZONTAL | android.view.Gravity.TOP);
+            glp.topMargin = -spread;
+            ((ViewGroup) v).addView(glow, 0, glp);
+        }
+        Holder holder = new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot);
+        if (nowDesign && dockRow) holder.nowScale = 1.08f;
+        return holder;
     }
 
     @Override
@@ -436,21 +450,41 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
         h.banner.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
         h.banner.setPadding(0, 0, 0, 0);
+        h.restBg = null;
+        h.focusBg = null;
+        if (h.glow != null) h.glow.setAlpha(0f);
         LogoMaker.Logo logo = nowDesign && dockRow && position < dockSize && e.kind == Entry.APP
                 ? LogoMaker.logo(e.pkg, e.banner != null ? e.banner : e.icon) : null;
         if (logo != null) {
             // No tile and no band: the white logo alone, inset by its visual weight; the name shows on focus.
-            h.card.setBackground(null);
+            // Glass tile: the white logo in its upper part and the name inside the tile; focused, the tile fills
+            // with the app's own colour and glows in it.
+            float density = ctx.getResources().getDisplayMetrics().density;
+            int cw = h.card.getLayoutParams().width, ch = h.card.getLayoutParams().height;
+            int color = ambientColorAt(position);
+            float radius = cornerRadius(cw, density) * 1.15f;
+            h.restBg = Brand.glass(radius, density, color, false);
+            h.focusBg = Brand.glass(radius, density, color, true);
+            h.card.setBackground(focused ? h.focusBg : h.restBg);
             h.card.setTranslationZ(0f);
+            if (h.glow != null) {
+                h.glow.setImageTintList(android.content.res.ColorStateList.valueOf(color));
+                h.glow.setAlpha(focused ? 0.95f : 0f);
+            }
             h.banner.setImageBitmap(logo.bitmap);
             h.banner.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
-            int cw = h.card.getLayoutParams().width, ch = h.card.getLayoutParams().height;
-            int padX = Math.round(cw * (1f - logo.scale * 0.78f) / 2f), padY = Math.round(ch * (1f - logo.scale * 0.72f) / 2f);
-            h.banner.setPadding(padX, padY, padX, padY);
+            int padX = Math.round(cw * (1f - Math.min(0.8f, logo.scale * 0.72f)) / 2f);
+            int logoH = Math.round(ch * 0.42f * Math.min(1f, logo.scale * 1.2f));
+            int top = Math.round(ch * 0.14f) + (Math.round(ch * 0.42f) - logoH) / 2;
+            h.banner.setPadding(padX, top, padX, ch - top - logoH);
             h.banner.setVisibility(View.VISIBLE);
             h.icon.setVisibility(View.GONE);
-            h.label.setVisibility(View.GONE);
-            h.name.setVisibility(View.VISIBLE);
+            h.label.setText(e.label);
+            h.label.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14);
+            h.label.setTextColor(0xF2FFFFFF);
+            h.label.setPadding(Math.round(8 * density), 0, Math.round(8 * density), Math.round(ch * 0.12f));
+            h.label.setVisibility(View.VISIBLE);
+            h.name.setVisibility(View.INVISIBLE);
         } else if (e.banner != null) {
             h.banner.setImageDrawable(e.banner);
             h.banner.setVisibility(View.VISIBLE);
@@ -620,7 +654,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     float focusScale() {
-        if (nowDesign && animations) return 1.16f;   // NOW: logos grow 1.16x, 220ms decelerate
+        if (nowDesign && animations) return 1.08f;   // NOW: glass tiles grow 1.08x
         return !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
     }
 
@@ -628,6 +662,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     int ambientColorAt(int position) {
         if (position < 0 || position >= items.size()) return 0xFF444444;
         Entry e = items.get(position);
+        if (e.ambient == 0) e.ambient = Brand.color(e.pkg);
         if (e.ambient == 0) e.ambient = vividColor(e.banner != null ? e.banner : e.icon);
         return e.ambient;
     }
@@ -696,6 +731,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         /** Alpha of the name while the tile is not focused (always_show_names). */
         final float restNameAlpha;
         final boolean overshoot;
+        /** NOW glass dock: the halo behind the tile, the tile's glass at rest and focused, and its zoom (0: none). */
+        final ImageView glow;
+        Drawable restBg, focusBg;
+        float nowScale;
 
         Holder(View v, TileListener listener, boolean animations, boolean advancedEffects,
                boolean reducedMotion, float restNameAlpha, boolean overshoot) {
@@ -711,6 +750,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             this.reducedMotion = reducedMotion;
             this.restNameAlpha = restNameAlpha;
             this.overshoot = overshoot;
+            glow = v.findViewWithTag("glow");
 
             final float density = v.getResources().getDisplayMetrics().density;
             card.setOutlineProvider(new ViewOutlineProvider() {
@@ -734,8 +774,14 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 view.animate().cancel();
                 banner.animate().cancel();
                 name.animate().cancel();
-                float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
+                float scale = !animations ? 1f : nowScale > 0 ? nowScale : advancedEffects ? 1.12f : 1.10f;
                 float s = focused ? scale : 1f;
+                if (restBg != null) view.setBackground(focused ? focusBg : restBg);
+                if (glow != null) {
+                    glow.animate().cancel();
+                    glow.animate().alpha(focused && restBg != null ? 0.95f : 0f).scaleX(s).scaleY(s)
+                            .setDuration(focused ? 240 : 160).start();
+                }
                 if (!animations) {
                     view.setScaleX(1f);
                     view.setScaleY(1f);
