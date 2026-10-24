@@ -59,7 +59,8 @@ function text(hwnd) {
   if (n <= 0) return ''
   const buf = new Uint16Array(n + 1)
   GetWindowTextW(hwnd, buf, n + 1)
-  return Buffer.from(buf.buffer).toString('utf16le').replace(/\0.*$/, '')
+  // Without the direction marks Windows wraps titles in under a Hebrew UI ("‪HELPER‬"), so names compare as written.
+  return Buffer.from(buf.buffer).toString('utf16le').replace(/\0.*$/, '').replace(/[‎‏‪-‮⁦-⁩]/g, '')
 }
 
 function exeOf(pid) {

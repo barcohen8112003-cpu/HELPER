@@ -100,6 +100,12 @@ function makePill() {
   watchConsole(pill, 'pill')
 }
 
+/** A message for an overlay, held until its page has loaded (a new one is still loading). */
+function toOverlay(o, msg) {
+  if (o.webContents.isLoading()) o.webContents.once('did-finish-load', () => o.webContents.send('overlay', msg))
+  else o.webContents.send('overlay', msg)
+}
+
 function overlayFor(display) {
   let o = overlays.get(display.id)
   if (o && !o.isDestroyed()) {
@@ -115,6 +121,7 @@ function overlayFor(display) {
   o.setAlwaysOnTop(true, 'screen-saver')
   o.setIgnoreMouseEvents(true)
   o.loadFile(path.join(ROOT, 'ui', 'overlay.html'))
+  watchConsole(o, 'overlay')
   o.displayId = display.id
   overlays.set(display.id, o)
   return o
@@ -166,23 +173,48 @@ function stopListening(cancel) {
 
 /** The window that was in front before HELPER took the keyboard: it gets it back, so "זה" and typing mean it. */
 let returnTo = null
+/** The last window outside HELPER that had the keyboard: the way back when HELPER's cards follow each other. */
+let lastOutside = null
 
 /** Gives the keyboard to one of HELPER's windows (Windows lets only the app in front do that, so it is attached). */
 function takeKeyboard(w) {
   if (!returnTo) {
     const fg = win32.foreground()
-    if (fg && fg.title !== 'HELPER') returnTo = fg.hwnd
+    if (fg && fg.title !== 'HELPER') { returnTo = fg.hwnd; lastOutside = fg.hwnd }
+    else returnTo = lastOutside
   }
   w.setFocusable(true)
   w.setIgnoreMouseEvents(false)
-  win32.focusOwn(w.getNativeWindowHandle())
-  w.focus()
+  // Windows sometimes refuses the first time (another app just took the foreground): try again a few times.
+  const own = w.getNativeWindowHandle()
+  const tryFocus = (n) => {
+    if (w.isDestroyed() || !w.isFocusable()) return
+    win32.focusOwn(own)
+    w.focus()
+    setTimeout(() => {
+      const fg = win32.foreground()
+      if ((!fg || fg.title !== 'HELPER') && n > 0) tryFocus(n - 1)
+    }, 60)
+  }
+  tryFocus(4)
 }
 
 function giveKeyboardBack() {
   const h = returnTo
   returnTo = null
-  if (h) { try { win32.focus(h) } catch { } }
+  if (!h) return
+  // Checked and tried again: while HELPER's window lets go, Windows can leave the keyboard with no one for a moment.
+  const id = win32.handleId(h)
+  const attempt = (n) => {
+    try { win32.focus(h) } catch (e) { log('give back failed', e.message); return }
+    setTimeout(() => {
+      const fg = win32.foreground()
+      if (fg && win32.handleId(fg.hwnd) === id) return
+      if (n > 0) return attempt(n - 1)
+      log('keyboard not back; in front:', fg ? `${fg.app} "${fg.title}"` : 'nothing')
+    }, 80)
+  }
+  attempt(4)
 }
 
 function startTyping() {
@@ -193,9 +225,11 @@ function startTyping() {
 }
 
 function endTyping() {
+  // Back first, while HELPER still has the keyboard (Windows lets only the app in front hand it on); then the box
+  // stops taking it. The other way round, Windows takes it from the box and gives it to no one.
+  giveKeyboardBack()
   bubble.setFocusable(false)
   bubble.setIgnoreMouseEvents(true, { forward: true })
-  giveKeyboardBack()
 }
 
 function startDictation() {
@@ -389,16 +423,16 @@ function startPointing() {
   const o = overlayFor(d)
   o.showInactive()
   takeKeyboard(o)
-  o.webContents.send('overlay', { mode: 'pick' })
+  toOverlay(o, { mode: 'pick' })
   bubbleState({ mode: 'hint', text: 'סמן במסך: לחיצה, או גרירה סביב מה שמעניין אותך. Esc לביטול.' })
 }
 
 async function onMark({ x, y, width, height }, sender) {
   const o = BrowserWindow.fromWebContents(sender)
   if (!o) return
+  giveKeyboardBack()
   o.setIgnoreMouseEvents(true)
   o.setFocusable(false)
-  giveKeyboardBack()
   const dip = screen.getAllDisplays().find((d) => d.id === o.displayId)
   const ds = physicalDisplays()
   const pd = ds.find((d) => d.id === o.displayId)
@@ -414,12 +448,13 @@ async function onMark({ x, y, width, height }, sender) {
   const cropFile = path.join(store.workDir(), `mark-${Date.now()}.png`)
   fs.writeFileSync(cropFile, shot.image.crop(crop).toPNG())
   mark = { x: pd.bounds.x + rect.x, y: pd.bounds.y + rect.y, width: rect.width, height: rect.height, crop: cropFile, shot: shot.path }
+  log('mark', JSON.stringify({ x: mark.x, y: mark.y, width: mark.width, height: mark.height }))
   mode = 'idle'
   bubbleState({ mode: 'hint', text: 'סימנתי 🎯 עכשיו תשאל: החזק Ctrl+Alt+Space ודבר, או לחיצה קצרה להקלדה.', mark: true })
 }
 
 function clearMarks() {
-  for (const o of overlays.values()) if (!o.isDestroyed()) o.webContents.send('overlay', { mode: 'clear' })
+  for (const o of overlays.values()) if (!o.isDestroyed()) toOverlay(o, { mode: 'clear' })
 }
 
 /** A ring and label on the screen at physical pixel (x, y): "click here". */
@@ -428,7 +463,7 @@ function pointAt(x, y, label) {
   const d = screen.getDisplayNearestPoint(dipPt)
   const o = overlayFor(d)
   o.showInactive()
-  o.webContents.send('overlay', { mode: 'ring', x: dipPt.x - d.bounds.x, y: dipPt.y - d.bounds.y, label })
+  toOverlay(o, { mode: 'ring', x: dipPt.x - d.bounds.x, y: dipPt.y - d.bounds.y, label })
 }
 
 // ---- confirm ------------------------------------------------------------------------------------
@@ -463,7 +498,7 @@ function startHotkeys() {
     if (k === K.Escape && first) {
       if (mode === 'listening') return stopListening(true)
       if (mode === 'dictating') return stopDictation(true)
-      if (mode === 'pointing') { mode = 'idle'; clearMarks(); for (const o of overlays.values()) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } giveKeyboardBack(); return bubbleState({ mode: 'hidden' }) }
+      if (mode === 'pointing') { mode = 'idle'; clearMarks(); giveKeyboardBack(); for (const o of overlays.values()) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } return bubbleState({ mode: 'hidden' }) }
       if (pendingConfirm) { const r = pendingConfirm; pendingConfirm = null; r(false); endTyping(); return answer('ביטלתי') }
       if (mode === 'thinking') { brain.cancel(); askSeq++; mode = 'idle'; return bubbleState({ mode: 'hidden' }) }
       if (mark) { mark = null; clearMarks() }
@@ -568,6 +603,9 @@ app.whenReady().then(async () => {
 
   makeBubble()
   makePill()
+  // The layers for rings and marks, one per screen, made now so they are ready the moment they are needed.
+  for (const d of screen.getAllDisplays()) overlayFor(d)
+  screen.on('display-added', (e, d) => overlayFor(d))
 
   hands.setUi({
     displays: physicalDisplays,
@@ -589,7 +627,7 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('dismiss', () => { endTyping(); mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('mark', (e, rect) => onMark(rect, e.sender))
-  ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } giveKeyboardBack(); mode = 'idle'; bubbleState({ mode: 'hidden' }) })
+  ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); giveKeyboardBack(); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('pill-audio', (e, data) => onAudio(data))
 
   const icon = nativeImage.createFromPath(path.join(ROOT, 'ui', 'icon.png'))
