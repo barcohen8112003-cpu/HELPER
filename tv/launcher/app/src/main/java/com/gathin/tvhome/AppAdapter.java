@@ -314,6 +314,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             fresh.add(docked + i, new Entry(Entry.EMPTY, "", new ComponentName(ctx, "empty-dock-slot-" + i),
                     null, null, null, 0));
         }
+        // NOW design: Home is the dock alone; the other apps are in "Continue watching" and All apps (ContinueRow).
+        if (nowDesign && dockRow && !reordering) {
+            while (fresh.size() > dockSize) fresh.remove(fresh.size() - 1);
+        }
         items.clear();
         items.addAll(fresh);
         notifyDataSetChanged();

@@ -74,6 +74,12 @@ final class LogoMaker {
             }
         }
         if (maxX < 0) return null;
+        // Specks: bits of the banner's art that survived the background fill (dots under the Disney+ logo). Drop
+        // every blob much smaller than the largest one, then crop again to what is left.
+        int[] box = despeck(out, w, h);
+        if (box == null) return null;
+        minX = box[0]; minY = box[1]; maxX = box[2]; maxY = box[3];
+        ink = box[4];
         int cw = maxX - minX + 1, ch = maxY - minY + 1;
         Bitmap logo = Bitmap.createBitmap(cw, ch, Bitmap.Config.ARGB_8888);
         logo.setPixels(out, minY * w + minX, w, 0, 0, cw, ch);
@@ -81,6 +87,56 @@ final class LogoMaker {
         float coverage = ink / (255f * cw * ch);
         float scale = Math.max(0.55f, Math.min(1f, 0.45f / (float) Math.sqrt(Math.max(0.05f, coverage))));
         return new Logo(logo, scale);
+    }
+
+    /**
+     * Clears blobs (8-connected) smaller than 1.5% of the largest one and never smaller than 6 pixels' worth. A logo's
+     * letters are all far larger than that; stray dots are not. Returns {minX, minY, maxX, maxY, ink} of what stays.
+     */
+    private static int[] despeck(int[] px, int w, int h) {
+        int[] label = new int[w * h];
+        int[] queue = new int[w * h];
+        java.util.List<int[]> blobs = new java.util.ArrayList<>();     // {area, id}
+        int id = 0, largest = 0;
+        for (int start = 0; start < w * h; start++) {
+            if (px[start] == 0 || label[start] != 0) continue;
+            id++;
+            int head = 0, tail = 0, area = 0;
+            queue[tail++] = start;
+            label[start] = id;
+            while (head < tail) {
+                int i = queue[head++];
+                area++;
+                int x = i % w, y = i / w;
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        int nx = x + dx, ny = y + dy;
+                        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                        int j = ny * w + nx;
+                        if (px[j] != 0 && label[j] == 0) { label[j] = id; queue[tail++] = j; }
+                    }
+                }
+            }
+            blobs.add(new int[]{area, id});
+            largest = Math.max(largest, area);
+        }
+        int keepFrom = Math.max(6, Math.round(largest * 0.015f));
+        boolean[] keep = new boolean[id + 1];
+        for (int[] b : blobs) keep[b[1]] = b[0] >= keepFrom;
+        int minX = w, minY = h, maxX = -1, maxY = -1;
+        long ink = 0;
+        for (int i = 0; i < w * h; i++) {
+            if (px[i] == 0) continue;
+            if (!keep[label[i]]) { px[i] = 0; continue; }
+            int x = i % w, y = i / w;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+            ink += (px[i] >>> 24);
+        }
+        if (maxX < 0) return null;
+        return new int[]{minX, minY, maxX, maxY, (int) Math.min(Integer.MAX_VALUE, ink)};
     }
 
     /**

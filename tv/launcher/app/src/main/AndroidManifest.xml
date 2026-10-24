@@ -237,6 +237,11 @@
             android:excludeFromRecents="true"
             android:screenOrientation="landscape" />
         <activity
+            android:name=".AllAppsActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape" />
+        <activity
             android:name=".ButtonsActivity"
             android:exported="false"
             android:excludeFromRecents="true"

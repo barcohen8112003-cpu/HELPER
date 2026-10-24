@@ -207,6 +207,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** NOW design (config.xml now_design): thin clock and weather, round icons, taglines, logos without tiles. */
     private boolean nowDesign;
     private WeatherText weather;
+    /** NOW design: the row Down from the dock brings up (null otherwise). */
+    private ContinueRow continueRow;
     /** The highlight springs past its target (config.xml, focus_overshoot); false goes straight there. */
     private boolean focusOvershoot;
     /** Festive skin from the theme (see Festival); applied while it is active today. */
@@ -640,6 +642,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
         if (nowDesign) applyNowDesign(new TextView[]{btnHelper, (TextView) btnInputs, btnPlay, btnWifi, (TextView) btnSettings});
+        if (nowDesign && dockRow) continueRow = new ContinueRow(this, root);
 
         // Hide the glass when focus leaves the tiles.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
@@ -951,6 +954,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onPause() {
         super.onPause();
         if (weather != null) weather.onPause();
+        hideContinue(false);
         root.removeCallbacks(showIdleClock);
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
@@ -1059,6 +1063,23 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (handleSettingsKey(event)) return true;
+        if (continueRow != null && !reordering) {
+            int code = event.getKeyCode();
+            boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
+            if (continueRow.shown) {
+                if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_BACK) {
+                    if (down) hideContinue(true);
+                    return true;
+                }
+                if (code == KeyEvent.KEYCODE_DPAD_DOWN) return true;
+            } else if (down && code == KeyEvent.KEYCODE_DPAD_DOWN && grid.hasFocus()) {
+                int pos = focusedTilePosition();
+                if (pos >= 0 && pos < COLUMNS) {
+                    showContinue();
+                    return true;
+                }
+            }
+        }
         if (!reordering) return super.dispatchKeyEvent(event);
         if (dockEditing) return dispatchDockEdit(event);
         boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
@@ -1591,6 +1612,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroName.setTypeface(getResources().getFont(R.font.outfit_light));
         heroName.setTextColor(0xF2FFFFFF);
         heroName.setTextDirection(View.TEXT_DIRECTION_ANY_RTL);
+    }
+
+    /** Down from the dock: Home slides up and "Continue watching" comes in under it. */
+    private void showContinue() {
+        int lift = continueRow.lift();
+        for (View v : new View[]{grid, hero}) {
+            v.animate().translationY(-lift).setDuration(260).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+        }
+        ambient.animate().alpha(0.4f).setDuration(260).start();
+        continueRow.show();
+    }
+
+    private void hideContinue(boolean animate) {
+        if (continueRow == null || !continueRow.shown) return;
+        continueRow.hide(animate);
+        for (View v : new View[]{grid, hero}) {
+            if (animate) v.animate().translationY(0).setDuration(220).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+            else { v.animate().cancel(); v.setTranslationY(0); }
+        }
+        ambient.animate().alpha(1f).setDuration(220).start();
+        focusTile(Math.min(lastFocused, COLUMNS - 1));
     }
 
     /** The shelf's text for this dock app: its name and, on the cinematic shelf, "Last opened" and the dots. */
