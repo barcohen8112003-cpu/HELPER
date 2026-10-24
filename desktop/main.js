@@ -38,9 +38,27 @@ function physicalDisplays() {
 const cursorDisplay = () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
 
 /** A picture of one screen (index into physicalDisplays, or the one with the mouse), saved as PNG. */
+/**
+ * The screen the user is working on: the one with the window in front (HELPER's own aside), else the mouse's.
+ * "מה כתוב על המסך" is about what they are looking at, which is where their window is, not where the mouse rests.
+ */
+function workingDisplayIndex(ds) {
+  const fg = win32.foreground()
+  const own = !fg || fg.title === 'HELPER'
+  const mine = returnTo || lastOutside
+  const target = own ? (mine ? win32.windows().find((w) => win32.handleId(w.hwnd) === win32.handleId(mine)) : null) : fg
+  if (target && target.bounds && !target.minimized) {
+    const b = target.bounds
+    const cx = b.x + b.width / 2, cy = b.y + b.height / 2
+    const i = ds.findIndex((d) => cx >= d.bounds.x && cx < d.bounds.x + d.bounds.width && cy >= d.bounds.y && cy < d.bounds.y + d.bounds.height)
+    if (i >= 0) return i
+  }
+  return Math.max(0, ds.findIndex((x) => x.id === cursorDisplay().id))
+}
+
 async function screenshot(index) {
   const ds = physicalDisplays()
-  const d = index == null ? ds.find((x) => x.id === cursorDisplay().id) || ds[0] : ds[Math.max(0, Math.min(ds.length - 1, index))]
+  const d = index == null ? ds[workingDisplayIndex(ds)] || ds[0] : ds[Math.max(0, Math.min(ds.length - 1, index))]
   // HELPER's own bubble is not part of what the user asks about.
   const hidden = []
   for (const w of [bubble, pill]) if (w && w.isVisible() && w.getOpacity() > 0) { w.setOpacity(0); hidden.push(w) }
@@ -158,6 +176,7 @@ let bubbleHovered = false
 // ---- talking --------------------------------------------------------------------------------------
 
 function startListening() {
+  noteOutside()
   if (mode === 'thinking') brain.cancel()
   mode = 'listening'
   voiceAsk = true
@@ -197,6 +216,12 @@ function takeKeyboard(w) {
     }, 60)
   }
   tryFocus(4)
+}
+
+/** Notes the user's window in front (not HELPER's): the screen they work on, and where the keyboard goes back. */
+function noteOutside() {
+  const fg = win32.foreground()
+  if (fg && fg.title !== 'HELPER') lastOutside = fg.hwnd
 }
 
 function giveKeyboardBack() {
@@ -300,6 +325,7 @@ const YES = /^(כן|כן כן|יאללה|סבבה|בטח|אוקיי|אוקי|ת�
 const NO = /^(לא|לא לא|עזוב|בטל|תבטל|אל תשלח|no|nope|cancel)$/i
 
 async function handleAsk(raw, { voice = false } = {}) {
+  noteOutside()
   const seq = ++askSeq
   const text = instant.tidy(raw)
   const started = Date.now()
@@ -349,6 +375,8 @@ async function handleAsk(raw, { voice = false } = {}) {
   const extra = { screens: physicalDisplays().map((d, i) => `${i + 1}: ${d.bounds.width}x${d.bounds.height} ב-(${d.bounds.x},${d.bounds.y})`).join(', ') }
   const fg = win32.foreground()
   if (fg) extra.foreground = `${fg.app} — ${hands.strip(fg.title)}`
+  // The open windows come with the ask, so Claude acts at once instead of spending a round on asking for them.
+  try { extra.windows = (await hands.run({ cmd: 'windows' })).split('\n').slice(0, 25).join('\n') } catch { }
   if (mark) {
     extra.mark = mark
     extra.screenshot = { path: mark.shot, note: 'צילום של כל המסך שבו הוא סימן' }
@@ -381,6 +409,7 @@ async function handleAsk(raw, { voice = false } = {}) {
     return finish(seq, raw, res.text, 'claude', started, false, voice)
   }
 
+  log('claude gave no answer:', JSON.stringify(res).slice(0, 400))
   // 4. HELPER on the cloud, when Claude Code can't run (or gave no answer).
   // English words sit in direction isolates (LRI…PDI) so "/login" and paths read right inside Hebrew.
   const iso = (s) => '⁦' + s + '⁩'
@@ -421,6 +450,7 @@ async function finish(seq, heard, text, route, started, error = false, voice = f
 // ---- the user pointing ---------------------------------------------------------------------------
 
 function startPointing() {
+  noteOutside()
   mode = 'pointing'
   const d = cursorDisplay()
   const o = overlayFor(d)
@@ -467,6 +497,7 @@ function pointAt(x, y, label) {
   const o = overlayFor(d)
   o.showInactive()
   toOverlay(o, { mode: 'ring', x: dipPt.x - d.bounds.x, y: dipPt.y - d.bounds.y, label })
+  log('point', JSON.stringify({ x, y, label }))
 }
 
 // ---- confirm ------------------------------------------------------------------------------------

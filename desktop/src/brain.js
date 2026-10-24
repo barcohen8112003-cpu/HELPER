@@ -26,7 +26,8 @@ function persona() {
 function handsDoc() {
   const h = `node ${HANDS}`
   return [
-    'הידיים שלך במחשב: פקודת bash אחת לכל פעולה, עם JSON בגרש בודד. כל פקודה מחזירה שורה בעברית או שגיאה.',
+    'הידיים שלך במחשב: פקודות bash עם JSON בגרש בודד. כל פקודה מחזירה שורה בעברית או שגיאה.',
+    'מהירות: כל קריאה לכלי היא עוד סבב. כמה פעולות → קריאת bash אחת, מחוברות ב-&& (למשל open ואז place). רשימת החלונות כבר למטה בהקשר, אל תבקש אותה שוב.',
     `${h} windows                                   – החלונות הפתוחים: id, אפליקציה, מסך, כותרת`,
     `${h} apps '{"query":"spot"}'                  – אפליקציות מותקנות לפי שם`,
     `${h} open '{"name":"Spotify"}'                – פותח אפליקציה (או עובר אליה אם פתוחה), או אתר כמו ynet.co.il`,
@@ -55,9 +56,9 @@ function rules() {
     'כללים:',
     '- לפני כל שליחה (הודעה, מייל, פוסט), מחיקה, קנייה, תשלום או שינוי הגדרה: confirm, ורק על "כן" ממשיכים. בלי יוצא מן הכלל.',
     '- אל תריץ פקודות מערכת אחרות; רק את הידיים, וכלי הקריאה והחיפוש.',
-    '- כשהוא שואל על משהו במסך ("מה זה", "מה כתוב", "איפה ללחוץ"): screenshot, Read לתמונה, ותענה לפי מה שרואים. "איפה" → גם point.',
+    '- כשהוא שואל על משהו במסך ("מה זה", "מה כתוב", "איפה ללחוץ"): אם צורף צילום, Read אליו (זה המסך שהוא עובד עליו) ותענה לפי מה שרואים; בלי צילום, screenshot בלי מספר מסך. מסך אחר רק כשמה שהוא שאל עליו לא שם. "איפה" → גם point.',
     '- כשהוא מבקש לסדר חלונות או לפתוח דברים: תעשה, ואז משפט קצר שאומר מה עשית.',
-    '- מה שאתה לא מצליח לוודא שקרה, תגיד שלא וידאת.',
+    '- התשובה של הידיים ("כרום בצד שמאל") היא האישור שזה קרה: אל תוסיף "לא וידאתי". רק כשצעד נכשל, או כשאין לך דרך לדעת, תגיד את זה.',
     '- שאלות אישיות (מה כתבו לו, מה ביומן, מה הוא סיפר לך פעם): helper.',
     '- התשובה הסופית שלך היא מה שמופיע לו בבועה. בלי markdown, בלי כותרות, בלי רשימות ארוכות.',
   ].join('\n')
@@ -71,6 +72,7 @@ function context(extra) {
   lines.push(`עכשיו: ${now.toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}`)
   if (extra.foreground) lines.push(`החלון שבחזית: ${extra.foreground}`)
   if (extra.screens) lines.push(`מסכים: ${extra.screens}`)
+  if (extra.windows) lines.push('החלונות הפתוחים (id, אפליקציה, מסך, כותרת):\n' + extra.windows)
   return lines.join('\n')
 }
 
@@ -118,15 +120,25 @@ function askClaude(text, extra, onEvent) {
     '--allowedTools', `Bash(node ${HANDS}:*)`, 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
     '--disallowedTools', 'Edit', 'Write', 'NotebookEdit',
     '--max-turns', '24',
+    // Lean: only the tools HELPER uses, and none of the user's MCP servers, plugins, skills or settings (each
+    // adds to every request, and none of them is HELPER's business).
+    '--tools', 'Bash', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
+    '--strict-mcp-config', '--setting-sources', 'project', '--disable-slash-commands',
   ]
   if (home) args.push('--add-dir', home)
   if (lastSession && Date.now() - lastAt < CONTINUE_MS) args.push('--resume', lastSession)
 
-  return new Promise((resolve) => {
+  return new Promise((done) => {
     let out = ''
     let final = null
     let session = null
     let child
+    // Claude Code writes a summary for two seconds after the answer (post_turn_summary): the answer is shown as
+    // soon as it is plainly the last message (text with no tool call, and nothing after it for a moment).
+    let settled = false
+    const resolve = (r) => { if (!settled) { settled = true; done(r) } }
+    let lastText = null
+    let early = null
     const exe = claudeCommand()
     if (!exe) {
       claudeState = 'missing'
@@ -150,10 +162,26 @@ function askClaude(text, extra, onEvent) {
       try { ev = JSON.parse(line) } catch { return }
       if (ev.session_id) session = ev.session_id
       if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+        let tool = false
+        let text = ''
         for (const c of ev.message.content) {
-          if (c.type === 'text' && c.text.trim()) onEvent({ type: 'text', text: c.text.trim() })
-          if (c.type === 'tool_use') onEvent({ type: 'tool', name: c.name, input: c.input })
+          if (c.type === 'text' && c.text.trim()) { text += (text ? '\n' : '') + c.text.trim(); onEvent({ type: 'text', text: c.text.trim() }) }
+          if (c.type === 'tool_use') { tool = true; onEvent({ type: 'tool', name: c.name, input: c.input }) }
         }
+        clearTimeout(early)
+        lastText = tool ? null : text || null
+        if (lastText && !/not logged in|please run \/login|invalid api key/i.test(lastText)) {
+          const answer = lastText
+          early = setTimeout(() => {
+            if (lastText !== answer) return
+            claudeState = 'ok'
+            if (session) { lastSession = session; lastAt = Date.now() }
+            resolve({ ok: true, text: answer, session, early: true })
+          }, 350)
+        }
+      } else if (ev.type === 'user') {
+        clearTimeout(early)   // a tool result: the turn goes on
+        lastText = null
       }
       if (ev.type === 'result') final = ev
     }
@@ -170,6 +198,7 @@ function askClaude(text, extra, onEvent) {
     child.stderr.on('data', (d) => { err += d.toString('utf8') })
     child.on('error', () => { claudeState = 'missing'; resolve({ ok: false, missing: true, text: '' }) })
     child.on('close', (code) => {
+      clearTimeout(early)
       if (running === child) running = null
       if (out.trim()) onLine(out.trim())
       const resultText = final ? String(final.result || '') : ''
@@ -183,7 +212,7 @@ function askClaude(text, extra, onEvent) {
       }
       claudeState = 'ok'
       if (session) { lastSession = session; lastAt = Date.now() }
-      resolve({ ok: Boolean(final && !final.is_error), text: resultText.trim(), session, code })
+      resolve({ ok: Boolean(final && !final.is_error), text: resultText.trim(), session, code, subtype: final && final.subtype, err: err.slice(-300) })
     })
   })
 }
