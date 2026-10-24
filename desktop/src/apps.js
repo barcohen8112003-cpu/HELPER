@@ -152,4 +152,13 @@ function windowMatches(win, name) {
   return false
 }
 
-module.exports = { init, refresh, find, launch, windowMatches, wanted, list: () => apps }
+/** The Hebrew words apps are called by (aliases, and Hebrew Start menu names), for the speech model's word snapping. */
+function vocabulary() {
+  const out = new Set()
+  const add = (text) => String(text).split(/\s+/).forEach((w) => { w = w.replace(/[‎‏‪-‮⁦-⁩]/g, ''); if (/^[א-ת]{4,}$/.test(w)) out.add(w) })
+  Object.keys(ALIASES).forEach(add)
+  apps.forEach((a) => add(a.name))
+  return [...out]
+}
+
+module.exports = { vocabulary, init, refresh, find, launch, windowMatches, wanted, list: () => apps }

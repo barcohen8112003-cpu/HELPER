@@ -329,7 +329,13 @@ async function onAudio({ wav, purpose }) {
   }
   let text = ''
   try {
-    text = await speech.transcribe(ROOT, bytes, speechHints())
+    if (purpose === 'dictate') {
+      // Free text: no command hints and no word snapping, or ordinary sentences would be bent toward commands.
+      text = await speech.transcribe(ROOT, bytes, '', { snapWords: false })
+    } else {
+      // Three readings of the same recording, the one that is a command (or has the most command words) wins.
+      text = await speech.transcribeBest(ROOT, bytes, [speech.HINTS, '', speechHints()], (t) => { const p = instant.parse(t); return Boolean(p && (p.steps || p.teach || p.remember)) })
+    }
   } catch (e) {
     log('speech failed', e.message)
     if (purpose === 'dictate') { pill.webContents.send('state', { mode: 'error', text: 'הדיבור לא עבד' }); setTimeout(() => pill.hide(), 1800); return }
@@ -771,6 +777,8 @@ app.whenReady().then(async () => {
   apps = require('./src/apps')
   apps.init(app.getPath('userData'))
   speech = require('./src/speech')
+  speech.setVocabulary(apps.vocabulary())
+  setTimeout(() => speech.setVocabulary(apps.vocabulary()), 6000)   // again once the Start menu list is fresh
   instant = require('./src/instant')
   hands = require('./src/hands')
   handsServer = require('./src/hands-server')
