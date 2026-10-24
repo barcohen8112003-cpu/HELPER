@@ -5,7 +5,7 @@ window.Recorder = (() => {
   let stream = null, ctx = null, node = null, src = null
   let chunks = [], level = 0, purpose = 'ask', recording = false
 
-  async function start(p) {
+  async function start(p, micName) {
     purpose = p || 'ask'
     chunks = []
     recording = true
@@ -13,10 +13,12 @@ window.Recorder = (() => {
       let audioConstraints = { channelCount: 1, autoGainControl: true }
       try {
         const devs = await navigator.mediaDevices.enumerateDevices()
-        const vm = devs.find((d) => d.kind === 'audioinput' && /voicemod/i.test(d.label))
+        const inputs = devs.filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications')
+        if (window.helper) helper.send('mics', inputs.map((d) => d.label))
+        const vm = micName ? inputs.find((d) => d.label.toLowerCase().includes(String(micName).toLowerCase())) : null
         if (vm) {
-          // Voicemod handles its own audio processing. WebRTC's echoCancellation and noiseSuppression
-          // aggressively attenuate modulated/virtual audio streams, so turn them off for Voicemod.
+          // A chosen microphone as it is: WebRTC's echo cancelling and noise suppression flatten virtual
+          // devices (Voicemod) and add nothing for a real one that already cleans its own sound.
           audioConstraints = {
             deviceId: { exact: vm.deviceId },
             channelCount: 1,
@@ -32,6 +34,8 @@ window.Recorder = (() => {
       stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
       // Which microphone opened, in the app log: with several (virtual ones too) this is the first thing to know.
       const track = stream.getAudioTracks()[0]
+      // Names are only filled in once a microphone has been opened: send the list again, for the tray menu.
+      try { const all = await navigator.mediaDevices.enumerateDevices(); if (window.helper) helper.send('mics', all.filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications').map((d) => d.label)) } catch { }
       if (window.helper) helper.send('voice-state', 'mic: ' + (track ? track.label : 'none'))
     } catch (e) {
       recording = false

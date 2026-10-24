@@ -3,7 +3,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 const IN = new Set(['state', 'record', 'play', 'overlay'])
-const OUT = new Set(['audio', 'typed', 'confirm', 'hover', 'dismiss', 'mark', 'mark-cancel', 'voice-state'])
+const OUT = new Set(['audio', 'typed', 'confirm', 'hover', 'dismiss', 'mark', 'mark-cancel', 'voice-state', 'mics'])
 
 contextBridge.exposeInMainWorld('helper', {
   on: (channel, fn) => { if (IN.has(channel)) ipcRenderer.on(channel, (e, data) => fn(data)) },

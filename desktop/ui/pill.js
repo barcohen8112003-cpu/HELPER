@@ -34,7 +34,7 @@ helper.on('state', (s) => {
 })
 helper.on('record', async (r) => {
   if (r.action === 'start') {
-    try { await Recorder.start(r.purpose) } catch { mode = 'error'; label.textContent = 'אין גישה למיקרופון' }
+    try { await Recorder.start(r.purpose, r.mic) } catch { mode = 'error'; label.textContent = 'אין גישה למיקרופון' }
   } else {
     const wav = Recorder.stop(r.action === 'cancel')
     if (wav) helper.send('audio', { wav, purpose: r.purpose })

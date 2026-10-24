@@ -10,6 +10,7 @@ const DEFAULTS = {
   helperUrl: 'http://37.60.240.231:3210',
   helperToken: '',
   model: 'haiku',              // haiku: fast; sonnet: for harder work
+  micName: 'voicemod',         // part of the microphone's name; empty: Windows' default
   speakAnswers: true,          // a spoken answer to a spoken ask: HELPER's voice from the cloud, Windows' Hebrew voice offline
   talkKey: 'pagedown',         // hold or press PageDown (PD) / Ctrl+Alt+Q
   dictationKey: 'rightctrl',   // hold to dictate

@@ -166,7 +166,7 @@ helper.on('state', (s) => {
 helper.on('record', async (r) => {
   if (r.action === 'start') {
     try {
-      await Recorder.start(r.purpose)
+      await Recorder.start(r.purpose, r.mic)
     } catch (e) {
       mode = 'answer'
       playTone('error')

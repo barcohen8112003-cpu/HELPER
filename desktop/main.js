@@ -200,7 +200,7 @@ function startListening() {
   voiceAsk = true
   log('listening')
   bubbleState({ mode: 'listening', mark: Boolean(mark) })
-  bubble.webContents.send('record', { action: 'start', purpose: 'ask' })
+  bubble.webContents.send('record', { action: 'start', purpose: 'ask', mic: store.settings().micName })
 }
 
 function stopListening(cancel) {
@@ -283,7 +283,7 @@ function startDictation() {
   pill.setPosition(Math.round(d.workArea.x + (d.workArea.width - w) / 2), Math.round(d.workArea.y + d.workArea.height - h - 28))
   pill.showInactive()
   pill.webContents.send('state', { mode: 'listening' })
-  pill.webContents.send('record', { action: 'start', purpose: 'dictate' })
+  pill.webContents.send('record', { action: 'start', purpose: 'dictate', mic: store.settings().micName })
 }
 
 function stopDictation(cancel) {
@@ -297,7 +297,8 @@ function stopDictation(cancel) {
 /** Names and words the speech model should spell right: the apps, and words from memory. */
 function speechHints() {
   const names = ['HELPER', 'כרום', 'ספוטיפיי', 'דיסקורד', 'וואטסאפ', 'יוטיוב', 'סטרימיו', 'נטפליקס']
-  return names.join(', ')
+  // The apps and words of the commands, so "ביוטיוב" is not heard as "בי עוד טיוב".
+  return names.concat(['תפעיל', 'תנגן', 'תפתח', 'תשים', 'בצד שמאל', 'בצד ימין', 'המסך השני', 'ווליום', 'השיר', 'סרטון']).join(', ')
 }
 
 async function onAudio({ wav, purpose }) {
@@ -699,6 +700,7 @@ function trayMenu() {
     { label: s.helperToken ? 'HELPER בענן: מחובר' : 'HELPER בענן: לא מחובר (connect.ps1)', enabled: false },
     { label: claude === 'signed-out' ? 'Claude Code: צריך ‎/login' : claude === 'missing' ? 'Claude Code: לא מותקן' : claude === 'ok' ? 'Claude Code: מחובר' : 'Claude Code: עוד לא נבדק', enabled: false },
     { label: 'מה שמעתי לאחרונה', submenu: recentAsks() },
+    { label: 'מיקרופון', submenu: micMenu() },
     { label: 'הקיצורים שלמדתי…', click: () => shell.openPath(path.join(app.getPath('userData'), 'learned.json')) },
     { label: 'התיקייה של HELPER…', click: () => shell.openPath(app.getPath('userData')) },
     { type: 'separator' },
@@ -707,6 +709,27 @@ function trayMenu() {
 }
 
 /** The last asks (what was heard), newest first; clicking one asks it again. */
+/** The microphones seen the last time one opened (their names), for the tray menu. */
+let knownMics = []
+
+/** Names without the Windows decoration: "Microphone (Voicemod)" → "Voicemod". */
+function micShort(label) {
+  const m = String(label).match(/(([^()]+))s*$/)
+  return (m ? m[1] : label).replace(/^d+-s*/, '').trim()
+}
+
+function micMenu() {
+  const chosen = String(store.settings().micName || '').toLowerCase()
+  const items = [{ label: 'ברירת המחדל של Windows', type: 'radio', checked: !chosen, click: () => store.saveSettings({ micName: '' }) }]
+  for (const l of knownMics) {
+    const short = micShort(l)
+    if (/cable|virtual audio|steam streaming|oculus/i.test(l)) continue
+    items.push({ label: short, sublabel: l, type: 'radio', checked: Boolean(chosen) && l.toLowerCase().includes(chosen) && chosen === short.toLowerCase(), click: () => store.saveSettings({ micName: short }) })
+  }
+  if (knownMics.length === 0) items.push({ label: 'המיקרופונים יופיעו אחרי הפעם הראשונה שתדבר', enabled: false })
+  return items
+}
+
 function recentAsks() {
   try {
     const lines = fs.readFileSync(path.join(app.getPath('userData'), 'asks.jsonl'), 'utf8').trim().split('\n')
@@ -779,6 +802,7 @@ app.whenReady().then(async () => {
   ipcMain.on('dismiss', () => { endTyping(); mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('mark', (e, rect) => onMark(rect, e.sender))
   ipcMain.on('voice-state', (e, s) => log('voice', String(s).slice(0, 80)))
+  ipcMain.on('mics', (e, labels) => { if (Array.isArray(labels)) { knownMics = labels.map(String).filter(Boolean); refreshTray() } })
   ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); giveKeyboardBack(); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('pill-audio', (e, data) => onAudio(data))
 
