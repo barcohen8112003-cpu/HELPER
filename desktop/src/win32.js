@@ -148,6 +148,26 @@ function place(hwnd, rect) {
   return SetWindowPos(hwnd, null, rect.x - dl, rect.y - dt, rect.width + dl + dr, rect.height + dt + db, SWP_NOZORDER | SWP_FRAMECHANGED)
 }
 
+// The same calls for a window known by its number (an Electron window's getNativeWindowHandle()).
+const SetForegroundWindowN = user32.func('bool __stdcall SetForegroundWindow(intptr_t hwnd)')
+const BringWindowToTopN = user32.func('bool __stdcall BringWindowToTop(intptr_t hwnd)')
+const ShowWindowN = user32.func('bool __stdcall ShowWindow(intptr_t hwnd, int cmd)')
+
+/** Gives one of HELPER's own windows the keyboard, past Windows' rule that only the app in front may do that. */
+function focusOwn(handleBuffer) {
+  const h = handleBuffer.length >= 8 ? handleBuffer.readBigUInt64LE(0) : BigInt(handleBuffer.readUInt32LE(0))
+  const fg = GetForegroundWindow()
+  const me = GetCurrentThreadId()
+  const them = fg ? GetWindowThreadProcessId(fg, [0]) : 0
+  if (them && them !== me) AttachThreadInput(me, them, true)
+  keys([{ vk: 0x12 }, { vk: 0x12, up: true }])
+  ShowWindowN(h, SW_SHOW)
+  BringWindowToTopN(h)
+  const ok = SetForegroundWindowN(h)
+  if (them && them !== me) AttachThreadInput(me, them, false)
+  return ok
+}
+
 const maximize = (hwnd) => ShowWindow(hwnd, SW_MAXIMIZE)
 const minimize = (hwnd) => ShowWindow(hwnd, SW_MINIMIZE)
 const restore = (hwnd) => ShowWindow(hwnd, SW_RESTORE)
@@ -200,6 +220,17 @@ function type(str) {
   return send(inputs)
 }
 
+/**
+ * The same, a character at a time with a short pause after each: many fields (Notepad, browsers, chat boxes) drop
+ * Unicode key events that arrive in one burst. 120 characters take about half a second.
+ */
+async function typeSteady(str, pauseMs = 4) {
+  for (const ch of String(str)) {
+    type(ch)
+    await new Promise((r) => setTimeout(r, ch === ' ' ? pauseMs + 2 : pauseMs))
+  }
+}
+
 function cursor() {
   const p = {}
   GetCursorPos(p)
@@ -224,4 +255,4 @@ function scroll(amount) {
 
 const handleId = (hwnd) => String(koffi.address(hwnd))
 
-module.exports = { windows, foreground, focus, place, maximize, minimize, restore, close, keys, combo, type, click, scroll, cursor, VK, lock: () => LockWorkStation(), handleId }
+module.exports = { windows, foreground, focus, focusOwn, place, maximize, minimize, restore, close, keys, combo, type, typeSteady, click, scroll, cursor, VK, lock: () => LockWorkStation(), handleId }

@@ -164,18 +164,38 @@ function stopListening(cancel) {
   if (cancel) { mode = 'idle'; bubbleState({ mode: 'hidden' }) } else { mode = 'thinking'; bubbleState({ mode: 'thinking', text: 'מתמלל…' }) }
 }
 
+/** The window that was in front before HELPER took the keyboard: it gets it back, so "זה" and typing mean it. */
+let returnTo = null
+
+/** Gives the keyboard to one of HELPER's windows (Windows lets only the app in front do that, so it is attached). */
+function takeKeyboard(w) {
+  if (!returnTo) {
+    const fg = win32.foreground()
+    if (fg && fg.title !== 'HELPER') returnTo = fg.hwnd
+  }
+  w.setFocusable(true)
+  w.setIgnoreMouseEvents(false)
+  win32.focusOwn(w.getNativeWindowHandle())
+  w.focus()
+}
+
+function giveKeyboardBack() {
+  const h = returnTo
+  returnTo = null
+  if (h) { try { win32.focus(h) } catch { } }
+}
+
 function startTyping() {
   mode = 'typing'
   voiceAsk = false
-  bubble.setFocusable(true)
   bubbleState({ mode: 'typing', mark: Boolean(mark) })
-  bubble.setIgnoreMouseEvents(false)
-  bubble.focus()
+  takeKeyboard(bubble)
 }
 
 function endTyping() {
   bubble.setFocusable(false)
   bubble.setIgnoreMouseEvents(true, { forward: true })
+  giveKeyboardBack()
 }
 
 function startDictation() {
@@ -204,7 +224,8 @@ function speechHints() {
 
 async function onAudio({ wav, purpose }) {
   const bytes = Buffer.from(wav)
-  if (bytes.length < 16000) {   // under half a second: nothing said
+  // Under half a second, or no speech in it: nothing was said (whisper would make something up).
+  if (bytes.length < 16000 || !speech.hasSpeech(bytes)) {
     if (purpose === 'dictate') { pill.hide(); return }
     mode = 'idle'
     return bubbleState({ mode: 'hidden' })
@@ -223,15 +244,16 @@ async function onAudio({ wav, purpose }) {
 }
 
 /** Dictation: the words go into whatever field has focus, then the pill shows a check. */
-function dictate(text) {
+async function dictate(text) {
   if (!text) { pill.hide(); return }
   const fg = win32.foreground()
-  if (!fg || /^(electron|helper)/i.test(fg.app || '')) {
+  if (!fg || fg.title === 'HELPER' || /^(electron|helper)/i.test(fg.app || '')) {
     pill.webContents.send('state', { mode: 'error', text: 'אין שדה פתוח להקליד בו' })
     setTimeout(() => pill.hide(), 2200)
     return
   }
-  win32.type(text + (/[.?!:]$/.test(text) ? ' ' : ''))
+  // Steadily, a character at a time: many fields drop a burst. A sentence takes a fraction of a second.
+  await win32.typeSteady(text + (/[.?!:]$/.test(text) ? ' ' : ''))
   pill.webContents.send('state', { mode: 'done', text })
   setTimeout(() => pill.hide(), 1100)
   store.log({ kind: 'dictation', chars: text.length })
@@ -365,10 +387,8 @@ function startPointing() {
   mode = 'pointing'
   const d = cursorDisplay()
   const o = overlayFor(d)
-  o.setIgnoreMouseEvents(false)
-  o.setFocusable(true)
   o.showInactive()
-  o.focus()
+  takeKeyboard(o)
   o.webContents.send('overlay', { mode: 'pick' })
   bubbleState({ mode: 'hint', text: 'סמן במסך: לחיצה, או גרירה סביב מה שמעניין אותך. Esc לביטול.' })
 }
@@ -378,6 +398,7 @@ async function onMark({ x, y, width, height }, sender) {
   if (!o) return
   o.setIgnoreMouseEvents(true)
   o.setFocusable(false)
+  giveKeyboardBack()
   const dip = screen.getAllDisplays().find((d) => d.id === o.displayId)
   const ds = physicalDisplays()
   const pd = ds.find((d) => d.id === o.displayId)
@@ -416,10 +437,8 @@ function confirm(question) {
   return new Promise((resolve) => {
     if (pendingConfirm) pendingConfirm(false)
     pendingConfirm = resolve
-    bubble.setFocusable(true)
-    bubble.setIgnoreMouseEvents(false)
     bubbleState({ mode: 'confirm', text: question })
-    bubble.focus()
+    takeKeyboard(bubble)
     // No answer in two minutes means no.
     setTimeout(() => { if (pendingConfirm === resolve) { pendingConfirm = null; resolve(false); answer('לא אישרת, אז לא עשיתי') } }, 120000)
   })
@@ -444,7 +463,7 @@ function startHotkeys() {
     if (k === K.Escape && first) {
       if (mode === 'listening') return stopListening(true)
       if (mode === 'dictating') return stopDictation(true)
-      if (mode === 'pointing') { mode = 'idle'; clearMarks(); for (const o of overlays.values()) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } return bubbleState({ mode: 'hidden' }) }
+      if (mode === 'pointing') { mode = 'idle'; clearMarks(); for (const o of overlays.values()) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } giveKeyboardBack(); return bubbleState({ mode: 'hidden' }) }
       if (pendingConfirm) { const r = pendingConfirm; pendingConfirm = null; r(false); endTyping(); return answer('ביטלתי') }
       if (mode === 'thinking') { brain.cancel(); askSeq++; mode = 'idle'; return bubbleState({ mode: 'hidden' }) }
       if (mark) { mark = null; clearMarks() }
@@ -486,6 +505,7 @@ function startHotkeys() {
     }
   })
   uIOhook.start()
+  log('hotkeys on')
 }
 
 // ---- tray ---------------------------------------------------------------------------------------
@@ -569,7 +589,7 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('dismiss', () => { endTyping(); mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('mark', (e, rect) => onMark(rect, e.sender))
-  ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } mode = 'idle'; bubbleState({ mode: 'hidden' }) })
+  ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } giveKeyboardBack(); mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('pill-audio', (e, data) => onAudio(data))
 
   const icon = nativeImage.createFromPath(path.join(ROOT, 'ui', 'icon.png'))
@@ -607,6 +627,16 @@ function askFromArgs(argv) {
       log('shot: bubble visible', bubble.isVisible(), 'bounds', JSON.stringify(bubble.getBounds()), 'mode', mode)
       bubble.webContents.capturePage().then((img) => fs.writeFileSync(file, img.toPNG()))
     }, text ? 2500 : 0)
+  }
+  // --ask-wav=<file> / --dictate-wav=<file>: a recording in place of the microphone (checking the voice path).
+  const askWav = argv.find((a) => a.startsWith('--ask-wav='))
+  const dictWav = argv.find((a) => a.startsWith('--dictate-wav='))
+  if (askWav || dictWav) {
+    const file = (askWav || dictWav).replace(/^--[a-z-]+=/, '')
+    const purpose = askWav ? 'ask' : 'dictate'
+    if (purpose === 'dictate') { mode = 'dictating'; pill.showInactive() } else { voiceAsk = true; bubbleState({ mode: 'thinking', text: 'מתמלל…' }) }
+    onAudio({ wav: fs.readFileSync(file), purpose })
+    return true
   }
   if (!text || !text.trim()) return Boolean(shot)
   handleAsk(text.trim(), { voice: false })

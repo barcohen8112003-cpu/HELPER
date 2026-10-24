@@ -21,6 +21,7 @@ function tidy(s) {
 /** "את כרום" / "האפליקציה כרום" / "כרום" → "כרום". */
 function object(s) {
   return String(s || '').trim()
+    .replace(/^(לי|לנו)\s+/, '')
     .replace(/^(את|אֶת)\s+/, '')
     .replace(/^(האפליקציה|אפליקציה|התוכנה|תוכנה|החלון של|החלון|האתר|אתר)\s+/, '')
     .replace(/^ה(?=(כרום|ספוטיפיי|דיסקורד|וואטסאפ|טלגרם|מחשבון|טרמינל|סטים)$)/, '')
@@ -63,13 +64,13 @@ function placeIn(phrase) {
   return null
 }
 
-const OPEN = /^(תפתח|תפתחי|פתח|פתחי|לפתוח|תפעיל|תפעילי|הפעל|הפעילי|להפעיל|תריץ|הרץ|open|launch|start|run)\s+(.+)$/i
-const CLOSE = /^(תסגור|תסגרי|סגור|סגרי|לסגור|close|quit|exit)\s+(.+)$/i
-const FOCUS = /^(תעבור ל|תעברי ל|עבור ל|תביא את|תביא לי את|תחזור ל|switch to |go to )\s*(.+)$/i
-const MOVE = /^(תשים|תשימי|שים|תזיז|תזיזי|הזז|תעביר|תעבירי|העבר|move|put)\s+(.+)$/i
-const MAX = /^(תגדיל|תגדילי|הגדל|maximi[sz]e)\s+(.+)$/i
-const MIN = /^(תמזער|תמזערי|מזער|תוריד|minimi[sz]e)\s+(.+)$/i
-const SEARCH = /^(תחפש|תחפשי|חפש|חפשי|לחפש|גגל|תגגל|search|google)\s+(?:(בגוגל|ביוטיוב|במפות|בגוגל מפות|on youtube|on google|youtube|google)\s+)?(?:על\s+|for\s+)?(.+)$/i
+const OPEN = /^(תפתח|תפתחי|תפתחו|תפתחה|פתח|פתחי|פתחו|לפתוח|תפעיל|תפעילי|תפעילו|הפעל|הפעילי|הפעילו|להפעיל|תריץ|תריצי|הרץ|open|launch|start|run)\s+(.+)$/i
+const CLOSE = /^(תסגור|תסגרי|תסגרו|תסגורה|סגור|סגרי|סגרו|לסגור|close|quit|exit)\s+(.+)$/i
+const FOCUS = /^(תעבור ל|תעברי ל|תעברו ל|עבור ל|תביא את|תביאי את|תביא לי את|תחזור ל|switch to |go to )\s*(.+)$/i
+const MOVE = /^(תשים|תשימי|תשימו|שים|שימי|תזיז|תזיזי|תזיזו|הזז|תעביר|תעבירי|תעבירו|העבר|move|put)\s+(.+)$/i
+const MAX = /^(תגדיל|תגדילי|תגדילו|הגדל|maximi[sz]e)\s+(.+)$/i
+const MIN = /^(תמזער|תמזערי|תמזערו|מזער|תוריד|minimi[sz]e)\s+(.+)$/i
+const SEARCH = /^(תחפש|תחפשי|תחפשו|חפש|חפשי|חפשו|לחפש|גגל|תגגל|search|google)\s+(?:(בגוגל|ביוטיוב|במפות|בגוגל מפות|on youtube|on google|youtube|google)\s+)?(?:על\s+|for\s+)?(.+)$/i
 
 /** One instruction → steps, or null when it is not an instant command. */
 function parseOne(s) {

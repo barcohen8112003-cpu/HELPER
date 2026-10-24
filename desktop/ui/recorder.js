@@ -17,18 +17,19 @@ window.Recorder = (() => {
     }
     if (!recording) { close(); return }   // let go before the microphone opened
     ctx = new AudioContext({ sampleRate: 16000 })
+    await ctx.audioWorklet.addModule('recorder-worklet.js')
+    if (!recording) { close(); return }
     src = ctx.createMediaStreamSource(stream)
-    node = ctx.createScriptProcessor(2048, 1, 1)
-    node.onaudioprocess = (e) => {
+    node = new AudioWorkletNode(ctx, 'helper-tap')
+    node.port.onmessage = (e) => {
       if (!recording) return
-      const data = e.inputBuffer.getChannelData(0)
-      chunks.push(new Float32Array(data))
+      const data = e.data
+      chunks.push(data)
       let sum = 0
       for (let i = 0; i < data.length; i++) sum += data[i] * data[i]
       level = Math.min(1, Math.sqrt(sum / data.length) * 6)
     }
     src.connect(node)
-    node.connect(ctx.destination)
   }
 
   function close() {

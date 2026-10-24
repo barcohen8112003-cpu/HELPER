@@ -168,7 +168,7 @@ const actions = {
   },
 
   async type({ text }) {
-    win.type(String(text))
+    await win.typeSteady(String(text))
     return 'הקלדתי'
   },
 

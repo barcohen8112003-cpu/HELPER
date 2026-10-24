@@ -21,6 +21,10 @@ same('open spotify', [{ cmd: 'open', args: { name: 'spotify' } }])
 same('תפתח את האפליקציה וואטסאפ', [{ cmd: 'open', args: { name: 'וואטסאפ' } }])
 same('תפתח כרום בצד שמאל', [{ cmd: 'open', args: { name: 'כרום' } }, { cmd: 'place', args: { name: 'כרום', where: 'left', screen: undefined } }])
 
+same('תפתחה את פנקס הרשימות', [{ cmd: 'open', args: { name: 'פנקס הרשימות' } }])
+same('פתחו את ספוטיפיי', [{ cmd: 'open', args: { name: 'ספוטיפיי' } }])
+same('תפתחי לי את דיסקורד', [{ cmd: 'open', args: { name: 'דיסקורד' } }])
+
 // Placing windows
 same('תשים את כרום בצד שמאל', [{ cmd: 'place', args: { name: 'כרום', where: 'left', screen: undefined } }])
 same('כרום שמאלה', [{ cmd: 'place', args: { name: 'כרום', where: 'left', screen: undefined } }])
@@ -98,6 +102,21 @@ brain('what is on my screen')
 check('tidy', () => assert.strictEqual(tidy('  הלפר, תפתח   בבקשה את כרום!! '), 'תפתח את כרום'))
 check('fillers', () => assert.strictEqual(speech.clean('אממ תפתח אה את כרום'), 'תפתח את כרום'))
 check('silence', () => assert.strictEqual(speech.clean('תודה רבה'), ''))
+check('made up on silence', () => assert.strictEqual(speech.clean('אדוני היושב-ראש, חברות וחברי הכנסת'), ''))
+check('subtitles on silence', () => assert.strictEqual(speech.clean('תרגום: כתוביות'), ''))
+check('real thanks inside a sentence', () => assert.strictEqual(speech.clean('תודה רבה על העזרה עם הקוד'), 'תודה רבה על העזרה עם הקוד'))
+
+// Speech detection on WAVs: silence, faint hiss, and a voice-like tone.
+function wavOf(samples) {
+  const buf = Buffer.alloc(44 + samples.length * 2)
+  buf.write('RIFF', 0); buf.write('WAVE', 8)
+  samples.forEach((v, i) => buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(v))), 44 + i * 2))
+  return buf
+}
+const sec = 16000
+check('silence is not speech', () => assert.strictEqual(speech.hasSpeech(wavOf(new Array(sec * 2).fill(0))), false))
+check('hiss is not speech', () => assert.strictEqual(speech.hasSpeech(wavOf(Array.from({ length: sec * 2 }, () => (Math.random() - 0.5) * 300))), false))
+check('a voice is speech', () => assert.strictEqual(speech.hasSpeech(wavOf(Array.from({ length: sec * 2 }, (_, i) => Math.sin(i / 8) * 6000 * (i > sec / 2 && i < sec * 1.5 ? 1 : 0.02)))), true))
 
 console.log(`${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

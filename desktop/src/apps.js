@@ -73,7 +73,9 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  */
 function find(name) {
   const said = plain(name).replace(/^(את |ה)(?=\S{3,})/, '')
-  const tries = [...new Set([plain(name), said, ...wanted(name).map(plain)].filter(Boolean))]
+  // "פנקס הרשימות" is listed as "פנקס רשימות": the same words without the article on each.
+  const bare = said.split(' ').map((x) => (x.length > 3 ? x.replace(/^ה/, '') : x)).join(' ')
+  const tries = [...new Set([plain(name), said, bare, ...wanted(name).map(plain), ...wanted(bare).map(plain)].filter(Boolean))]
   const usable = apps.filter((a) => !/uninstall|הסרת|readme|help|manual|documentation|release notes|web site|website|faq|support|license|רישיון|מדריך|reset preferences|skinned|updater|error reporter|installer|setup/i.test(a.name))
   const word = (w) => new RegExp('(^|\\s)' + escape(w) + '(\\s|$|[™®])', 'i')
   // Exact for every name first, then whole words, and only then parts of words: "סטים" must never find "הטקסטים".
@@ -98,7 +100,8 @@ function launch(app) {
 function windowMatches(win, name) {
   const app = (win.app || '').toLowerCase()
   const title = plain(win.title)
-  for (const w of wanted(name).map(plain)) {
+  const bare = plain(name).split(' ').map((x) => (x.length > 3 ? x.replace(/^ה/, '') : x)).join(' ')
+  for (const w of [...new Set([...wanted(name), ...wanted(bare)].map(plain))]) {
     if (!w) continue
     const first = w.split(' ')[0]
     if (app === w || app === first || (first.length > 3 && /^[a-z]/.test(first) && app.includes(first))) return true
