@@ -89,7 +89,7 @@ await t('Helper keys stay out of its environment', () => {
 await t('the zip opens and holds the files', () => {
   const zip = path.join(tmp, 'out.zip')
   fs.writeFileSync(zip, cc.zipFiles(done.dir, done.files.filter((f) => f !== 'args.json')))
-  const listed = execFileSync('python3', ['-I', '-c', 'import sys,zipfile;z=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None;print("\\n".join(sorted(z.namelist())));print(z.read("index.html").decode())', zip]).toString()
+  const listed = execFileSync('python3', ['-I', '-c', 'import sys,zipfile;z=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None;print("\\n".join(sorted(z.namelist())));print(z.read("index.html").decode())', zip]).toString().replace(/\r\n/g, '\n')
   assert.match(listed, /^css\/style\.css\nindex\.html\n<!doctype html>/)
 })
 await t('a sign-in problem says what to do', async () => {

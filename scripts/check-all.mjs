@@ -39,7 +39,8 @@ for (const test of TESTS) {
   const started = Date.now()
   const run = spawnSync(process.execPath, [test], {
     cwd: ROOT,
-    env: { ...process.env, HELPER_DATA_DIR: dir, HELPER_OFFLINE: '1' },
+    // A throwaway, empty .env: the owner's real one (DAILY_BRIEF_TIME, COMPUTER_MODE, WEBTOP_URL…) must not change a test.
+    env: { ...process.env, HELPER_DATA_DIR: dir, HELPER_ENV_FILE: path.join(dir, 'empty.env'), HELPER_OFFLINE: '1', NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${path.join(ROOT, 'scripts', 'as-server.cjs')}`.trim() },
     encoding: 'utf8',
     timeout: 5 * 60000,
   })

@@ -75,7 +75,9 @@ export function runClaudeCode(task, { project, signal, setStep = () => {} } = {}
   // Only what Claude Code needs. Helper's keys stay out of its environment.
   const env = { PATH: process.env.PATH, HOME: path.join(dir, '.home'), LANG: 'C.UTF-8', CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN, DISABLE_AUTOUPDATER: '1' }
   return new Promise((resolve, reject) => {
-    const child = spawn(bin(), claudeArgs(task), { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    // A script as the binary (a stand-in in tests, or a wrapper) runs through Node: Windows cannot run one directly.
+    const script = /.(m|c)?js$/i.test(bin())
+    const child = spawn(script ? process.execPath : bin(), script ? [bin(), ...claudeArgs(task)] : claudeArgs(task), { cwd: dir, env: script ? { ...env, SystemRoot: process.env.SystemRoot } : env, stdio: ['ignore', 'pipe', 'pipe'] })
     let buf = ''
     let err = ''
     let final = null
