@@ -24,6 +24,7 @@ import { bridgeReady, bridgeConnected } from './pc-bridge.js'
 import { backupEnabled, backupAccount, runBackup } from './backup.js'
 import { metricsSummary } from './metrics.js'
 import { handleTvUpgrade } from './tv-app.js'
+import { fastCommand } from './fast-commands.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
@@ -343,7 +344,9 @@ export function startUi({ connectedSince, restart, agent }) {
             status = 400
             return send(res, 400, { error: 'empty text' })
           }
-          const reply = await agent(text, { voice: Boolean(body.voice), source })
+          // A plain "turn on the lights" is carried out at once, with no model and no wait behind a running turn.
+          const quick = await fastCommand(text)
+          const reply = quick ? quick.reply : await agent(text, { voice: Boolean(body.voice), source })
           // Speech costs ElevenLabs credits, so a client that only shows text (the app's chat) asks for none: "audio": false.
           let audio = null
           if (body.audio !== false) {

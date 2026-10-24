@@ -9,6 +9,8 @@ import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNo
 import { googleHomeKeepAlive, isGoogleHomeLoginError, planGoogleHomeLoginNotice, clearGoogleHomeLoginNotice } from './google-home.js'
 import { lessonReminders } from './lessons.js'
 import { costTick } from './metrics.js'
+import { openGaps, clearGaps, proposeSkill } from './skills.js'
+import { learnerBackend, research } from './learner.js'
 import { weeklyDue, weekAhead, deadlineReminders, isoDay } from './study.js'
 import { phoneEnabled, phoneKeepAlive } from './phone.js'
 
@@ -340,6 +342,37 @@ const CHECK_IN = `יוזמה עצמית: המשתמש ביקש שתפנה אלי
 
 // The assistant starts a conversation on its own a few times a day, outside quiet hours.
 // The model may still decline with SKIP: an empty hello is worse than silence.
+
+// Once a night, in quiet hours, HELPER works through what it could not do that day. The studying is done by Claude Code
+// or Gemini (learner.js), never by the chat model, so it costs the main model nothing. It sends nothing: the lessons
+// wait for Naor's approval and are offered the next time he talks to it.
+const STUDY_FROM_HOUR = 2
+
+// The part that does the work, with its dependencies passed in so a test can run it without a clock or a network.
+export async function studyBatch({ gaps, research: learn, propose, clear, limit = 3 }) {
+  const batch = gaps.slice(0, limit)
+  const learned = []
+  for (const g of batch) {
+    try {
+      learned.push(propose(await learn(g.request, { why: g.why, signal: AbortSignal.timeout(10 * 60000) })))
+    } catch (e) {
+      console.log(`[study] ${e.message}`)
+    }
+  }
+  // Each request gets one night of study; what was not learned is let go rather than tried forever.
+  clear(batch.map((g) => g.request))
+  return learned
+}
+
+async function study() {
+  if (!config.learning || process.env.STUDY_NIGHTLY === 'off' || !inQuietHours() || new Date().getHours() < STUDY_FROM_HOUR || new Date().getHours() >= 7) return
+  const today = new Date().toDateString()
+  if (state.studyDate === today || !openGaps().length || !learnerBackend()) return
+  state.studyDate = today
+  save()
+  await studyBatch({ gaps: openGaps(), research, propose: proposeSkill, clear: clearGaps })
+}
+
 async function checkIn(notify, runTask) {
   const { everyMinutes, maxPerDay } = config.proactive
   if (!maxPerDay || inQuietHours()) return
@@ -399,7 +432,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, costTick, news, checkIn]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, costTick, news, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {

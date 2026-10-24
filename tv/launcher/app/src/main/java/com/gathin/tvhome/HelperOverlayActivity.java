@@ -94,9 +94,37 @@ public class HelperOverlayActivity extends Activity {
             main.postDelayed(autoClose, CLOSE_AFTER_MS);
         } else if ("type".equals(mode)) {
             startTyping(null);
+        } else if (listening) {
+            // The Assistant button again while listening: "I'm done talking".
+            endSpeech();
         } else {
             startListening();
         }
+    }
+
+    /** The overlay on screen, for the Assistant button's next press (HelperSessionService). */
+    static volatile HelperOverlayActivity current;
+
+    /** The remote's Assistant button while the overlay is up. */
+    void assistantPressed() {
+        main.removeCallbacks(autoClose);
+        if (listening) endSpeech();
+        else if (!busy) startListening();
+    }
+
+    /** True from the start of listening until the words are in (or nothing was heard). */
+    private boolean listening;
+
+    /** Stop the microphone now and answer what was said so far. */
+    private void endSpeech() {
+        if (!listening) return;
+        android.util.Log.i("HelperMic", "end of speech by button");
+        status.setText("חושב…");
+        waves.setMode(WaveView.THINKING);
+        if (recognizer != null && triedGoogle) {
+            try { recognizer.stopListening(); } catch (RuntimeException ignored) { }
+        }
+        mic.finish();
     }
 
     // ---- voice ----
@@ -114,11 +142,101 @@ public class HelperOverlayActivity extends Activity {
         heard.setText("");
         status.setText("מקשיב…");
         waves.setMode(WaveView.LISTENING);
+        listening = true;
+        // Google's own online recognizer (the one Google Assistant uses on this TV) knows Hebrew: the words go to
+        // HELPER as text, which every HELPER version takes. The recording below is the fallback.
+        if (!triedGoogle && startGoogleRecognizer()) return;
+        triedGoogle = false;
+        recordForHelper();
+    }
+
+    private static final android.content.ComponentName KATNISS = new android.content.ComponentName(
+            "com.google.android.katniss", "com.google.android.apps.tvsearch.voice.recognition.KatnissRecognitionService");
+    private android.speech.SpeechRecognizer recognizer;
+    private boolean triedGoogle;
+
+    private boolean startGoogleRecognizer() {
+        try {
+            getPackageManager().getServiceInfo(KATNISS, 0);
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+        triedGoogle = true;
+        try {
+            if (recognizer == null) {
+                recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(this, KATNISS);
+                recognizer.setRecognitionListener(new android.speech.RecognitionListener() {
+                    @Override public void onReadyForSpeech(Bundle b) { status.setText("מקשיב…"); }
+                    @Override public void onBeginningOfSpeech() { }
+                    @Override public void onRmsChanged(float db) { waves.setRms(db); }
+                    @Override public void onBufferReceived(byte[] buf) { }
+                    @Override public void onEndOfSpeech() { waves.setMode(WaveView.THINKING); status.setText("חושב…"); }
+                    @Override public void onEvent(int type, Bundle b) { }
+
+                    @Override
+                    public void onError(int error) {
+                        if (isFinishing() || busy) return;
+                        listening = false;
+                        if (error == android.speech.SpeechRecognizer.ERROR_NO_MATCH
+                                || error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                            triedGoogle = false;
+                            waves.setMode(WaveView.IDLE);
+                            status.setText("לא שמעתי. לחץ OK כדי לנסות שוב");
+                            main.postDelayed(autoClose, CLOSE_AFTER_MS);
+                            return;
+                        }
+                        // Google's recognizer is not usable here: record and let HELPER transcribe instead.
+                        android.util.Log.i("HelperMic", "Google recognizer error " + error + ", recording instead");
+                        listening = true;
+                        recordForHelper();
+                    }
+
+                    @Override
+                    public void onPartialResults(Bundle b) {
+                        String t = firstResult(b);
+                        if (t != null) heard.setText(t);
+                    }
+
+                    @Override
+                    public void onResults(Bundle b) {
+                        triedGoogle = false;
+                        listening = false;
+                        String t = firstResult(b);
+                        if (t == null || t.trim().isEmpty()) { onError(android.speech.SpeechRecognizer.ERROR_NO_MATCH); return; }
+                        heard.setText(t);
+                        askHelper(t, true);
+                    }
+                });
+            }
+            Intent i = new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "iw-IL")
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "iw-IL")
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+            recognizer.startListening(i);
+            return true;
+        } catch (RuntimeException e) {
+            triedGoogle = false;
+            return false;
+        }
+    }
+
+    private static String firstResult(Bundle b) {
+        java.util.ArrayList<String> list = b == null ? null : b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+        return list == null || list.isEmpty() ? null : list.get(0);
+    }
+
+    /** The fallback: record here, and HELPER transcribes it (needs the HELPER version with /bridge/ask "speech"). */
+    private void recordForHelper() {
+        status.setText("מקשיב…");
+        waves.setMode(WaveView.LISTENING);
         mic.start(new VoiceCapture.Callback() {
             @Override public void level(float level) { waves.setRms(level * 12f - 2f); }
 
             @Override
             public void done(byte[] wav) {
+                listening = false;
                 if (isFinishing()) return;
                 if (wav == null) {
                     waves.setMode(WaveView.IDLE);
@@ -131,13 +249,19 @@ public class HelperOverlayActivity extends Activity {
 
             @Override
             public void failed(String why) {
+                listening = false;
                 if (!isFinishing()) startTyping(why + ". אפשר להקליד.");
             }
         });
     }
 
     private void stopListening() {
+        listening = false;
         mic.stop();
+        if (recognizer != null) {
+            try { recognizer.cancel(); } catch (RuntimeException ignored) { }
+        }
+        triedGoogle = false;
     }
 
     private void askSpeech(byte[] wav) {
@@ -189,19 +313,37 @@ public class HelperOverlayActivity extends Activity {
     // ---- HELPER ----
 
     private void askHelper(String text, boolean voice) {
-        busy = true;
         heard.setText(text);
+        // Quick commands ("תפתח נטפליקס", "תגביר", "תחפש ביוטיוב...") run here at once, without HELPER.
+        String quick = TvActions.tryQuick(this, text);
+        if (quick != null) {
+            showReply(quick);
+            waves.setMode(WaveView.SPEAKING);
+            main.postDelayed(() -> waves.setMode(WaveView.IDLE), 900);
+            main.postDelayed(autoClose, 2500);
+            return;
+        }
+        busy = true;
         reply.setVisibility(View.GONE);
         status.setText("חושב…");
         waves.setMode(WaveView.THINKING);
         new Thread(() -> {
             try {
-                Helper.Reply r = Helper.ask(this, text, voice);
+                // HELPER hears what the TV can do, and may end its answer with action tags (TvActions).
+                Helper.Reply r = Helper.askSpoken(this, TvActions.note(this) + text);
+                String said = TvActions.clean(r.text);
+                byte[] audio = null;
+                if (voice && !said.isEmpty()) {
+                    try { audio = Helper.tts(this, said); } catch (Exception ignored) { }
+                }
+                byte[] mp3 = audio;
                 main.post(() -> {
                     busy = false;
                     if (isFinishing()) return;
-                    showReply(r.text);
-                    if (voice && r.audioBase64 != null) speak(r.audioBase64);
+                    showReply(said);
+                    int ran = TvActions.run(this, r.text);
+                    if (ran > 0) { main.postDelayed(autoClose, 4000); return; }
+                    if (mp3 != null) speak(Base64.encodeToString(mp3, Base64.NO_WRAP));
                     else { waves.setMode(WaveView.IDLE); main.postDelayed(autoClose, CLOSE_AFTER_MS * 2); }
                 });
             } catch (Exception e) {
@@ -264,7 +406,8 @@ public class HelperOverlayActivity extends Activity {
         main.removeCallbacks(autoClose);
         boolean typing = input.getVisibility() == View.VISIBLE && input.hasFocus();
         if (!typing && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)) {
-            startListening();
+            if (listening) endSpeech();
+            else startListening();
             return true;
         }
         if (!typing && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
@@ -274,18 +417,36 @@ public class HelperOverlayActivity extends Activity {
         return super.onKeyDown(keyCode, event);
     }
 
+    private boolean resumed;
+    /** Another app came to the front: stop and close. A brief pause (the Assistant button's session) is ignored. */
+    private final Runnable closeIfLeft = () -> {
+        if (resumed || isFinishing()) return;
+        stopListening();
+        stopSpeaking();
+        finish();
+    };
+
     @Override
     protected void onPause() {
         super.onPause();
-        stopListening();
-        stopSpeaking();
-        if (!isChangingConfigurations()) finish();
+        resumed = false;
+        if (!isChangingConfigurations()) main.postDelayed(closeIfLeft, 700);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        current = this;
+        main.removeCallbacks(closeIfLeft);
     }
 
     @Override
     protected void onDestroy() {
+        if (current == this) current = null;
         main.removeCallbacksAndMessages(null);
         mic.stop();
+        if (recognizer != null) recognizer.destroy();
         stopSpeaking();
         super.onDestroy();
     }

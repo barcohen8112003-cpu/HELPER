@@ -13,6 +13,8 @@ import { setLocation, isLiveUpdate } from './location.js'
 import { createOutbox } from './outbox.js'
 import { chatModel, Aborted } from './llm.js'
 import { parseCommand } from './commands.js'
+import { fastCommand } from './fast-commands.js'
+import { loadUserTools } from './tool-builder.js'
 import { status } from './status.js'
 import { maskSettingsUrl, startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
@@ -237,6 +239,9 @@ const wa = await startWhatsApp(async (m) => {
     return announcePairing()
   }
 
+  // "תדליק את האורות": no model and no queue, the light comes on while the turn before it may still be thinking.
+  const quick = await fastCommand(text)
+  if (quick) return wa.send(state.owner.jid, quick.reply)
   const epoch = stopEpoch
   queue = queue.then(async () => {
     if (epoch !== stopEpoch) return // stopped, or a new conversation began, while this was waiting its turn
@@ -256,7 +261,7 @@ const wa = await startWhatsApp(async (m) => {
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
       // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      const reply = await runTurn(input.text, { confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
+      const reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
       // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
       // The text follows only when it has links, or when speech failed.
       const wantsVoice = input.voice || state.voiceMode === 'always'
@@ -320,7 +325,7 @@ function confirm(question, media) {
 function background(title, instruction, run) {
   return startJob(
     title,
-    run || ((signal, setStep) => runBackground(title, instruction, { confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep })),
+    run || ((signal, setStep) => runBackground(title, instruction, { source: 'job', confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep })),
     async (name, result, error) => {
       if (result) return wa.send(state.owner.jid, `*${name}*\n${result}`)
       if (error) return wa.send(state.owner.jid, `המשימה "${name}" לא הסתיימה: ${humanError(error)}`)
@@ -386,12 +391,15 @@ if (fs.existsSync(DEPLOY_NOTICE)) {
   if (text) outbox.notify(text, true).catch(() => {})
 }
 // Scheduled tasks wait their turn in the same queue as chat messages, so two model runs never interleave.
-const scheduledTask = (instruction) => {
-  const run = queue.then(() => runTask(instruction, { confirm, sendMedia, say, patient: true }))
+const scheduledTask = (instruction, { noAsk = false } = {}) => {
+  const run = queue.then(() => runTask(instruction, { source: 'task', confirm: noAsk ? async () => false : confirm, sendMedia, say, patient: true }))
   queue = run.catch(() => {})
   return run
 }
 // Quiet monitoring owns mail, calendar and the morning brief. Its only way out is a message to the owner.
+// The tools HELPER wrote for itself and Naor approved come back with it, each checked again before it loads.
+if (config.learning) loadUserTools().then((n) => n && console.log(`[tools] נטענו ${n} כלים שהעוזר כתב לעצמו`)).catch((e) => console.log(`[tools] ${e.message}`))
+
 const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, text), getDay })
 
 // Proactive notices from the rest of the assistant. During quiet hours a non-urgent one is not held to be sent
@@ -426,7 +434,7 @@ const BRIDGE_NOTE = {
   text: (source) => `[הודעה דרך ${source}. עיצוב רגיל של צ'אט, לא של וואטסאפ.]`,
 }
 const bridgeAsk = (text, { voice, source }) => {
-  const run = queue.then(() => runTurn(`${BRIDGE_NOTE[voice ? 'voice' : 'text'](source)}\n${text}`, { confirm, sendMedia, say }))
+  const run = queue.then(() => runTurn(`${BRIDGE_NOTE[voice ? 'voice' : 'text'](source)}\n${text}`, { source: String(source || 'bridge').slice(0, 30), confirm, sendMedia, say }))
   queue = run.catch(() => {}).then(() => compact().catch(() => {}))
   return run
 }

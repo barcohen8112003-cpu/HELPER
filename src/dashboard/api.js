@@ -3,6 +3,7 @@
 // Auth: this module does not invent its own. ui.js passes its own `signedIn(req)` check; with no check, or a check
 // that says no, every /dash request is refused (fail closed).
 import fs from 'node:fs'
+import { auditStats, searchAudit } from '../audit.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { state } from '../store.js'
@@ -242,6 +243,7 @@ const ROUTES = {
   goals: () => goalsView(),
   exams: () => ({ exams: examsView(), countdowns: countdownsView() }),
   tools: (p) => toolsView(p.get('q') || ''),
+  audit: (p) => ({ stats: auditStats(7), rows: searchAudit({ q: p.get('q') || '', tool: p.get('tool') || '', approval: p.get('approval') || '', source: p.get('source') || '', limit: 80 }) }),
 }
 
 export const routeNames = Object.keys(ROUTES)

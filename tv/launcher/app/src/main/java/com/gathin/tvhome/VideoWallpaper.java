@@ -16,7 +16,10 @@ import java.io.File;
  * A looping, muted video behind Home: wallpaper.mp4 in the theme folder (next to config.json). It plays only while
  * Home is on screen, so an app in front never shares the decoder with it. Centre-cropped to the screen, with the NOW
  * design's bottom gradient over it (0 -> 35% -> 70% -> 85% black from 45% of the height) so the dock reads.
- * Keep it at 1080p30 H.264 for a Chromecast HD (tv/README).
+ * The side panel has a switch for it. Keep the video at 1080p30 H.264 for a Chromecast HD (tv/README).
+ *
+ * A SurfaceView was tried instead of this TextureView: it showed nothing behind Home's opaque window and did not
+ * make Home any smoother (31 ms against 30 ms per frame), so the TextureView stays.
  */
 final class VideoWallpaper implements TextureView.SurfaceTextureListener {
 
@@ -26,18 +29,36 @@ final class VideoWallpaper implements TextureView.SurfaceTextureListener {
     private final View shade;
     private final File file;
     private MediaPlayer player;
-    /** start() and pause() are only legal once prepared; before that, onPrepared reads wanted. */
-    private boolean prepared;
     private Surface surface;
     private boolean wanted;
+    /** start() and pause() are only legal once prepared; before that, onPrepared reads wanted. */
+    private boolean prepared;
     private int videoW, videoH;
 
-    /** Null when the theme has no video. */
-    static VideoWallpaper attach(Context c, FrameLayout root) {
+    /** Whether the side panel has the video on (default on). */
+    static boolean enabled(Context c) {
+        return Helper.prefs(c).getBoolean("video_wallpaper", true);
+    }
+
+    static void setEnabled(Context c, boolean on) {
+        Helper.prefs(c).edit().putBoolean("video_wallpaper", on).apply();
+    }
+
+    private static File fileOf(Context c) {
         File dir = Config.dir(c);
         File f = dir == null ? null : new File(dir, FILE);
-        if (f == null || !f.isFile() || f.length() == 0) return null;
-        return new VideoWallpaper(c, root, f);
+        return f != null && f.isFile() && f.length() > 0 ? f : null;
+    }
+
+    /** Whether Home should be showing a video right now: a file, and the switch on. */
+    static boolean desired(Context c) {
+        return enabled(c) && fileOf(c) != null;
+    }
+
+    /** Null when the theme has no video, or the switch is off. */
+    static VideoWallpaper attach(Context c, FrameLayout root) {
+        File f = desired(c) ? fileOf(c) : null;
+        return f == null ? null : new VideoWallpaper(c, root, f);
     }
 
     private VideoWallpaper(Context c, FrameLayout root, File file) {

@@ -271,7 +271,9 @@ export function getHomeDevices() {
   )
 }
 
-export function controlHomeDevice(deviceQuery, action = 'toggle') {
+// `fast`: a voice command wants the light now, not a verified report. The press is quicker and the check afterwards
+// waits a third of a second instead of a full one.
+export function controlHomeDevice(deviceQuery, action = 'toggle', { fast = false } = {}) {
   const q = String(deviceQuery || '').trim().toLowerCase()
   let act = String(action || 'toggle').toLowerCase()
   if (['on', 'הדלק', 'להדליק', 'דלוק', 'הדלקה'].includes(act)) act = 'on'
@@ -353,7 +355,7 @@ export function controlHomeDevice(deviceQuery, action = 'toggle') {
         button: 'left',
         clickCount: 1,
       })
-      await new Promise((r) => setTimeout(r, 60))
+      await new Promise((r) => setTimeout(r, fast ? 25 : 60))
       await send('Input.dispatchMouseEvent', {
         type: 'mouseReleased',
         x: t.x,
@@ -362,12 +364,12 @@ export function controlHomeDevice(deviceQuery, action = 'toggle') {
         clickCount: 1,
       })
       clicked.push(t)
-      await new Promise((r) => setTimeout(r, 150))
+      if (!fast) await new Promise((r) => setTimeout(r, 150))
     }
 
     if (clicked.length > 0) {
       // Wait for Google Home to update DOM
-      await new Promise((r) => setTimeout(r, 1000))
+      await new Promise((r) => setTimeout(r, fast ? 350 : 1000))
     }
 
     const afterDevices = await getParsedDevices(send)
@@ -385,7 +387,7 @@ export function controlHomeDevice(deviceQuery, action = 'toggle') {
   }
   return runGoogleHome(
     () => localCall(run),
-    () => remoteCall('controlHomeDevice', [deviceQuery, action]),
+    () => remoteCall('controlHomeDevice', [deviceQuery, action, { fast }]),
     googleHomeTransport(),
   )
 }

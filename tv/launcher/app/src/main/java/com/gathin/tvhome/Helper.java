@@ -93,7 +93,10 @@ final class Helper {
 
     /** Package a named button opens, "" for its default. Learned keycodes are stored as "button.learned.<name>". */
     static String buttonApp(Context c, String name) {
-        return prefs(c).getString(BUTTON_PREFIX + name, "");
+        String set = prefs(c).getString(BUTTON_PREFIX + name, null);
+        if (set != null) return set;
+        // With the stock launcher off nothing answers the remote's YouTube button, so it opens YouTube by default.
+        return "youtube".equals(name) ? "com.google.android.youtube.tv" : "";
     }
 
     static void setButtonApp(Context c, String name, String pkg) {
@@ -142,6 +145,35 @@ final class Helper {
     /** Blocking: call off the UI thread. */
     static Reply ask(Context c, String text, boolean voice) throws Exception {
         return post(c, new JSONObject().put("text", text).put("source", "tv").put("voice", voice).put("audio", voice));
+    }
+
+    /** A question from the TV's voice: a short spoken-style answer, as text only (the TV asks for speech after it
+     *  has taken the action tags out, so they are never read aloud). */
+    static Reply askSpoken(Context c, String text) throws Exception {
+        return post(c, new JSONObject().put("text", text).put("source", "tv").put("voice", true).put("audio", false));
+    }
+
+    /** HELPER's voice for some text, as MP3 bytes (/bridge/tv's /bridge/tts). Blocking. */
+    static byte[] tts(Context c, String text) throws Exception {
+        if (!configured(c)) throw new Exception("HELPER לא מחובר");
+        HttpURLConnection conn = (HttpURLConnection) new URL(url(c) + "/bridge/tts").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(60000);
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        conn.setRequestProperty("Authorization", "Bearer " + token(c));
+        try (OutputStream out = conn.getOutputStream()) {
+            out.write(new JSONObject().put("text", text).toString().getBytes(StandardCharsets.UTF_8));
+        }
+        if (conn.getResponseCode() >= 400) throw new Exception("אין קול מ-HELPER");
+        try (InputStream in = conn.getInputStream()) {
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            byte[] chunk = new byte[16384];
+            int n;
+            while ((n = in.read(chunk)) > 0) buf.write(chunk, 0, n);
+            return buf.toByteArray();
+        }
     }
 
     /** A spoken request: the WAV goes to HELPER, which transcribes it and answers with speech. Blocking. */

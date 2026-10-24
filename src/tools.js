@@ -17,9 +17,11 @@ import * as googleHome from './google-home.js'
 import { useComputer, runErrand, runOnPhone } from './computer-use.js'
 import { phoneAppConnected } from './phone-app.js'
 import { errandBrowserEnabled } from './errand-browser.js'
-import { extendedTools, categories, searchTools } from './toolkit/registry.js'
+import { extendedTools, categories, searchTools, setCoreNameCheck } from './toolkit/registry.js'
 import { addFact, removeFact, CATEGORIES } from './memory.js'
 import { memoryTools } from './memory-tools.js'
+import { skillTools, builderTools } from './learning-tools.js'
+import { auditTools } from './audit.js'
 import { askGemini, geminiApiEnabled } from './gemini-api.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
@@ -597,7 +599,8 @@ const isOn = (t) => !t.enabled || t.enabled()
 
 tools.push(...googleTools)
 tools.push(...pcTools)
-tools.push(...memoryTools)
+tools.push(...memoryTools, ...skillTools, ...builderTools, ...auditTools)
+setCoreNameCheck(() => tools.map((t) => t.name))
 tools.push(...phoneTools)
 tools.push(...tvTools)
 
