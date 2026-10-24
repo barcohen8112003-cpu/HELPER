@@ -91,12 +91,14 @@ final class ContinueRow {
     void show() {
         shown = true;
         row = 0;
-        fill();
+        // Built again only when what it shows changed: building some forty cards made Down stutter.
+        if (!signature(plan()).equals(built)) fill();
+        else for (HorizontalScrollView r : rows) r.setTag(null);
         loadLibrary();   // fresh after watching something
         view.setVisibility(View.VISIBLE);
         view.setAlpha(0f);
         view.setTranslationY(lift() / 2f);
-        view.animate().alpha(1f).translationY(0).setDuration(260).setInterpolator(new DecelerateInterpolator(2f)).start();
+        view.animate().alpha(1f).translationY(0).setDuration(260).setInterpolator(new DecelerateInterpolator(2f)).withLayer().start();
         scroll.scrollTo(0, 0);
         focusRow(0);
     }
@@ -104,7 +106,7 @@ final class ContinueRow {
     void hide(boolean animate) {
         shown = false;
         if (!animate) { view.setVisibility(View.GONE); return; }
-        view.animate().alpha(0f).translationY(lift() / 2f).setDuration(180)
+        view.animate().alpha(0f).translationY(lift() / 2f).setDuration(180).withLayer()
                 .withEndAction(() -> { if (!shown) view.setVisibility(View.GONE); }).start();
     }
 
@@ -138,6 +140,7 @@ final class ContinueRow {
 
     /** New catalog data while the carousels are up: rebuild, keeping the focus on the same carousel. */
     private void refill() {
+        if (signature(plan()).equals(built)) return;   // the same titles: nothing to rebuild
         int keep = row;
         // Hold the focus on the panel while its cards are swapped: dropped, it lands on the dock and Home
         // puts the carousels away.
@@ -148,9 +151,19 @@ final class ContinueRow {
         view.setFocusable(false);
     }
 
-    private void fill() {
-        column.removeAllViews();
-        rows.clear();
+    /** What the carousels show: their names and titles, in order (watching true for Continue watching). */
+    private static final class Row {
+        final String name;
+        final List<Titles.Title> titles;
+        final boolean watching;
+        Row(String name, List<Titles.Title> titles, boolean watching) { this.name = name; this.titles = titles; this.watching = watching; }
+    }
+
+    /** The titles of what was last built, to tell whether anything changed. */
+    private String built = "";
+
+    private List<Row> plan() {
+        List<Row> plan = new ArrayList<>();
         boolean linked = Stremio.linked(activity);
         List<Titles.Title> watching = new ArrayList<>();
         if (linked) {
@@ -165,12 +178,37 @@ final class ContinueRow {
         watching.addAll(GtvRows.items(activity, "com.netflix.ninja"));
         watching.sort((x, y) -> Long.compare(y.time, x.time));
         if (!linked) watching.add(0, CONNECT);
-        if (!watching.isEmpty()) addRow("‏המשך צפייה", watching, true);
+        if (!watching.isEmpty()) plan.add(new Row("‏המשך צפייה", watching, true));
         boolean nothing = watching.isEmpty() || !linked && watching.size() == 1;
         List<Titles.Title> youtube = GtvRows.items(activity, "com.google.android.youtube.tv");
-        if (!youtube.isEmpty()) addRow("‏YouTube בשבילך", youtube, false);
-        if (!series.isEmpty()) addRow(nothing ? "‏סדרות מומלצות בשבילך" : "‏סדרות מומלצות", series, false);
-        if (!movies.isEmpty()) addRow("‏סרטים מומלצים", movies, false);
+        if (!youtube.isEmpty()) plan.add(new Row("‏YouTube בשבילך", youtube, false));
+        if (!series.isEmpty()) plan.add(new Row(nothing ? "‏סדרות מומלצות בשבילך" : "‏סדרות מומלצות", series, false));
+        if (!movies.isEmpty()) plan.add(new Row("‏סרטים מומלצים", movies, false));
+        return plan;
+    }
+
+    private static String signature(List<Row> plan) {
+        StringBuilder b = new StringBuilder();
+        for (Row r : plan) {
+            b.append(r.name).append('|');
+            for (int i = 0; i < Math.min(MAX_CARDS, r.titles.size()); i++) {
+                Titles.Title t = r.titles.get(i);
+                b.append(t.id).append(':').append(t.sub).append(':').append(Math.round(t.progress * 100)).append(',');
+            }
+            b.append(';');
+        }
+        return b.toString();
+    }
+
+    /** At most this many cards in a carousel: each is several views and a picture. */
+    private static final int MAX_CARDS = 12;
+
+    private void fill() {
+        column.removeAllViews();
+        rows.clear();
+        List<Row> plan = plan();
+        for (Row r : plan) addRow(r.name, r.titles.size() > MAX_CARDS ? r.titles.subList(0, MAX_CARDS) : r.titles, r.watching);
+        built = signature(plan);
         if (rows.isEmpty()) {
             TextView wait = text(activity, "‏טוען סדרות וסרטים…", 17, 0xB3FFFFFF, R.font.outfit_light);
             wait.setPadding(0, AppCards.px(activity, 40), 0, 0);

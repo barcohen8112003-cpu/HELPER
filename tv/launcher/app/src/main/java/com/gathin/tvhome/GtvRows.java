@@ -75,6 +75,8 @@ final class GtvRows {
     /** The cards read last time, as Continue watching titles (pkg set, picture in background). */
     static List<Titles.Title> items(Context c, String onlyPkg) {
         List<Titles.Title> out = new ArrayList<>();
+        // Google's Home turned off (it takes ~300 MB on this TV): its rows are not read, and old ones not shown.
+        if (!available(c)) return out;
         try {
             JSONArray a = new JSONArray(prefs(c).getString("items", "[]"));
             long time = prefs(c).getLong("time", 0);
@@ -193,10 +195,14 @@ final class GtvRows {
                     Bitmap shot = null;
                     try {
                         Bitmap hw = Bitmap.wrapHardwareBuffer(r.getHardwareBuffer(), r.getColorSpace());
-                        if (hw != null) shot = hw.copy(Bitmap.Config.ARGB_8888, false);
+                        if (hw != null) {
+                            shot = hw.copy(Bitmap.Config.ARGB_8888, false);
+                            hw.recycle();
+                        }
                         r.getHardwareBuffer().close();
                     } catch (Exception ignored) { }
                     save(s, cards, shot);
+                    if (shot != null) shot.recycle();
                     end(s, true);
                 }
                 @Override public void onFailure(int error) {
@@ -233,6 +239,7 @@ final class GtvRows {
                     Bitmap crop = Bitmap.createBitmap(shot, card.bounds.left, card.bounds.top, card.bounds.width(), ph);
                     File f = new File(dir, Integer.toHexString(card.desc.hashCode()) + ".jpg");
                     try (FileOutputStream out = new FileOutputStream(f)) { crop.compress(Bitmap.CompressFormat.JPEG, 88, out); }
+                    if (crop != shot) crop.recycle();
                     art = f.getAbsolutePath();
                 }
                 if (art.isEmpty()) continue;   // a card cut off at the screen's edge: left out
@@ -325,8 +332,22 @@ final class GtvRows {
             try {
                 if (cover != null) s.getSystemService(WindowManager.class).removeView(cover);
             } catch (Exception ignored) { }
+            // The still is a full-screen picture (8 MB): let it go at once, the TV has little memory.
+            if (cover instanceof ImageView) {
+                android.graphics.drawable.Drawable d = ((ImageView) cover).getDrawable();
+                ((ImageView) cover).setImageDrawable(null);
+                if (d instanceof android.graphics.drawable.BitmapDrawable) ((android.graphics.drawable.BitmapDrawable) d).getBitmap().recycle();
+            }
             cover = null;
             busy = false;
+            // Google's Home stays in memory after it was opened (about 95 MB): put it back to sleep.
+            if (home) {
+                MAIN.postDelayed(() -> {
+                    try {
+                        s.getSystemService(android.app.ActivityManager.class).killBackgroundProcesses(GTV);
+                    } catch (Exception ignored) { }
+                }, 1500);
+            }
         }, home ? 700 : 0);
     }
 

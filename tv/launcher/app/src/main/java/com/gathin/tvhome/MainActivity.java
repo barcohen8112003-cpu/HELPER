@@ -379,6 +379,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         videoWallpaper = VideoWallpaper.attach(this, root);
         sky = findViewById(R.id.sky);
         sky.setIntensity(cfg.skyIntensity);
+        // Every full-screen fill costs this TV's graphics a frame's worth of time: the window's black is always
+        // under the root's own, and the root's is under the video when there is one.
+        getWindow().setBackgroundDrawable(null);
+        if (videoWallpaper != null) {
+            root.setBackground(null);
+            sky.setVisibility(View.GONE);
+        }
         glass = findViewById(R.id.glass);
         if (festive) glass.setAccent(festival.accentColor());
         ambient = findViewById(R.id.ambient);
@@ -643,7 +650,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
         if (nowDesign) applyNowDesign(new TextView[]{btnHelper, (TextView) btnInputs, btnPlay, btnWifi, (TextView) btnSettings});
         if (nowDesign) addNowTabs(btnHelper, btnPlay);
-        if (nowDesign && dockRow) continueRow = new ContinueRow(this, root, this::transitionAmbient);
+        // Moving between cards sets the screen's colour in one step: animating it repaints the whole screen.
+        if (nowDesign && dockRow) continueRow = new ContinueRow(this, root, color -> {
+            stopAmbientAnimation();
+            setAmbient(color);
+        });
 
         // Hide the glass when focus leaves the tiles.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
@@ -958,6 +969,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onPause() {
         super.onPause();
+        handler.removeCallbacks(resumeVideo);
         handler.removeCallbacks(readGoogleRows);
         if (weather != null) weather.onPause();
         hideContinue(false);
@@ -1069,6 +1081,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // The video holds still while the remote is in use, and moves again 4 seconds after the last key: this TV's
+        // graphics can draw Home smoothly, or the video, but not both at once.
+        if (videoWallpaper != null && event.getAction() == KeyEvent.ACTION_DOWN) {
+            videoWallpaper.stop();
+            handler.removeCallbacks(resumeVideo);
+            handler.postDelayed(resumeVideo, 4000);
+        }
         if (handleSettingsKey(event)) return true;
         if (page != PAGE_HOME && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
             // Back from the gallery: up to its tab first, then the dock.
@@ -1751,6 +1770,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
     }
 
+    private final Runnable resumeVideo = () -> {
+        if (videoWallpaper != null && hasWindowFocus() && page == PAGE_HOME && (continueRow == null || !continueRow.shown)) {
+            videoWallpaper.start();
+        }
+    };
+
     private final Runnable readGoogleRows = () -> {
         InputKeyService service = InputKeyService.instance;
         android.util.Log.i("GtvRows", "home: service=" + (service != null) + " busy=" + GtvRows.busy + " focus=" + hasWindowFocus() + " page=" + page);
@@ -1781,6 +1806,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             else pageView.setVisibility(View.GONE);
             grid.setVisibility(View.VISIBLE);
             hero.setVisibility(View.VISIBLE);
+            handler.removeCallbacks(resumeVideo);
+            handler.postDelayed(resumeVideo, 4000);
             for (View v : new View[]{grid, hero}) {
                 v.animate().cancel();
                 if (animate) { v.setAlpha(0f); v.animate().alpha(1f).setDuration(200).start(); } else v.setAlpha(1f);
@@ -1788,6 +1815,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return;
         }
         hideContinue(false);
+        if (videoWallpaper != null) videoWallpaper.stop();   // still under the gallery, so it scrolls smoothly
         pageColumn.removeAllViews();
         TextView title = new TextView(this);
         title.setText(p == PAGE_LIVE ? "‏שידור חי" : "‏האפליקציות שלך");
@@ -1822,10 +1850,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showContinue() {
         int lift = continueRow.lift();
         for (View v : new View[]{grid, hero}) {
-            v.animate().translationY(-lift).setDuration(260).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+            // withLayer: the dock moves as one ready picture instead of being drawn again every frame.
+            v.animate().translationY(-lift).setDuration(260).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).withLayer().start();
         }
         hero.animate().alpha(0f).setDuration(200).start();   // the rows take the room the tagline had
-        ambient.animate().alpha(0.4f).setDuration(260).start();
+        ambient.animate().alpha(0.4f).setDuration(260).withLayer().start();
+        // The video holds still while the rows are up: drawing both is more than this TV's graphics can do smoothly.
+        if (videoWallpaper != null) videoWallpaper.stop();
         continueRow.show();
     }
 
@@ -1833,10 +1864,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (continueRow == null || !continueRow.shown) return;
         continueRow.hide(animate);
         for (View v : new View[]{grid, hero}) {
-            if (animate) v.animate().translationY(0).alpha(1f).setDuration(220).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+            if (animate) v.animate().translationY(0).alpha(1f).setDuration(220).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).withLayer().start();
             else { v.animate().cancel(); v.setTranslationY(0); v.setAlpha(1f); }
         }
         ambient.animate().alpha(1f).setDuration(220).start();
+        handler.removeCallbacks(resumeVideo);
+        handler.postDelayed(resumeVideo, 4000);
         focusTile(Math.min(lastFocused, COLUMNS - 1));
     }
 

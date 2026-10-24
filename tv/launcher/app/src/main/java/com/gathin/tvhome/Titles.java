@@ -73,7 +73,7 @@ final class Titles {
     private static final int MAX_WATCHING = 15;
     private static final ExecutorService POOL = Executors.newFixedThreadPool(3);
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final LruCache<String, Bitmap> IMAGES = new LruCache<String, Bitmap>(14 * 1024 * 1024) {
+    private static final LruCache<String, Bitmap> IMAGES = new LruCache<String, Bitmap>(8 * 1024 * 1024) {
         @Override protected int sizeOf(String key, Bitmap b) { return b.getByteCount(); }
     };
 
@@ -196,8 +196,11 @@ final class Titles {
                 BitmapFactory.decodeByteArray(data, 0, data.length, o);
                 int sample = 1;
                 while (o.outWidth / (sample * 2) >= maxW) sample *= 2;
+                boolean photo = "image/jpeg".equals(o.outMimeType);
                 o = new BitmapFactory.Options();
                 o.inSampleSize = sample;
+                // A photo in half the memory of full colour (no difference on a card); logos keep their transparency.
+                if (photo) o.inPreferredConfig = Bitmap.Config.RGB_565;
                 b = BitmapFactory.decodeByteArray(data, 0, data.length, o);
             } catch (Exception ignored) { }
             if (b == null) return;
