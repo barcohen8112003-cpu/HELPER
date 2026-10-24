@@ -12,7 +12,7 @@ app.setAppUserModelId('il.helper.desktop')
 app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling')   // our media keys must reach the player
 
 const ROOT = __dirname
-let store, apps, speech, instant, hands, handsServer, brain, win32, hook
+let store, apps, speech, instant, hands, handsServer, brain, win32, hook, voiceOut
 
 let bubble = null, pill = null, tray = null
 const overlays = new Map()          // display id → transparent window for rings and marks
@@ -177,6 +177,7 @@ let bubbleHovered = false
 
 function startListening() {
   noteOutside()
+  bubble.webContents.send('play', null)   // talking over HELPER stops its voice
   if (mode === 'thinking') brain.cancel()
   mode = 'listening'
   voiceAsk = true
@@ -327,6 +328,8 @@ const NO = /^(לא|לא לא|עזוב|בטל|תבטל|אל תשלח|no|nope|canc
 async function handleAsk(raw, { voice = false } = {}) {
   noteOutside()
   const seq = ++askSeq
+  // Every answer to a spoken ask is spoken, whichever way it was answered (instant, learned, Claude, cloud).
+  spokenAsk = voice ? seq : -1
   const text = instant.tidy(raw)
   const started = Date.now()
   mode = 'thinking'
@@ -435,15 +438,25 @@ function stepLabel(ev) {
   return ev.name
 }
 
+let spokenAsk = -1
+
 async function finish(seq, heard, text, route, started, error = false, voice = false, audio = null, note = '') {
   if (seq !== askSeq) return
+  voice = voice || spokenAsk === seq
   store.log({ heard, route, ms: Date.now() - started, error, answer: String(text).slice(0, 200) })
   answer(text, { heard, route, error, note })
-  if (voice && store.settings().speakAnswers && !error) {
+  // A spoken ask gets a spoken answer (errors too, so a failure is never silent).
+  if (voice && store.settings().speakAnswers) {
     try {
-      const mp3 = audio ? Buffer.from(audio, 'base64') : await brain.voiceOf(text)
-      if (mp3 && seq === askSeq) bubble.webContents.send('play', mp3.toString('base64'))
-    } catch { /* the text is there */ }
+      const sound = await voiceOut.of(text, audio)
+      if (sound && seq === askSeq) {
+        bubble.webContents.send('play', sound)
+        // The answer stays up while it is being said.
+        clearTimeout(hideTimer)
+        const seconds = Math.min(40, 3 + voiceOut.speakable(text).length / 12)
+        hideTimer = setTimeout(() => { if (mode === 'idle' && !bubbleHovered) bubbleState({ mode: 'hidden' }) }, seconds * 1000)
+      }
+    } catch (e) { log('voice failed', e.message) }
   }
 }
 
@@ -530,6 +543,7 @@ function startHotkeys() {
     const alt = down.has(K.Alt) || down.has(K.AltRight)
 
     if (k === K.Escape && first) {
+      bubble.webContents.send('play', null)   // Esc also stops HELPER's voice
       if (mode === 'listening') return stopListening(true)
       if (mode === 'dictating') return stopDictation(true)
       if (mode === 'pointing') { mode = 'idle'; clearMarks(); giveKeyboardBack(); for (const o of overlays.values()) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } return bubbleState({ mode: 'hidden' }) }
@@ -629,6 +643,7 @@ app.whenReady().then(async () => {
   hands = require('./src/hands')
   handsServer = require('./src/hands-server')
   brain = require('./src/brain')
+  voiceOut = require('./src/voice')
   win32 = require('./src/win32')
   hook = require('uiohook-napi')
 
@@ -661,6 +676,7 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('dismiss', () => { endTyping(); mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('mark', (e, rect) => onMark(rect, e.sender))
+  ipcMain.on('voice-state', (e, s) => log('voice', String(s).slice(0, 80)))
   ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); giveKeyboardBack(); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('pill-audio', (e, data) => onAudio(data))
 

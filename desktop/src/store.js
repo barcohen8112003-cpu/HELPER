@@ -10,7 +10,7 @@ const DEFAULTS = {
   helperUrl: 'http://37.60.240.231:3210',
   helperToken: '',
   model: 'haiku',              // haiku: fast; sonnet: for harder work
-  speakAnswers: false,         // HELPER's voice (ElevenLabs on the cloud) for answers to spoken asks
+  speakAnswers: true,          // a spoken answer to a spoken ask: HELPER's voice from the cloud, Windows' Hebrew voice offline
   talkKey: 'ctrl+alt+space',   // hold to talk
   dictationKey: 'rightctrl',   // hold to dictate
   pointKey: 'ctrl+alt+p',

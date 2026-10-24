@@ -72,6 +72,37 @@ const MAX = /^(תגדיל|תגדילי|תגדילו|הגדל|maximi[sz]e)\s+(.+)
 const MIN = /^(תמזער|תמזערי|תמזערו|מזער|תוריד|minimi[sz]e)\s+(.+)$/i
 const SEARCH = /^(תחפש|תחפשי|תחפשו|חפש|חפשי|חפשו|לחפש|גגל|תגגל|search|google)\s+(?:(בגוגל|ביוטיוב|במפות|בגוגל מפות|on youtube|on google|youtube|google)\s+)?(?:על\s+|for\s+)?(.+)$/i
 
+const PLAY_VERB = /^(תפעיל|תפעילי|הפעל|תנגן|תנגני|נגן|תשים|תשימי|שים|תראה לי|play|put on)\s+(.+)$/i
+const MEDIA_WORD = /(^|\s)(ביוטיוב|יוטיוב|סרטון|סרטונים|קליפ|שיר|השיר|שירים|פרק|הפרק|on youtube|youtube|video|song|music video)(\s|$)/i
+
+/**
+ * What to play, or null: a play verb with a video or song word ("ביוטיוב", "סרטון", "שיר"), "תנגן X", or
+ * "יוטיוב X". "תפעיל את ספוטיפיי" (an app) and "תשים את כרום בצד שמאל" (a window) are not plays.
+ */
+function playQuery(s) {
+  let m
+  if ((m = s.match(/^(?:יוטיוב|youtube)\s+(.+)$/i))) return clean(m[1])
+  if (!(m = s.match(PLAY_VERB))) return null
+  const verb = m[1], rest = m[2]
+  const sings = /^(תנגן|תנגני|נגן|play)$/i.test(verb)
+  if (!sings && !MEDIA_WORD.test(rest)) return null
+  if (placeIn(rest) && !MEDIA_WORD.test(rest)) return null
+  const q = clean(rest)
+  return q && !/^(את )?(ה)?(מוזיקה|שיר|סרטון|וידאו)$/.test(q) ? q : null
+
+  function clean(x) {
+    return x
+      .replace(/(^|\s)(ביוטיוב|on youtube|in youtube)(?=\s|$)/gi, ' ')
+      .replace(/^\s*(לי|לנו)\s+/, ' ')
+      .replace(/^\s*(את\s+)?(ה)?(סרטון|קליפ|שיר|פרק)(\s+של)?\s+/, ' ')
+      .replace(/^\s*(את\s+)?(ה)?(סרטון|קליפ|שיר|פרק)(\s+של)?\s+/, ' ')
+      .replace(/^\s*את\s+/, ' ')
+      .replace(/^\s*(the\s+)?(song|video|clip)\s+(of\s+|by\s+)?/i, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+}
+
 /** One instruction → steps, or null when it is not an instant command. */
 function parseOne(s) {
   let m
@@ -101,7 +132,9 @@ function parseOne(s) {
     const site = /יוטיוב|youtube/i.test(where) ? 'youtube' : /מפות/.test(where) ? 'maps' : 'google'
     return [{ cmd: 'search', args: { query: m[3], site } }]
   }
-  if ((m = s.match(/^(?:תפעיל|תשים|תנגן|תראה לי|play)\s+ביוטיוב\s+(.+)$/i)) || (m = s.match(/^יוטיוב\s+(.+)$/i))) return [{ cmd: 'search', args: { query: m[1], site: 'youtube' } }]
+  // Playing a video or a song: "תפעיל ביוטיוב לופי", "תנגן אופק אדנק", "תשים לי את השיר נתתי לך בית".
+  const played = playQuery(s)
+  if (played) return [{ cmd: 'play', args: { query: played } }]
 
   // Close.
   if ((m = s.match(CLOSE))) {

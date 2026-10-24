@@ -94,10 +94,11 @@ helper.on('record', async (r) => {
 })
 
 // ---- HELPER's voice ------------------------------------------------------------------------------
-helper.on('play', (b64) => {
+helper.on('play', (sound) => {
   const a = $('voice')
-  a.src = 'data:audio/mpeg;base64,' + b64
-  a.play().catch(() => {})
+  if (!sound) { a.pause(); a.removeAttribute('src'); return }   // stop
+  a.src = 'data:' + (sound.mime || 'audio/mpeg') + ';base64,' + sound.b64
+  a.play().then(() => helper.send('voice-state', 'playing ' + (sound.mime || ''))).catch((e) => helper.send('voice-state', 'failed: ' + e.message))
 })
 
 // ---- typing, confirming, copying ---------------------------------------------------------------

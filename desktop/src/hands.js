@@ -81,6 +81,23 @@ function pickDisplay(which, current) {
   return (current + 1) % ds.length   // "the other one" / "the next one"
 }
 
+/** The first real video for a search on YouTube: {id, title}, or null (ads and channels are other renderers). */
+async function firstVideo(query) {
+  const r = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=he`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36', 'Accept-Language': 'he-IL,he;q=0.9,en;q=0.8' },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!r.ok) throw new Error('יוטיוב לא ענה')
+  const html = await r.text()
+  const at = html.indexOf('"videoRenderer":{"videoId":"')
+  if (at < 0) return null
+  const m = html.slice(at, at + 8000).match(/"videoId":"([\w-]{11})"[\s\S]*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/)
+  if (!m) return null
+  let title = m[2]
+  try { title = JSON.parse('"' + m[2] + '"') } catch { }
+  return { id: m[1], title }
+}
+
 // ---- the actions --------------------------------------------------------------------------------
 
 /** Each takes args and returns a short Hebrew line for the bubble. Throws with a Hebrew message on failure. */
@@ -224,6 +241,34 @@ const actions = {
     return site === 'youtube' ? `מחפש ביוטיוב: ${strip(query)}` : `מחפש: ${strip(query)}`
   },
 
+  /**
+   * Plays a video or song: the first real result on YouTube (ads and channels skipped), opened at the watch page,
+   * which starts playing. Returns its title. A YouTube link plays as it is.
+   */
+  async play({ query }) {
+    const q = strip(query)
+    if (!q) throw new Error('מה לנגן?')
+    const link = q.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/)
+    let id = link ? link[1] : null
+    let title = ''
+    if (!id) {
+      // The whole query first; when it finds nothing (a misheard word in front), the same without its first words.
+      const words = q.split(/\s+/)
+      const tries = [q]
+      for (let i = 1; words.length - i >= 2 && tries.length < 4; i++) tries.push(words.slice(i).join(' '))
+      for (const t of tries) {
+        const found = await firstVideo(t)
+        if (found) { id = found.id; title = found.title; break }
+      }
+      if (!id) {
+        await shell.openExternal(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`)
+        return `לא מצאתי סרטון אחד מתאים, פתחתי את החיפוש: ${q}`
+      }
+    }
+    await shell.openExternal(`https://www.youtube.com/watch?v=${id}`)
+    return title ? `מנגן: ${title}` : 'מנגן'
+  },
+
   async lock() {
     win.lock()
     return 'נעלתי'
@@ -279,7 +324,7 @@ const actions = {
 }
 
 /** Steps whose effect is visible and harmless to repeat: only these become learned shortcuts. */
-const REPLAYABLE = new Set(['open', 'focus', 'close', 'place', 'desktop', 'volume', 'media', 'web', 'search', 'key', 'wait'])
+const REPLAYABLE = new Set(['open', 'focus', 'close', 'place', 'desktop', 'volume', 'media', 'web', 'search', 'play', 'key', 'wait'])
 
 async function run(step) {
   const fn = actions[step.cmd]
