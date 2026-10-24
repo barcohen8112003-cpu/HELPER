@@ -82,4 +82,4 @@ node test/confirm-check.js     # כרטיס "לאשר?", והמקלדת חוזר
 
 ‏הבדיקות עם HELPER רץ לוחצות רק על החלונות של HELPER ושל פנקס רשימות, ובודקות לפני כל לחיצה שהם אכן בחזית.
 
-`node_moduleselectrondistelectron.exe . --ask "תפתח את ספוטיפיי"` (מתוך desktop) שולח שאלה מבחוץ, כמו הקלדה. זה שימושי לכפתורים ב-Stream Deck.
+`node_modules\electron\dist\electron.exe . --ask "תפתח את ספוטיפיי"` (מתוך desktop) שולח שאלה מבחוץ, כמו הקלדה. זה שימושי לכפתורים ב-Stream Deck.
