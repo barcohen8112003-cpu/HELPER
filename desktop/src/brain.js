@@ -80,6 +80,8 @@ function context(extra) {
  */
 let claudeExe
 function claudeCommand() {
+  // Tests put a stand-in here that speaks Claude Code's stream-json (test/fake-claude.js).
+  if (process.env.HELPER_CLAUDE_EXE) return process.env.HELPER_CLAUDE_EXE
   if (claudeExe) return claudeExe
   const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
   if (process.env.USERPROFILE) dirs.push(path.join(process.env.USERPROFILE, '.local', 'bin'))
@@ -131,7 +133,11 @@ function askClaude(text, extra, onEvent) {
       return resolve({ ok: false, missing: true, text: '' })
     }
     try {
-      child = spawn(exe, args, { cwd: store.workDir(), windowsHide: true, env: Object.assign({}, process.env, { HELPER_DESKTOP: '1' }) })
+      const env = Object.assign({}, process.env, { HELPER_DESKTOP: '1' })
+      // A .js stand-in (tests) runs through Node: Electron's own binary is Node with ELECTRON_RUN_AS_NODE.
+      child = /\.m?js$/i.test(exe)
+        ? spawn(process.execPath, [exe, ...args], { cwd: store.workDir(), windowsHide: true, env: Object.assign(env, { ELECTRON_RUN_AS_NODE: '1' }) })
+        : spawn(exe, args, { cwd: store.workDir(), windowsHide: true, env })
     } catch (e) {
       claudeState = 'missing'
       return resolve({ ok: false, missing: true, text: '' })

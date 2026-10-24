@@ -362,8 +362,10 @@ async function handleAsk(raw, { voice = false } = {}) {
 
   handsServer.startRecording()
   const steps = []
+  let lookedAtScreen = false
   const res = await brain.askClaude(raw, extra, (ev) => {
     if (seq !== askSeq) return
+    if (ev.type === 'tool' && ev.name === 'Read' && /.png$/i.test((ev.input || {}).file_path || '')) lookedAtScreen = true
     if (ev.type === 'tool' && ev.name !== 'Bash') steps.push(stepLabel(ev))
     if (ev.type === 'tool' || ev.type === 'text') bubbleState({ mode: 'thinking', heard: raw, steps: steps.slice(-3) })
   })
@@ -371,8 +373,9 @@ async function handleAsk(raw, { voice = false } = {}) {
   if (seq !== askSeq) return
 
   if (res.ok && res.text) {
-    // Learn it when every step was a plain, repeatable action that worked (nothing read off the screen).
-    if (!usedMark && !extra.screenshot && record.length && record.every((s) => s.ok && hands.REPLAYABLE.has(s.cmd))) {
+    // Learn it when every step was a plain, repeatable action that worked, and nothing depended on what was on
+    // the screen (Claude did not look at it, the user pointed at nothing).
+    if (!usedMark && !lookedAtScreen && record.length && record.every((s) => s.ok && hands.REPLAYABLE.has(s.cmd))) {
       store.learn(text, record.map((s) => ({ cmd: s.cmd, args: s.args })), 'claude')
     }
     return finish(seq, raw, res.text, 'claude', started, false, voice)
