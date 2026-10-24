@@ -10,9 +10,32 @@ window.Recorder = (() => {
     chunks = []
     recording = true
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+      let audioConstraints = { channelCount: 1, autoGainControl: true }
+      try {
+        const devs = await navigator.mediaDevices.enumerateDevices()
+        const vm = devs.find((d) => d.kind === 'audioinput' && /voicemod/i.test(d.label))
+        if (vm) {
+          // Voicemod handles its own audio processing. WebRTC's echoCancellation and noiseSuppression
+          // aggressively attenuate modulated/virtual audio streams, so turn them off for Voicemod.
+          audioConstraints = {
+            deviceId: { exact: vm.deviceId },
+            channelCount: 1,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: true,
+          }
+        } else {
+          audioConstraints.echoCancellation = true
+          audioConstraints.noiseSuppression = true
+        }
+      } catch { }
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
+      // Which microphone opened, in the app log: with several (virtual ones too) this is the first thing to know.
+      const track = stream.getAudioTracks()[0]
+      if (window.helper) helper.send('voice-state', 'mic: ' + (track ? track.label : 'none'))
     } catch (e) {
       recording = false
+      if (window.helper) helper.send('voice-state', 'mic failed: ' + e.name + ' ' + e.message)
       throw e
     }
     if (!recording) { close(); return }   // let go before the microphone opened

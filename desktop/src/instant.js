@@ -125,6 +125,26 @@ function parseOne(s) {
   // The desktop and the PC.
   if (/^(תמזער הכל|מזער הכל|תמזער את הכל|תראה שולחן עבודה|תראה לי את שולחן העבודה|שולחן עבודה|show( the)? desktop|minimi[sz]e (all|everything))$/i.test(s)) return [{ cmd: 'desktop' }]
   if (/^(תנעל|נעל|לנעול|lock)( את)?( ה)?(מחשב|מסך|pc|computer|screen)?$/i.test(s)) return [{ cmd: 'lock' }]
+  if (/^(מצב המחשב|מצב מערכת|ביצועים|מה העומס|כמה זיכרון פנוי|כמה ראם|ביצועי מחשב|system info|specs|pc stats)$/i.test(s)) return [{ cmd: 'system' }]
+  if (/^(מה העתקתי|מה יש בלוח|מה בלוח|תקריא את מה שהעתקתי|לוח העתקות|לוח|what did i copy|clipboard)$/i.test(s)) return [{ cmd: 'clipboard', args: { op: 'read' } }]
+  if (/^(תנקה את הלוח|נקה לוח|תנקה את מה שהעתקתי|clear clipboard)$/i.test(s)) return [{ cmd: 'clipboard', args: { op: 'write', text: '' } }]
+
+  // Workspaces & Layout presets
+  if (/^(מצב עבודה|מצב תכנות|מצב קוד|סדר לי את המסך לעבודה|work mode|coding mode)$/i.test(s)) return [{ cmd: 'workspace', args: { mode: 'code' } }]
+  if (/^(מצב קריאה|מצב פוקוס|reading mode|focus mode)$/i.test(s)) return [{ cmd: 'workspace', args: { mode: 'reading' } }]
+  if (/^(נקה מסך|שולחן עבודה נקי|clean workspace)$/i.test(s)) return [{ cmd: 'workspace', args: { mode: 'clean' } }]
+
+  // Browser Tabs & Navigation
+  if (/^(כרטיסייה חדשה|טאב חדש|תפתח טאב חדש|new tab)$/i.test(s)) return [{ cmd: 'browser_tab', args: { action: 'new' } }]
+  if (/^(סגור כרטיסייה|סגור טאב|תסגור את הטאב|תסגור טאב|close tab)$/i.test(s)) return [{ cmd: 'browser_tab', args: { action: 'close' } }]
+  if (/^(תפתח מחדש את הטאב|תחזיר את הטאב|שחזר טאב|reopen tab)$/i.test(s)) return [{ cmd: 'browser_tab', args: { action: 'reopen' } }]
+  if (/^(כרטיסייה הבאה|טאב הבא|next tab)$/i.test(s)) return [{ cmd: 'browser_tab', args: { action: 'next' } }]
+  if (/^(כרטיסייה קודמת|טאב קודם|previous tab|prev tab)$/i.test(s)) return [{ cmd: 'browser_tab', args: { action: 'prev' } }]
+  if (/^(רענן|תרענן|רענן דף|רענן את הדף|refresh|reload)$/i.test(s)) return [{ cmd: 'browser_tab', args: { action: 'refresh' } }]
+
+  // Downloads & Files
+  if (/^(מה הקובץ האחרון שהורדתי|הקובץ האחרון בהורדות|הורדה אחרונה|latest download)$/i.test(s)) return [{ cmd: 'latest_download', args: { open: false } }]
+  if (/^(תפתח את הקובץ האחרון שהורדתי|תפתח את ההורדה האחרונה|open latest download)$/i.test(s)) return [{ cmd: 'latest_download', args: { open: true } }]
 
   // Search.
   if ((m = s.match(SEARCH))) {

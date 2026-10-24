@@ -11,7 +11,7 @@ const DEFAULTS = {
   helperToken: '',
   model: 'haiku',              // haiku: fast; sonnet: for harder work
   speakAnswers: true,          // a spoken answer to a spoken ask: HELPER's voice from the cloud, Windows' Hebrew voice offline
-  talkKey: 'ctrl+alt+space',   // hold to talk
+  talkKey: 'pagedown',         // hold or press PageDown (PD) / Ctrl+Alt+Q
   dictationKey: 'rightctrl',   // hold to dictate
   pointKey: 'ctrl+alt+p',
   startAtLogin: true,

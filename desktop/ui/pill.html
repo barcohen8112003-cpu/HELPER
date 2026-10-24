@@ -9,8 +9,11 @@
   body { display: flex; align-items: center; justify-content: center; font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; }
   .pill {
     display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 16px; border-radius: 22px;
-    background: rgba(17, 19, 26, 0.94); border: 1px solid rgba(255,255,255,0.1); color: #F2F3F7;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.45); font-size: 13.5px; transition: border-color 0.2s;
+    background: rgba(14, 16, 25, 0.90);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid rgba(255,255,255,0.12); color: #F5F6FA;
+    box-shadow: 0 12px 35px rgba(0,0,0,0.55), 0 0 20px rgba(139, 124, 255, 0.15); font-size: 13.5px; transition: border-color 0.2s;
   }
   .pill.done { border-color: rgba(110, 231, 168, 0.8); }
   .pill.error { border-color: rgba(255, 122, 122, 0.8); }

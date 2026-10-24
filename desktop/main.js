@@ -2,7 +2,7 @@
 // field; Ctrl+Alt+P to point at something on the screen and then ask about it. Instant commands run with no AI;
 // the rest goes to Claude Code on this PC with HELPER's hands, or to HELPER on the cloud.
 'use strict'
-const { app, BrowserWindow, Tray, Menu, nativeImage, screen, desktopCapturer, ipcMain, session, shell, Notification } = require('electron')
+const { app, BrowserWindow, Tray, Menu, nativeImage, screen, desktopCapturer, ipcMain, session, shell, Notification, globalShortcut } = require('electron')
 const path = require('path')
 const fs = require('fs')
 
@@ -145,22 +145,39 @@ function overlayFor(display) {
   return o
 }
 
+let pendingBubbleState = null
+
 /** Puts the bubble at the top centre of the screen with the mouse, and shows it without taking focus. */
 function placeBubble() {
+  if (!bubble || bubble.isDestroyed()) return
   const d = cursorDisplay()
   const [w] = bubble.getSize()
   bubble.setPosition(Math.round(d.workArea.x + (d.workArea.width - w) / 2), d.workArea.y + 14)
-  if (!bubble.isVisible()) bubble.showInactive()
+  if (!bubble.isVisible()) bubble.show()
 }
 
 function bubbleState(state) {
   clearTimeout(hideTimer)
+  if (!bubble || bubble.isDestroyed()) return
+  if (bubble.webContents.isLoading()) {
+    pendingBubbleState = state
+    bubble.webContents.once('did-finish-load', () => {
+      if (pendingBubbleState) {
+        const s = pendingBubbleState
+        pendingBubbleState = null
+        bubbleState(s)
+      }
+    })
+    return
+  }
   if (state.mode === 'hidden') {
     bubble.webContents.send('state', state)
     hideTimer = setTimeout(() => { if (mode === 'idle') bubble.hide() }, 260)
     return
   }
   placeBubble()
+  bubble.show()
+  try { bubble.moveTop() } catch { }
   bubble.webContents.send('state', state)
 }
 
@@ -181,6 +198,7 @@ function startListening() {
   if (mode === 'thinking') brain.cancel()
   mode = 'listening'
   voiceAsk = true
+  log('listening')
   bubbleState({ mode: 'listening', mark: Boolean(mark) })
   bubble.webContents.send('record', { action: 'start', purpose: 'ask' })
 }
@@ -284,10 +302,25 @@ function speechHints() {
 
 async function onAudio({ wav, purpose }) {
   const bytes = Buffer.from(wav)
-  // Under half a second, or no speech in it: nothing was said (whisper would make something up).
-  if (bytes.length < 16000 || !speech.hasSpeech(bytes)) {
+  log('audio', purpose, bytes.length, 'bytes, speech:', speech.hasSpeech(bytes), 'level:', speech.level(bytes).toFixed(3))
+  // Under a quarter second: accidental tap or instant release.
+  if (bytes.length < 8000) {
     if (purpose === 'dictate') { pill.hide(); return }
     mode = 'idle'
+    return bubbleState({ mode: 'hidden' })
+  }
+  if (!speech.hasSpeech(bytes)) {
+    const lvl = speech.level(bytes)
+    log('silence or low speech level:', lvl.toFixed(3))
+    if (purpose === 'dictate') {
+      pill.webContents.send('state', { mode: 'error', text: 'לא נקלט קול' })
+      setTimeout(() => pill.hide(), 1600)
+      return
+    }
+    mode = 'idle'
+    if (lvl > 0.005) {
+      return answer('לא נקלט קול ברור מ-Voicemod. בדוק שעוצמת המיקרופון ב-Voicemod מוגברת ושהמיקרופון אינו מושתק.', { error: true })
+    }
     return bubbleState({ mode: 'hidden' })
   }
   let text = ''
@@ -394,9 +427,9 @@ async function handleAsk(raw, { voice = false } = {}) {
   handsServer.startRecording()
   const steps = []
   let lookedAtScreen = false
-  const res = await brain.askClaude(raw, extra, (ev) => {
+  const res = await brain.ask(raw, extra, (ev) => {
     if (seq !== askSeq) return
-    if (ev.type === 'tool' && ev.name === 'Read' && /.png$/i.test((ev.input || {}).file_path || '')) lookedAtScreen = true
+    if (ev.type === 'tool' && (ev.name === 'Read' || ev.name === 'take_screenshot') && /.png$/i.test((ev.input || {}).file_path || '')) lookedAtScreen = true
     if (ev.type === 'tool' && ev.name !== 'Bash') steps.push(stepLabel(ev))
     if (ev.type === 'tool' || ev.type === 'text') bubbleState({ mode: 'thinking', heard: raw, steps: steps.slice(-3) })
   })
@@ -404,37 +437,39 @@ async function handleAsk(raw, { voice = false } = {}) {
   if (seq !== askSeq) return
 
   if (res.ok && res.text) {
-    // Learn it when every step was a plain, repeatable action that worked, and nothing depended on what was on
-    // the screen (Claude did not look at it, the user pointed at nothing).
     if (!usedMark && !lookedAtScreen && record.length && record.every((s) => s.ok && hands.REPLAYABLE.has(s.cmd))) {
-      store.learn(text, record.map((s) => ({ cmd: s.cmd, args: s.args })), 'claude')
+      store.learn(text, record.map((s) => ({ cmd: s.cmd, args: s.args })), 'brain')
     }
-    return finish(seq, raw, res.text, 'claude', started, false, voice)
+    return finish(seq, raw, res.text, 'brain', started, false, voice)
   }
 
-  log('claude gave no answer:', JSON.stringify(res).slice(0, 400))
-  // 4. HELPER on the cloud, when Claude Code can't run (or gave no answer).
-  // English words sit in direction isolates (LRI…PDI) so "/login" and paths read right inside Hebrew.
+  log('brain gave no answer:', JSON.stringify(res).slice(0, 400))
+  // 4. HELPER on the cloud, when local brain can't run
   const iso = (s) => '⁦' + s + '⁩'
-  const claudeHow = res.signedOut ? `צריך לחבר את Claude Code במחשב: בטרמינל מריצים ${iso('claude')} ואז ${iso('/login')}.`
-    : res.missing ? `Claude Code לא מותקן במחשב (${iso('npm i -g @anthropic-ai/claude-code')}).`
-    : res.text ? '' : 'Claude Code לא הצליח לענות הפעם.'
   try {
     const h = await brain.askHelper(raw, { voice: voice && store.settings().speakAnswers })
     if (seq !== askSeq) return
-    return finish(seq, raw, h.reply || 'אין תשובה', 'cloud', started, false, voice, h.audio, claudeHow ? 'ענה HELPER מהענן. ' + claudeHow : '')
+    return finish(seq, raw, h.reply || 'אין תשובה', 'cloud', started, false, voice, h.audio)
   } catch (e) {
-    const cloudHow = /חסר קוד חיבור/.test(e.message) ? `HELPER בענן עוד לא מחובר: מריצים פעם אחת את ${iso('desktop\\connect.ps1')}.` : e.message
-    return finish(seq, raw, claudeHow || cloudHow, 'none', started, true, false, null, claudeHow ? cloudHow : '')
+    return finish(seq, raw, res.text || e.message || 'לא הצלחתי לענות הפעם', 'none', started, true, false)
   }
 }
 
 function stepLabel(ev) {
   const i = ev.input || {}
   if (ev.name === 'Read') return /\.png$/i.test(i.file_path || '') ? 'מסתכל על המסך' : 'קורא קובץ'
-  if (ev.name === 'WebSearch') return 'מחפש ברשת: ' + String(i.query || '').slice(0, 40)
+  if (ev.name === 'WebSearch' || ev.name === 'search_web') return 'מחפש ברשת: ' + String(i.query || '').slice(0, 40)
   if (ev.name === 'WebFetch') return 'קורא דף'
   if (ev.name === 'Glob' || ev.name === 'Grep') return 'מחפש קבצים'
+  if (ev.name === 'open_app_or_web') return 'פותח: ' + (i.name || '')
+  if (ev.name === 'play_youtube') return 'מנגן ביוטיוב: ' + (i.query || '')
+  if (ev.name === 'set_volume') return 'מכוון עוצמת שמע'
+  if (ev.name === 'system_status') return 'בודק נתוני מערכת'
+  if (ev.name === 'clipboard_action') return 'בודק לוח העתקות'
+  if (ev.name === 'run_command') return 'מריץ פקודה: ' + String(i.command || '').slice(0, 30)
+  if (ev.name === 'workspace_mode') return 'מסדר את סביבת העבודה'
+  if (ev.name === 'browser_tab_control') return 'מנהל כרטיסיות בדפדפן'
+  if (ev.name === 'latest_download_file') return 'בודק הורדות אחרונות'
   return ev.name
 }
 
@@ -496,7 +531,7 @@ async function onMark({ x, y, width, height }, sender) {
   mark = { x: pd.bounds.x + rect.x, y: pd.bounds.y + rect.y, width: rect.width, height: rect.height, crop: cropFile, shot: shot.path }
   log('mark', JSON.stringify({ x: mark.x, y: mark.y, width: mark.width, height: mark.height }))
   mode = 'idle'
-  bubbleState({ mode: 'hint', text: 'סימנתי 🎯 עכשיו תשאל: החזק Ctrl+Alt+Space ודבר, או לחיצה קצרה להקלדה.', mark: true })
+  bubbleState({ mode: 'hint', text: 'סימנתי 🎯 עכשיו תשאל: החזק Ctrl+Alt+Q ודבר, או לחיצה קצרה להקלדה.', mark: true })
 }
 
 function clearMarks() {
@@ -535,12 +570,46 @@ function startHotkeys() {
   let dictTimer = null
   let dictClean = true
 
+  const onToggleTalk = () => {
+    log('globalShortcut talk triggered, current mode:', mode)
+    if (Date.now() - talkAt < 400) {
+      log('globalShortcut ignored duplicate trigger within 400ms')
+      return
+    }
+    if (mode === 'idle') {
+      talkAt = Date.now()
+      startListening()
+    } else if (mode === 'listening') {
+      stopListening(false)
+    } else if (mode === 'typing') {
+      endTyping()
+      mode = 'idle'
+      bubbleState({ mode: 'hidden' })
+    }
+  }
+
+  // Native Windows RegisterHotKey API (guaranteed system-wide delivery without hook interference)
+  try {
+    globalShortcut.register('PageDown', onToggleTalk)
+    globalShortcut.register('CommandOrControl+Alt+Q', onToggleTalk)
+    globalShortcut.register('F8', onToggleTalk)
+    globalShortcut.register('CommandOrControl+Alt+P', () => {
+      log('globalShortcut Ctrl+Alt+P triggered')
+      startPointing()
+    })
+    log('globalShortcut registered successfully for PageDown (PD), Ctrl+Alt+Q, F8, and Ctrl+Alt+P')
+  } catch (err) {
+    log('globalShortcut registration error:', err.message)
+  }
+
   uIOhook.on('keydown', (e) => {
     const k = e.keycode
     const first = !down.has(k)
     down.add(k)
     const ctrl = down.has(K.Ctrl) || down.has(K.CtrlRight)
+    const win = down.has(K.Meta) || down.has(K.MetaRight)
     const alt = down.has(K.Alt) || down.has(K.AltRight)
+    const mod = ctrl || win
 
     if (k === K.Escape && first) {
       bubble.webContents.send('play', null)   // Esc also stops HELPER's voice
@@ -553,13 +622,23 @@ function startHotkeys() {
       if (bubble.isVisible() && mode !== 'typing') { mode = 'idle'; return bubbleState({ mode: 'hidden' }) }
     }
 
-    // Ctrl+Alt+Space: hold to talk.
-    if (k === K.Space && first && ctrl && alt && mode !== 'listening' && mode !== 'typing') {
-      talkAt = Date.now()
-      return startListening()
+    // PageDown (PD) single button, or Ctrl+Alt+Q / Ctrl+Alt+Space:
+    const isPd = (k === K.PageDown || k === K.NumpadPageDown || k === K.F8)
+    const isCombo = ((k === K.Q || k === K.Space) && mod && alt)
+    if ((isPd || isCombo) && first) {
+      if (Date.now() - talkAt < 400) {
+        log('uiohook keydown ignored duplicate trigger within 400ms')
+        return
+      }
+      if (mode === 'idle') {
+        talkAt = Date.now()
+        return startListening()
+      } else if (mode === 'listening') {
+        return stopListening(false)
+      }
     }
-    // Ctrl+Alt+P: point.
-    if (k === K.P && first && ctrl && alt) return startPointing()
+    // Ctrl+Alt+P or Win+Alt+P: point.
+    if (k === K.P && first && mod && alt) return startPointing()
 
     // Right Ctrl alone, held: dictation. Any other key with it makes it a shortcut, not dictation.
     if (k === K.CtrlRight && first && down.size === 1) {
@@ -574,21 +653,26 @@ function startHotkeys() {
   uIOhook.on('keyup', (e) => {
     const k = e.keycode
     down.delete(k)
-    if (mode === 'listening' && (k === K.Space || k === K.Ctrl || k === K.CtrlRight || k === K.Alt || k === K.AltRight)) {
-      if (Date.now() - talkAt < 350) {
-        // A tap: type instead of talking.
-        bubble.webContents.send('record', { action: 'cancel', purpose: 'ask' })
-        return startTyping()
+    const isPdUp = (k === K.PageDown || k === K.NumpadPageDown || k === K.F8)
+    const isComboUp = (k === K.Q || k === K.Space || k === K.Ctrl || k === K.CtrlRight || k === K.Meta || k === K.MetaRight || k === K.Alt || k === K.AltRight)
+    if (mode === 'listening' && (isPdUp || isComboUp)) {
+      if (Date.now() - talkAt >= 400) {
+        // Push-to-talk: user held down key while talking and now released
+        return stopListening(false)
       }
-      return stopListening(false)
+      // Toggle mode: user tapped quickly (< 400ms). Keep recording until they tap again or press Esc!
     }
     if (k === K.CtrlRight) {
       clearTimeout(dictTimer)
       if (mode === 'dictating') stopDictation(false)
     }
   })
-  uIOhook.start()
-  log('hotkeys on')
+  try {
+    uIOhook.start()
+    log('hotkeys on')
+  } catch (err) {
+    log('uiohook start error:', err.message)
+  }
 }
 
 // ---- tray ---------------------------------------------------------------------------------------
@@ -599,8 +683,8 @@ function trayMenu() {
   return Menu.buildFromTemplate([
     { label: 'HELPER למחשב', enabled: false },
     { type: 'separator' },
-    { label: 'לדבר: להחזיק Ctrl+Alt+Space', click: () => startTyping() },
-    { label: 'להקליד: לחיצה קצרה על Ctrl+Alt+Space', click: () => startTyping() },
+    { label: 'לדבר: כפתור PageDown (PD) או Ctrl+Alt+Q', click: () => startTyping() },
+    { label: 'להקליד: לחיצה קצרה על PD / Ctrl+Alt+Q', click: () => startTyping() },
     { label: 'הכתבה: להחזיק Ctrl ימני', enabled: false },
     { label: 'להצביע על המסך: Ctrl+Alt+P', click: () => startPointing() },
     { type: 'separator' },
@@ -682,7 +766,7 @@ app.whenReady().then(async () => {
 
   const icon = nativeImage.createFromPath(path.join(ROOT, 'ui', 'icon.png'))
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 16, height: 16 }))
-  tray.setToolTip('HELPER — להחזיק Ctrl+Alt+Space ולדבר')
+  tray.setToolTip('HELPER — לדבר: PageDown (PD) או Ctrl+Alt+Q')
   tray.setContextMenu(trayMenu())
   tray.on('click', () => startTyping())
   tray.on('right-click', () => refreshTray())
@@ -695,7 +779,9 @@ app.whenReady().then(async () => {
   if (!speech.available(ROOT)) new Notification({ title: 'HELPER', body: 'מנוע הדיבור לא הורד: desktop\\vendor חסר. הכתיבה עובדת.' }).show()
 
   log('started')
-  askFromArgs(process.argv)
+  if (!askFromArgs(process.argv)) {
+    answer('HELPER מוכן! לחץ PageDown (PD) או Ctrl+Alt+Q כדי לדבר')
+  }
 })
 
 /** `--ask "תפתח את ספוטיפיי"` on the command line: that ask, as if typed (Stream Deck buttons, shortcuts, tests). */
@@ -737,6 +823,7 @@ app.on('second-instance', (e, argv, cwd, extra) => {
 })
 app.on('window-all-closed', (e) => e.preventDefault())
 app.on('before-quit', () => {
+  try { globalShortcut.unregisterAll() } catch { }
   try { hook && hook.uIOhook.stop() } catch { }
   speech && speech.stop()
   brain && brain.cancel()

@@ -119,6 +119,19 @@ const actions = {
       win.focus(w.hwnd)
       return `עברתי ל${strip(name)}`
     }
+    const clean = strip(name).toLowerCase().replace(/^(את |ה)(?=\S)/, '')
+    if (/^(הורדות|downloads)$/i.test(clean)) {
+      await shell.openExternal('shell:Downloads')
+      return 'פותח את תיקיית ההורדות'
+    }
+    if (/^(מסמכים|documents)$/i.test(clean)) {
+      await shell.openExternal('shell:Personal')
+      return 'פותח את תיקיית המסמכים'
+    }
+    if (/^(סייר הקבצים|סייר קבצים|קבצים|מחשב שלי|explorer)$/i.test(clean)) {
+      await shell.openExternal('shell:MyComputerFolder')
+      return 'פותח את סייר הקבצים'
+    }
     const app = apps.find(name)
     if (app) {
       apps.launch(app)
@@ -127,6 +140,22 @@ const actions = {
     if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(strip(name))) {
       await shell.openExternal('https://' + strip(name).replace(/^https?:\/\//, ''))
       return `פותח את ${strip(name)}`
+    }
+    // Web shortcut aliases:
+    const SITES = {
+      'יוטיוב': 'https://www.youtube.com',
+      'גוגל': 'https://www.google.com',
+      'וואטסאפ ווב': 'https://web.whatsapp.com',
+      'נטפליקס': 'https://www.netflix.com',
+      'גיטהאב': 'https://github.com',
+      'טוויטר': 'https://x.com',
+      'פייסבוק': 'https://facebook.com',
+      'אינסטגרם': 'https://instagram.com',
+      'רדיט': 'https://reddit.com',
+    }
+    if (SITES[clean]) {
+      await shell.openExternal(SITES[clean])
+      return `פותח את ${strip(name)} בדפדפן`
     }
     throw new Error(`לא מצאתי אפליקציה בשם ${strip(name)}`)
   },
@@ -317,6 +346,113 @@ const actions = {
     return await ui.askHelper(strip(question))
   },
 
+  async clipboard({ op = 'read', text = '' }) {
+    const { clipboard } = require('electron')
+    if (op === 'write' || op === 'set') {
+      clipboard.writeText(String(text))
+      return 'העתקתי ללוח'
+    }
+    const content = clipboard.readText()
+    return content ? `בלוח העתקות:\n${content.slice(0, 500)}` : 'לוח ההעתקות ריק'
+  },
+
+  async system() {
+    const os = require('os')
+    const totalMem = Math.round(os.totalmem() / (1024 * 1024 * 1024))
+    const freeMem = (os.freemem() / (1024 * 1024 * 1024)).toFixed(1)
+    const usedMem = (totalMem - Number(freeMem)).toFixed(1)
+    const cpus = os.cpus().length
+    const uptimeH = Math.round(os.uptime() / 3600)
+    return `מעבד: ${cpus} ליבות · זיכרון: ${usedMem}/${totalMem}GB (${freeMem}GB פנוי) · דולק ${uptimeH} שעות`
+  },
+
+  async shell({ command }) {
+    const { exec } = require('child_process')
+    if (!command || !command.trim()) throw new Error('חסרה פקודה להרצה')
+    return new Promise((resolve, reject) => {
+      exec(command, { timeout: 15000, windowsHide: true }, (err, stdout, stderr) => {
+        if (err && !stdout) return reject(new Error('שגיאה בהרצה: ' + (stderr || err.message)))
+        const res = (stdout || stderr || 'בוצע').trim()
+        resolve(res.slice(0, 1000))
+      })
+    })
+  },
+
+  async workspace({ mode = 'code' }) {
+    if (mode === 'code' || mode === 'work') {
+      let codeWin = findWindow('Visual Studio Code') || findWindow('Cursor') || findWindow('Code')
+      if (!codeWin) {
+        const app = apps.find('Visual Studio Code') || apps.find('Cursor')
+        if (app) apps.launch(app)
+      }
+      let webWin = findWindow('Chrome') || findWindow('Edge') || findWindow('Firefox')
+      if (!webWin) {
+        const app = apps.find('Chrome') || apps.find('Edge')
+        if (app) apps.launch(app)
+      }
+      await sleep(700)
+      codeWin = findWindow('Visual Studio Code') || findWindow('Cursor') || findWindow('Code')
+      webWin = findWindow('Chrome') || findWindow('Edge') || findWindow('Firefox')
+      const ds = ui.displays()
+      const d = ds[0]
+      if (d) {
+        const a = d.workArea
+        const half = Math.round(a.width / 2)
+        if (codeWin) win.place(codeWin.hwnd, { x: a.x, y: a.y, width: half, height: a.height })
+        if (webWin) win.place(webWin.hwnd, { x: a.x + half, y: a.y, width: half, height: a.height })
+      }
+      return 'סידרתי מצב עבודה: קוד בצד שמאל ודפדפן בצד ימין'
+    }
+    if (mode === 'reading' || mode === 'focus') {
+      const fg = win.foreground()
+      if (fg) {
+        const ds = ui.displays()
+        const d = ds[0]
+        if (d) {
+          const a = d.workArea
+          win.place(fg.hwnd, { x: a.x + Math.round(a.width * 0.15), y: a.y + Math.round(a.height * 0.05), width: Math.round(a.width * 0.7), height: Math.round(a.height * 0.9) })
+        }
+      }
+      return 'סידרתי מצב קריאה ממוקד'
+    }
+    if (mode === 'clean') {
+      win.combo('win+d')
+      return 'ניקיתי את שולחן העבודה'
+    }
+    return 'סביבת העבודה סודרה'
+  },
+
+  async browser_tab({ action = 'new' }) {
+    const map = { new: 'ctrl+t', close: 'ctrl+w', reopen: 'ctrl+shift+t', next: 'ctrl+tab', prev: 'ctrl+shift+tab', refresh: 'ctrl+r' }
+    win.combo(map[action] || 'ctrl+t')
+    const labels = {
+      new: 'פתחתי כרטיסייה חדשה', close: 'סגרתי כרטיסייה', reopen: 'פתחתי מחדש את הכרטיסייה האחרונה',
+      next: 'עברתי לכרטיסייה הבאה', prev: 'עברתי לכרטיסייה הקודמת', refresh: 'רעננתי את הדף'
+    }
+    return labels[action] || 'בוצע בדפדפן'
+  },
+
+  async latest_download({ open = false } = {}) {
+    const home = process.env.USERPROFILE || ''
+    const dlDir = path.join(home, 'Downloads')
+    if (!fs.existsSync(dlDir)) throw new Error('תיקיית ההורדות לא נמצאה')
+    const files = fs.readdirSync(dlDir).map((f) => {
+      const p = path.join(dlDir, f)
+      try {
+        const stat = fs.statSync(p)
+        return { name: f, path: p, time: stat.mtimeMs, isFile: stat.isFile() }
+      } catch { return null }
+    }).filter(f => f && f.isFile).sort((a, b) => b.time - a.time)
+
+    if (!files.length) return 'לא נמצאו קבצים בתיקיית ההורדות'
+    const latest = files[0]
+    if (open) {
+      await shell.openPath(latest.path)
+      return `פותח את הקובץ האחרון: ${latest.name}`
+    }
+    return `הקובץ האחרון שהורד:\n${latest.name}`
+  },
+
   async wait({ ms = 500 }) {
     await sleep(Math.min(10000, Number(ms) || 500))
     return ''
@@ -324,7 +460,7 @@ const actions = {
 }
 
 /** Steps whose effect is visible and harmless to repeat: only these become learned shortcuts. */
-const REPLAYABLE = new Set(['open', 'focus', 'close', 'place', 'desktop', 'volume', 'media', 'web', 'search', 'play', 'key', 'wait'])
+const REPLAYABLE = new Set(['open', 'focus', 'close', 'place', 'desktop', 'volume', 'media', 'web', 'search', 'play', 'key', 'wait', 'clipboard', 'system', 'workspace', 'browser_tab'])
 
 async function run(step) {
   const fn = actions[step.cmd]

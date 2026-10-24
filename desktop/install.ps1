@@ -27,9 +27,9 @@ foreach ($t in $targets) {
     $s.Arguments = '"' + $here + '"'
     $s.WorkingDirectory = $here
     $s.IconLocation = (Join-Path $here 'ui\icon.ico')
-    $s.Description = 'HELPER: hold Ctrl+Alt+Space and talk'
+    $s.Description = 'HELPER: hold Ctrl+Alt+Q and talk'
     $s.Save()
 }
 Write-Host 'Shortcuts: Start menu and desktop ("HELPER").'
 Start-Process -FilePath $electron -ArgumentList ('"' + $here + '"') -WorkingDirectory $here
-Write-Host 'HELPER is running: its icon is next to the clock. Hold Ctrl+Alt+Space and talk.'
+Write-Host 'HELPER is running: its icon is next to the clock. Hold Ctrl+Alt+Q and talk.'

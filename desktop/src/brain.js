@@ -6,6 +6,7 @@ const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const store = require('./store')
+const directLlm = require('./direct-llm')
 
 const HANDS = path.join(__dirname, '..', 'bin', 'hands.mjs').replace(/\\/g, '/')
 const CONTINUE_MS = 3 * 60 * 1000   // a new ask this soon after the last one continues the same conversation
@@ -261,4 +262,20 @@ async function voiceOf(text) {
   return Buffer.from(await r.arrayBuffer())
 }
 
-module.exports = { askClaude, askHelper, voiceOf, cancel, state: () => claudeState, HANDS }
+/**
+ * Unified smart ask: tries Claude Code if available and valid, but falls back seamlessly to direct LLM with full tools & vision.
+ */
+async function ask(text, extra, onEvent) {
+  const exe = claudeCommand()
+  if (exe && claudeState !== 'signed-out') {
+    try {
+      const res = await askClaude(text, extra, onEvent)
+      if (res && res.ok && res.text && !/usage_limit_reached|session limit/i.test(res.text)) {
+        return res
+      }
+    } catch {}
+  }
+  return await directLlm.ask(text, extra, onEvent)
+}
+
+module.exports = { ask, askClaude, askHelper, voiceOf, cancel, state: () => claudeState, HANDS }

@@ -93,9 +93,9 @@ function hasSpeech(wav) {
     for (let j = i; j < i + frame; j++) sum += pcm[j] * pcm[j]
     const rms = Math.sqrt(sum / frame) / 32768
     if (rms > peak) peak = rms
-    if (rms > 0.018) loud++
+    if (rms > 0.010) loud++
   }
-  return loud >= 10 && peak > 0.035
+  return loud >= 8 && peak > 0.022
 }
 
 // What whisper (and this Hebrew model, trained on Knesset sessions and subtitles) says over silence or noise.
@@ -119,4 +119,16 @@ function clean(s) {
   return t
 }
 
-module.exports = { start, stop, transcribe, available, clean, hasSpeech }
+/** The loudest 20 ms of a WAV, 0..1 (for the log). */
+function level(wav) {
+  const pcm = new Int16Array(wav.buffer, wav.byteOffset + 44, Math.floor((wav.length - 44) / 2))
+  let peak = 0
+  for (let i = 0; i + 320 <= pcm.length; i += 320) {
+    let sum = 0
+    for (let j = i; j < i + 320; j++) sum += pcm[j] * pcm[j]
+    peak = Math.max(peak, Math.sqrt(sum / 320) / 32768)
+  }
+  return peak
+}
+
+module.exports = { start, stop, transcribe, available, clean, hasSpeech, level }
