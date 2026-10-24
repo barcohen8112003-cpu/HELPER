@@ -156,9 +156,12 @@ final class ContinueRow {
         if (linked) {
             if (library != null) watching.addAll(library);
         } else {
-            watching.add(CONNECT);
             watching.addAll(Titles.watching(activity));
         }
+        // What played in Netflix, Disney+ and YouTube, mixed in by when it was watched.
+        watching.addAll(MediaListener.played(activity));
+        watching.sort((x, y) -> Long.compare(y.time, x.time));
+        if (!linked) watching.add(0, CONNECT);
         if (!watching.isEmpty()) addRow("‏המשך צפייה", watching, true);
         boolean nothing = watching.isEmpty() || !linked && watching.size() == 1;
         if (!series.isEmpty()) addRow(nothing ? "‏סדרות מומלצות בשבילך" : "‏סדרות מומלצות", series, false);
@@ -265,6 +268,29 @@ final class ContinueRow {
             FrameLayout.LayoutParams cl = (FrameLayout.LayoutParams) logo.getLayoutParams();
             cl.gravity = Gravity.CENTER;
             cl.bottomMargin = 0;
+        } else if (t.pkg != null) {
+            // Played in an app: its artwork when it gave one, the app's colour otherwise; the app's logo on it.
+            int brand = Brand.color(t.pkg);
+            if (brand != 0) color[0] = brand;
+            android.graphics.drawable.Drawable banner = AppCards.banner(c, t.pkg);
+            LogoMaker.Logo white = banner != null ? LogoMaker.logo(t.pkg, banner) : null;
+            FrameLayout.LayoutParams cl = (FrameLayout.LayoutParams) logo.getLayoutParams();
+            if (t.background.isEmpty()) {
+                frame.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                        new int[]{Brand.darker(color[0], 0.2f), Brand.darker(color[0], 0.75f)}));
+                frame.removeView(shade);
+                cl.gravity = Gravity.CENTER;
+                cl.bottomMargin = 0;
+            } else {
+                Titles.image(art, t.background, w, null);
+                // A small badge in the corner says which app it is.
+                cl.width = Math.round(w * 0.28f);
+                cl.height = Math.round(h * 0.18f);
+                cl.gravity = Gravity.TOP | Gravity.RIGHT;
+                cl.topMargin = AppCards.px(c, 8);
+                cl.rightMargin = AppCards.px(c, 10);
+            }
+            if (white != null) logo.setImageBitmap(white.bitmap);
         } else {
             Titles.image(art, t.background, w, bmp -> color[0] = AppAdapter.vividColor(new BitmapDrawable(c.getResources(), bmp)));
             if (!t.logo.isEmpty()) Titles.image(logo, t.logo, Math.round(w * 0.6f), null);
@@ -276,7 +302,7 @@ final class ContinueRow {
             FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, AppCards.px(c, 4), Gravity.BOTTOM);
             frame.addView(track, frame.indexOfChild(ring), tl);
             View bar = new View(c);
-            bar.setBackgroundColor(0xFF8B5CF6);
+            bar.setBackgroundColor(t.pkg != null && Brand.color(t.pkg) != 0 ? Brand.color(t.pkg) : 0xFF8B5CF6);
             // Right to left: the bar grows from the right edge.
             FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(Math.max(AppCards.px(c, 6), Math.round(w * t.progress)), AppCards.px(c, 4), Gravity.BOTTOM | Gravity.RIGHT);
             frame.addView(bar, frame.indexOfChild(ring), bl);
@@ -288,6 +314,7 @@ final class ContinueRow {
         item.addView(name, new LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT));
         String kind = "movie".equals(t.type) ? "סרט" : "סדרה";
         String sub = connect ? "‏להמשך צפייה מהחשבון שלך"
+                : t.pkg != null ? HelperLink.label(c, t.pkg) + (t.sub != null ? " · " + t.sub : "")
                 : t.sub != null ? t.sub
                 : watching ? "‏" + kind + " · המשך ב־Stremio"
                 : "‏" + kind + (t.year.isEmpty() ? "" : " · " + t.year) + (t.rating.isEmpty() ? "" : " · ★ " + t.rating);
@@ -295,9 +322,16 @@ final class ContinueRow {
 
         frame.setOnClickListener(v -> {
             if (connect) c.startActivity(new android.content.Intent(c, StremioLinkActivity.class));
+            else if (t.pkg != null) Helper.openApp(c, t.pkg);
             else Titles.open(c, t);
         });
-        if (watching && !connect && !Stremio.linked(c)) {
+        if (t.pkg != null) {
+            frame.setOnLongClickListener(v -> {
+                MediaListener.forget(c, t.id);
+                refill();
+                return true;
+            });
+        } else if (watching && !connect && !Stremio.linked(c)) {
             // Holding OK takes it off Continue watching.
             frame.setOnLongClickListener(v -> {
                 Titles.forget(c, t.id);

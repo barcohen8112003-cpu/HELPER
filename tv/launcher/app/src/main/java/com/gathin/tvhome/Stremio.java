@@ -139,6 +139,7 @@ final class Stremio {
             String logo = id.startsWith("tt") ? "https://images.metahub.space/logo/medium/" + id + "/img" : "";
             Titles.Title t = new Titles.Title(id, it.optString("type", "movie"), it.optString("name"), bg, logo, "", "");
             t.videoId = st.optString("video_id");
+            try { t.time = java.time.Instant.parse(st.optString("lastWatched")).toEpochMilli(); } catch (Exception ignored) { }
             long dur = st.optLong("duration"), off = st.optLong("timeOffset");
             t.progress = dur > 0 && off > 0 ? Math.min(1f, off / (float) dur) : -1f;
             String[] parts = t.videoId.split(":");

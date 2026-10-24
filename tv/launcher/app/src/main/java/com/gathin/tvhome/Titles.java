@@ -40,6 +40,9 @@ final class Titles {
         String videoId = "";
         float progress = -1f;
         String sub;
+        /** Played in an app (MediaListener): that app, which opens on OK. When it was watched, for the order. */
+        String pkg;
+        long time;
         Title(String id, String type, String name, String background, String logo, String year, String rating) {
             this.id = id; this.type = type; this.name = name; this.background = background; this.logo = logo;
             this.year = year; this.rating = rating;
@@ -178,7 +181,9 @@ final class Titles {
                 dir.mkdirs();
                 File f = new File(dir, Integer.toHexString(url.hashCode()) + ".img");
                 byte[] data;
-                if (f.exists()) {
+                if (url.startsWith("/")) {
+                    data = Files.readAllBytes(new File(url).toPath());   // artwork MediaListener saved
+                } else if (f.exists()) {
                     data = Files.readAllBytes(f.toPath());
                 } else {
                     data = get(url, 3 * 1024 * 1024);
