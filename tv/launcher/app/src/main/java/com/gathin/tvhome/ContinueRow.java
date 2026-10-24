@@ -43,6 +43,10 @@ final class ContinueRow {
     private final List<HorizontalScrollView> rows = new ArrayList<>();
     private List<Titles.Title> series = Collections.emptyList(), movies = Collections.emptyList();
     private int row;
+    /** The Stremio library's titles in progress; null until loaded. */
+    private List<Titles.Title> library;
+    /** The card that links the Stremio account, first in Continue watching until it is linked. */
+    private static final Titles.Title CONNECT = new Titles.Title("connect", "connect", "חבר את Stremio", "", "", "", "");
     boolean shown;
 
     ContinueRow(Activity a, FrameLayout root, IntConsumer onColor) {
@@ -71,6 +75,7 @@ final class ContinueRow {
         // Fetch the catalogs now, so the carousels are full by the time Down is pressed.
         Titles.top(a, "series", list -> { series = list; if (shown) refill(); });
         Titles.top(a, "movie", list -> { movies = list; if (shown) refill(); });
+        loadLibrary();
     }
 
     /** How far Home moves up to make room for the carousels. */
@@ -78,10 +83,16 @@ final class ContinueRow {
         return h + AppCards.px(activity, 112);
     }
 
+    /** The Stremio account's titles in progress (nothing when it is not linked). */
+    private void loadLibrary() {
+        Stremio.inProgress(activity, list -> { library = list; if (shown) refill(); });
+    }
+
     void show() {
         shown = true;
         row = 0;
         fill();
+        loadLibrary();   // fresh after watching something
         view.setVisibility(View.VISIBLE);
         view.setAlpha(0f);
         view.setTranslationY(lift() / 2f);
@@ -140,9 +151,17 @@ final class ContinueRow {
     private void fill() {
         column.removeAllViews();
         rows.clear();
-        List<Titles.Title> watching = Titles.watching(activity);
+        boolean linked = Stremio.linked(activity);
+        List<Titles.Title> watching = new ArrayList<>();
+        if (linked) {
+            if (library != null) watching.addAll(library);
+        } else {
+            watching.add(CONNECT);
+            watching.addAll(Titles.watching(activity));
+        }
         if (!watching.isEmpty()) addRow("‏המשך צפייה", watching, true);
-        if (!series.isEmpty()) addRow(watching.isEmpty() ? "‏סדרות מומלצות בשבילך" : "‏סדרות מומלצות", series, false);
+        boolean nothing = watching.isEmpty() || !linked && watching.size() == 1;
+        if (!series.isEmpty()) addRow(nothing ? "‏סדרות מומלצות בשבילך" : "‏סדרות מומלצות", series, false);
         if (!movies.isEmpty()) addRow("‏סרטים מומלצים", movies, false);
         if (rows.isEmpty()) {
             TextView wait = text(activity, "‏טוען סדרות וסרטים…", 17, 0xB3FFFFFF, R.font.outfit_light);
@@ -233,20 +252,52 @@ final class ContinueRow {
         item.addView(frame, new LinearLayout.LayoutParams(w, h));
 
         int[] color = {STREMIO_PURPLE};
-        Titles.image(art, t.background, w, bmp -> color[0] = AppAdapter.vividColor(new BitmapDrawable(c.getResources(), bmp)));
-        if (!t.logo.isEmpty()) Titles.image(logo, t.logo, Math.round(w * 0.6f), null);
+        boolean connect = t == CONNECT;
+        if (connect) {
+            // Stremio's own colours and logo, asking to link the account.
+            frame.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0xFF7B5BF5, 0xFF2A1B4E}));
+            android.graphics.drawable.Drawable banner = AppCards.banner(c, Titles.STREMIO);
+            if (banner != null) {
+                LogoMaker.Logo white = LogoMaker.logo(Titles.STREMIO, banner);
+                if (white != null) logo.setImageBitmap(white.bitmap);
+            }
+            frame.removeView(shade);
+            FrameLayout.LayoutParams cl = (FrameLayout.LayoutParams) logo.getLayoutParams();
+            cl.gravity = Gravity.CENTER;
+            cl.bottomMargin = 0;
+        } else {
+            Titles.image(art, t.background, w, bmp -> color[0] = AppAdapter.vividColor(new BitmapDrawable(c.getResources(), bmp)));
+            if (!t.logo.isEmpty()) Titles.image(logo, t.logo, Math.round(w * 0.6f), null);
+        }
+        if (t.progress > 0) {
+            // How far in: a thin bar along the card's foot, like Stremio's own.
+            View track = new View(c);
+            track.setBackgroundColor(0x59FFFFFF);
+            FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, AppCards.px(c, 4), Gravity.BOTTOM);
+            frame.addView(track, frame.indexOfChild(ring), tl);
+            View bar = new View(c);
+            bar.setBackgroundColor(0xFF8B5CF6);
+            // Right to left: the bar grows from the right edge.
+            FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(Math.max(AppCards.px(c, 6), Math.round(w * t.progress)), AppCards.px(c, 4), Gravity.BOTTOM | Gravity.RIGHT);
+            frame.addView(bar, frame.indexOfChild(ring), bl);
+        }
 
         TextView name = text(c, t.name, 15, 0xF2FFFFFF, R.font.outfit_medium);
         name.setPadding(0, AppCards.px(c, 10), 0, 0);
         name.setAlpha(0.75f);
         item.addView(name, new LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT));
         String kind = "movie".equals(t.type) ? "סרט" : "סדרה";
-        String sub = watching ? "‏" + kind + " · המשך ב־Stremio"
+        String sub = connect ? "‏להמשך צפייה מהחשבון שלך"
+                : t.sub != null ? t.sub
+                : watching ? "‏" + kind + " · המשך ב־Stremio"
                 : "‏" + kind + (t.year.isEmpty() ? "" : " · " + t.year) + (t.rating.isEmpty() ? "" : " · ★ " + t.rating);
         item.addView(text(c, sub, 12, 0x99FFFFFF, R.font.outfit_light), new LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        frame.setOnClickListener(v -> Titles.open(c, t));
-        if (watching) {
+        frame.setOnClickListener(v -> {
+            if (connect) c.startActivity(new android.content.Intent(c, StremioLinkActivity.class));
+            else Titles.open(c, t);
+        });
+        if (watching && !connect && !Stremio.linked(c)) {
             // Holding OK takes it off Continue watching.
             frame.setOnLongClickListener(v -> {
                 Titles.forget(c, t.id);

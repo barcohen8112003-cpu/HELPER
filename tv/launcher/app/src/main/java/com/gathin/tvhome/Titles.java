@@ -36,6 +36,10 @@ final class Titles {
 
     static final class Title {
         final String id, type, name, background, logo, year, rating;
+        /** From the Stremio library: the episode under way ("tt123:2:5"), how far in (0..1, -1 unknown), the line under the card. */
+        String videoId = "";
+        float progress = -1f;
+        String sub;
         Title(String id, String type, String name, String background, String logo, String year, String rating) {
             this.id = id; this.type = type; this.name = name; this.background = background; this.logo = logo;
             this.year = year; this.rating = rating;
@@ -130,7 +134,8 @@ final class Titles {
             prefs(c).edit().putString("watching", next.toString()).apply();
         } catch (Exception ignored) { }
         android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW,
-                android.net.Uri.parse("stremio:///detail/" + t.type + "/" + t.id)).setPackage(STREMIO)
+                android.net.Uri.parse("stremio:///detail/" + t.type + "/" + t.id
+                        + (t.videoId.isEmpty() ? "" : "/" + android.net.Uri.encode(t.videoId)))).setPackage(STREMIO)
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             c.startActivity(i);

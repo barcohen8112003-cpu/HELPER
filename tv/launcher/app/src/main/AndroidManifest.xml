@@ -248,6 +248,11 @@
             android:excludeFromRecents="true"
             android:screenOrientation="landscape" />
         <activity
+            android:name=".StremioLinkActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape" />
+        <activity
             android:name=".ButtonsActivity"
             android:exported="false"
             android:excludeFromRecents="true"
