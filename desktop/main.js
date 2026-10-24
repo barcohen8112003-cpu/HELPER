@@ -391,7 +391,10 @@ async function handleAsk(raw, { voice = false } = {}) {
       const lines = await hands.runAll(parsed.steps)
       return finish(seq, raw, lines.join(' · ') || 'בוצע', 'instant', started)
     } catch (e) {
-      return finish(seq, raw, e.message, 'instant', started, true)
+      // A name that is no app (often a mishearing: "פלסטרום"): Claude works out what was meant, from the windows and
+      // apps on the PC, instead of an error. Any other failure is shown as it is.
+      if (!/^לא מצאתי אפליקציה/.test(e.message)) return finish(seq, raw, e.message, 'instant', started, true)
+      log('no such app, to the brain:', raw)
     }
   }
 

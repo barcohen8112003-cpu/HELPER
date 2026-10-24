@@ -86,8 +86,45 @@ function find(name) {
     const hit = usable.find((a) => plain(a.name).includes(w))
     if (hit) return hit
   }
-  return null
+  // A name a letter or two off ("\u05E1\u05E4\u05D5\u05D8\u05D9\u05E4\u05D9", "\u05D3\u05D9\u05E1\u05E7\u05D5\u05E8\u05D8"): the closest entry or alias, when it is clearly the closest.
+  return nearest(tries, usable)
 }
+
+/** Edit distance between two short strings. */
+function distance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i])
+  for (let j = 1; j <= b.length; j++) d[0][j] = j
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+    }
+  }
+  return d[a.length][b.length]
+}
+
+/** The one app whose name or alias is within one letter (two for long names) of what was said; null if unsure. */
+function nearest(tries, usable) {
+  const names = usable.map((app) => [plain(app.name), app])
+  for (const [alias, target] of Object.entries(ALIASES)) {
+    for (const want of [].concat(target)) {
+      const hit = usable.find((app) => plain(app.name) === plain(want) || word(plain(want)).test(plain(app.name)))
+      if (hit) { names.push([plain(alias), hit]); break }
+    }
+  }
+  let best = null, bestD = Infinity, tie = false
+  for (const w of tries) {
+    if (w.length < 5) continue
+    for (const [n, app] of names) {
+      if (Math.abs(n.length - w.length) > 2) continue
+      const dist = distance(w, n)
+      if (dist > (w.length >= 9 ? 2 : 1)) continue
+      if (dist < bestD) { best = app; bestD = dist; tie = false } else if (dist === bestD && app !== best) tie = true
+    }
+  }
+  return best && !tie ? best : null
+}
+
+const word = (w) => new RegExp('(^|\\s)' + escape(w) + '(\\s|$|[\u2122\u00AE])', 'i')
 
 /** Starts an app by its Start menu entry (desktop programs and Store apps alike). */
 function launch(app) {
