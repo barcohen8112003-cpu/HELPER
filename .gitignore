@@ -17,3 +17,8 @@ tv/launcher/local.properties
 tv/screens/
 # Video wallpapers stay on the TV and in this folder only (large, and not ours to publish).
 tv/theme-now/*.mp4
+
+# HELPER for Windows: downloaded speech engine and model
+desktop/vendor/
+desktop/node_modules/
+desktop/out/
