@@ -19,6 +19,17 @@ let ui = {
 const setUi = (u) => { ui = Object.assign(ui, u) }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/** What HELPER itself opened lately (app names, newest last), so "close what you opened" means something. */
+const opened = []
+function noteOpened(name) {
+  const i = opened.findIndex((o) => o.name === name)
+  if (i >= 0) opened.splice(i, 1)
+  opened.push({ name, at: Date.now() })
+  if (opened.length > 12) opened.shift()
+}
+/** The apps opened in the last half hour, oldest first. */
+const recentOpened = () => opened.filter((o) => Date.now() - o.at < 30 * 60 * 1000).map((o) => o.name)
 const strip = (s) => String(s || '').replace(/[‎‏‪-‮]/g, '').trim()
 
 // ---- finding things -------------------------------------------------------------------------------
@@ -135,6 +146,7 @@ const actions = {
     const app = apps.find(name)
     if (app) {
       apps.launch(app)
+      noteOpened(app.name)
       return `פותח את ${app.name}`
     }
     if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(strip(name))) {
@@ -479,4 +491,4 @@ async function runAll(steps) {
   return lines
 }
 
-module.exports = { actions, run, runAll, setUi, listWindows, findWindow, waitWindow, pickDisplay, REPLAYABLE, strip }
+module.exports = { actions, run, runAll, setUi, recentOpened, listWindows, findWindow, waitWindow, pickDisplay, REPLAYABLE, strip }

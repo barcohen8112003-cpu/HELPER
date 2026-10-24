@@ -159,7 +159,8 @@ function parseOne(s) {
   // Close.
   if ((m = s.match(CLOSE))) {
     const what = object(m[2])
-    if (/^(הכל|את הכל|כל החלונות|everything|all)$/.test(what)) return null   // a big step: the brain asks first
+    // "הכל", "כל מה שפתחת", "כל החלונות": a big step, and not an app's name: the brain decides what is meant.
+    if (/^(הכל|את הכל|כל\s|כל$|everything|all(\s|$))/.test(what) || /כל (מה|החלונות|האפליקציות)/.test(what)) return null
     return [{ cmd: 'close', args: { name: /^(זה|החלון הזה|החלון|this|it|this window)$/i.test(what) ? 'זה' : what } }]
   }
 

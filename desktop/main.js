@@ -12,7 +12,7 @@ app.setAppUserModelId('il.helper.desktop')
 app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling')   // our media keys must reach the player
 
 const ROOT = __dirname
-let store, apps, speech, instant, hands, handsServer, brain, win32, hook, voiceOut
+let store, apps, speech, instant, hands, handsServer, brain, win32, hook, voiceOut, phrase
 
 let bubble = null, pill = null, tray = null
 const overlays = new Map()          // display id → transparent window for rings and marks
@@ -392,11 +392,11 @@ async function handleAsk(raw, { voice = false } = {}) {
         return finish(seq, raw, `סגור. כשתגיד "${parsed.teach.phrase}" אני ${does && does.steps ? 'עושה את זה מיד' : 'אדע מה לעשות'}`, 'instant', started)
       }
       const lines = await hands.runAll(parsed.steps)
-      return finish(seq, raw, lines.join(' · ') || 'בוצע', 'instant', started)
+      return finish(seq, raw, phrase.human(parsed.steps, lines) || lines.join(' · ') || 'בוצע', 'instant', started)
     } catch (e) {
       // A name that is no app (often a mishearing: "פלסטרום"): Claude works out what was meant, from the windows and
       // apps on the PC, instead of an error. Any other failure is shown as it is.
-      if (!/^לא מצאתי אפליקציה/.test(e.message)) return finish(seq, raw, e.message, 'instant', started, true)
+      if (!/^(לא מצאתי אפליקציה|אין חלון פתוח)/.test(e.message)) return finish(seq, raw, e.message, 'instant', started, true)
       log('no such app, to the brain:', raw)
     }
   }
@@ -407,7 +407,7 @@ async function handleAsk(raw, { voice = false } = {}) {
     try {
       if (known.steps.length === 1 && known.steps[0].say) return handleAsk(known.steps[0].say, { voice })
       const lines = await hands.runAll(known.steps)
-      return finish(seq, raw, lines.join(' · ') || 'בוצע', 'learned', started)
+      return finish(seq, raw, phrase.human(known.steps, lines) || lines.join(' · ') || 'בוצע', 'learned', started)
     } catch (e) {
       store.unlearn(text)   // it no longer works: next time the brain works it out again
       log('learned shortcut failed, forgotten:', text, e.message)
@@ -420,6 +420,7 @@ async function handleAsk(raw, { voice = false } = {}) {
   if (fg) extra.foreground = `${fg.app} — ${hands.strip(fg.title)}`
   // The open windows come with the ask, so Claude acts at once instead of spending a round on asking for them.
   try { extra.windows = (await hands.run({ cmd: 'windows' })).split('\n').slice(0, 25).join('\n') } catch { }
+  extra.opened = hands.recentOpened().join(', ')
   if (mark) {
     extra.mark = mark
     extra.screenshot = { path: mark.shot, note: 'צילום של כל המסך שבו הוא סימן' }
@@ -775,6 +776,7 @@ app.whenReady().then(async () => {
   handsServer = require('./src/hands-server')
   brain = require('./src/brain')
   voiceOut = require('./src/voice')
+  phrase = require('./src/phrase')
   win32 = require('./src/win32')
   hook = require('uiohook-napi')
 

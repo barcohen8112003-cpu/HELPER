@@ -131,5 +131,26 @@ check('silence is not speech', () => assert.strictEqual(speech.hasSpeech(wavOf(n
 check('hiss is not speech', () => assert.strictEqual(speech.hasSpeech(wavOf(Array.from({ length: sec * 2 }, () => (Math.random() - 0.5) * 300))), false))
 check('a voice is speech', () => assert.strictEqual(speech.hasSpeech(wavOf(Array.from({ length: sec * 2 }, (_, i) => Math.sin(i / 8) * 6000 * (i > sec / 2 && i < sec * 1.5 ? 1 : 0.02)))), true))
 
+
+// Human confirmations
+const { human } = require('../src/phrase')
+const say = (steps, lines) => human(steps, lines || [])
+check('say: open and place', () => assert.strictEqual(say([{ cmd: 'open', args: { name: 'מחשבון' } }, { cmd: 'place', args: { name: 'מחשבון', where: 'left' } }]), 'פתחתי את המחשבון ושמתי אותו בצד שמאל'))
+check('say: proper name has no article', () => assert.strictEqual(say([{ cmd: 'open', args: { name: 'כרום' } }]), 'פתחתי את כרום'))
+check('say: two apps', () => assert.strictEqual(say([{ cmd: 'open', args: { name: 'כרום' } }, { cmd: 'open', args: { name: 'דיסקורד' } }]), 'פתחתי את כרום ופתחתי את דיסקורד'))
+check('say: two windows, two sides', () => assert.strictEqual(say([{ cmd: 'place', args: { name: 'כרום', where: 'left' } }, { cmd: 'place', args: { name: 'דיסקורד', where: 'right' } }]), 'שמתי את כרום בצד שמאל ושמתי את דיסקורד בצד ימין'))
+check('say: other screen', () => assert.strictEqual(say([{ cmd: 'place', args: { name: 'דיסקורד', where: 'max', screen: 'next' } }]), 'שמתי את דיסקורד על המסך השני'))
+check('say: side of the other screen', () => assert.strictEqual(say([{ cmd: 'place', args: { name: 'ספוטיפיי', where: 'right', screen: 'next' } }]), 'שמתי את ספוטיפיי בצד ימין של המסך השני'))
+check('say: top of the other screen', () => assert.strictEqual(say([{ cmd: 'place', args: { name: 'כרום', where: 'top', screen: '2' } }]), 'שמתי את כרום למעלה במסך השני'))
+check('say: names in English are said in Hebrew', () => assert.strictEqual(say([{ cmd: 'open', args: { name: 'Calculator' } }, { cmd: 'place', args: { name: 'Calculator', where: 'left', screen: '1' } }]), 'פתחתי את המחשבון ושמתי אותו בצד שמאל של המסך הראשון'))
+check('say: two apps read app by app', () => assert.strictEqual(say([{ cmd: 'open', args: { name: 'Chrome' } }, { cmd: 'open', args: { name: 'Discord' } }, { cmd: 'place', args: { name: 'Chrome', where: 'left' } }, { cmd: 'place', args: { name: 'Discord', where: 'right' } }]), 'פתחתי את כרום ושמתי אותו בצד שמאל, ופתחתי את דיסקורד ושמתי אותו בצד ימין'))
+check('close all goes to the brain', () => assert.strictEqual(parse('תסגור את כל מה שפתחת עכשיו'), null))
+check('say: switched to an open one', () => assert.strictEqual(say([{ cmd: 'open', args: { name: 'כרום' } }], ['עברתי לכרום']), 'עברתי לכרום'))
+check('say: close two', () => assert.strictEqual(say([{ cmd: 'close', args: { name: 'דיסקורד' } }, { cmd: 'close', args: { name: 'טלגרם' } }]), 'סגרתי את דיסקורד וסגרתי את טלגרם'))
+check('say: volume', () => assert.strictEqual(say([{ cmd: 'volume', args: { op: 'set', value: 30 } }]), 'שמתי את העוצמה על 30'))
+check('say: play', () => assert.strictEqual(say([{ cmd: 'play', args: { query: 'x' } }], ['מנגן: אופק אדנק - נתתי לך בית']), 'מנגן לך אופק אדנק - נתתי לך בית'))
+check('say: this window', () => assert.strictEqual(say([{ cmd: 'place', args: { name: 'זה', where: 'left' } }]), 'שמתי את החלון בצד שמאל'))
+check('say: an unknown step keeps the line the hands gave', () => assert.strictEqual(say([{ cmd: 'time', args: {} }], ['השעה 23:25']), 'השעה 23:25'))
+
 console.log(`${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
