@@ -73,7 +73,7 @@ async function download(url, file, label) {
     got += d.length
     if (process.stdout.isTTY && Date.now() - last > 300) {
       last = Date.now()
-      process.stdout.write(`\r    ${label}: ${(got / 1e6).toFixed(0)}${total ? ' / ' + (total / 1e6).toFixed(0) : ''} MB   `)
+      process.stdout.write(`\r    ${U.V(label + ':')} ${(got / 1e6).toFixed(0)}${total ? ' / ' + (total / 1e6).toFixed(0) : ''} MB   `)
     }
   })
   fs.mkdirSync(path.dirname(file), { recursive: true })

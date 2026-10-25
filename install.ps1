@@ -21,9 +21,47 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 $Repo = 'https://github.com/barcohen8112003-cpu/HELPER.git'
 
-function Say($t) { Write-Host "  $t" }
-function Ok($t) { Write-Host "  ✓ $t" -ForegroundColor Green }
-function Step($t) { Write-Host ""; Write-Host "» $t" -ForegroundColor Cyan }
+# The Windows console draws Hebrew back to front. V turns a line with Hebrew so it reads right to left there:
+# English words, numbers, paths and addresses stay left to right inside it, brackets are mirrored. The same as
+# scripts/setup/bidi.mjs. Not when the output goes to a file or a pipe; HELPER_RTL=off turns it off.
+$script:Rtl = ($env:HELPER_RTL -eq 'on') -or (($env:HELPER_RTL -ne 'off') -and -not [Console]::IsOutputRedirected)
+function V([string]$s) {
+    if (-not $script:Rtl -or $s -notmatch '[\u0590-\u05FF]') { return $s }
+    $lead = [regex]::Match($s, '^\s*').Value
+    $rest = $s.Substring($lead.Length)
+    $trail = [regex]::Match($rest, '\s*$').Value
+    $body = $rest.Substring(0, $rest.Length - $trail.Length)
+    $word = [regex]'^(--|[./])?[A-Za-z0-9](?:[A-Za-z0-9./:_+%@=?&#~\\-]*[A-Za-z0-9/])?'
+    $mirror = @{ '(' = ')'; ')' = '('; '[' = ']'; ']' = '['; '{' = '}'; '}' = '{'; '<' = '>'; '>' = '<' }
+    $runs = New-Object System.Collections.ArrayList
+    $rtl = ''; $i = 0
+    while ($i -lt $body.Length) {
+        $m = $word.Match($body.Substring($i))
+        if ($m.Success -and (-not $m.Groups[1].Success -or $i -eq 0 -or $body[$i - 1] -notmatch '[A-Za-z0-9]')) {
+            $text = $m.Value
+            while ($true) {
+                $after = $body.Substring($i + $text.Length)
+                $sp = [regex]::Match($after, '^ +(?=(?:--|[./])?[A-Za-z0-9])')
+                if (-not $sp.Success) { break }
+                $next = $word.Match($after.Substring($sp.Length))
+                if (-not $next.Success) { break }
+                $text += $sp.Value + $next.Value
+            }
+            if ($rtl) { [void]$runs.Add(@($false, $rtl)); $rtl = '' }
+            [void]$runs.Add(@($true, $text)); $i += $text.Length
+        } else { $rtl += $body[$i]; $i++ }
+    }
+    if ($rtl) { [void]$runs.Add(@($false, $rtl)) }
+    $out = ''
+    for ($k = $runs.Count - 1; $k -ge 0; $k--) {
+        $r = $runs[$k]
+        if ($r[0]) { $out += $r[1] } else { $chars = $r[1].ToCharArray(); [array]::Reverse($chars); $out += (-join ($chars | ForEach-Object { if ($mirror.ContainsKey([string]$_)) { $mirror[[string]$_] } else { $_ } })) }
+    }
+    return $lead + $out + $trail
+}
+function Say($t) { Write-Host ("  " + (V $t)) }
+function Ok($t) { Write-Host ("  ✓ " + (V $t)) -ForegroundColor Green }
+function Step($t) { Write-Host ""; Write-Host ("» " + (V $t)) -ForegroundColor Cyan }
 function Refresh-Path {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 }
@@ -36,7 +74,7 @@ function Run([string]$exe, [string[]]$argv) {
 }
 
 Write-Host ""
-Write-Host "  HELPER — התקנה בפקודה אחת" -ForegroundColor Cyan
+Write-Host ("  " + (V "HELPER — התקנה בפקודה אחת")) -ForegroundColor Cyan
 Write-Host "  ─────────────────────────" -ForegroundColor Cyan
 
 # ---- Node.js 24+ and Git ----
@@ -104,5 +142,5 @@ try {
     # Straight to the console (no pipe), so the wizard can ask its questions.
     $ErrorActionPreference = 'Continue'
     & node scripts/setup.mjs @WizardArgs
-    if ($LASTEXITCODE -ne 0) { Write-Host "  האשף לא הסתיים. מריצים שוב מתי שרוצים: helper onboard (או npm run setup בתוך $Dir)" -ForegroundColor Yellow }
+    if ($LASTEXITCODE -ne 0) { Write-Host ("  " + (V "האשף לא הסתיים. מריצים שוב מתי שרוצים: helper onboard (או npm run setup בתוך $Dir)")) -ForegroundColor Yellow }
 } finally { Pop-Location }

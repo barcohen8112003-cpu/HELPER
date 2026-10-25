@@ -46,6 +46,38 @@ await check('providers: a base URL names its provider', () => {
   assert.strictEqual(L.providerOf('https://example.com/v1').id, 'custom')
 })
 
+// ---- Hebrew in a Windows console (which draws it back to front) ----
+const B = await import('./setup/bidi.mjs')
+await check('rtl: a Hebrew line is turned to read right to left; the status mark stays on the left', () => {
+  assert.strictEqual(B.visual('  ✓ החבילות של הבוט'), '  ✓ טובה לש תוליבחה')
+})
+await check('rtl: English words, numbers, paths and addresses inside it stay left to right', () => {
+  assert.strictEqual(B.visual('המוח של HELPER למחשב'), 'בשחמל HELPER לש חומה')
+  assert.strictEqual(B.visual('הורדה של כ-2.3GB'), '2.3GB-כ לש הדרוה')
+  assert.strictEqual(B.visual('מחובר לענן: http://37.60.240.231:3210'), 'http://37.60.240.231:3210 :ןנעל רבוחמ')
+  assert.strictEqual(B.visual('נשמר ב-.env'), '.env-ב רמשנ')
+  assert.strictEqual(B.visual('מפתח sk-or-…7037'), 'sk-or-…7037 חתפמ')
+  assert.strictEqual(B.visual('דולג (--no-autostart)'), '(--no-autostart) גלוד')
+  assert.strictEqual(B.visual('נכתב ל-HELPER'), 'HELPER-ל בתכנ')
+})
+await check('rtl: brackets are mirrored so they still open toward the words', () => {
+  assert.strictEqual(B.visual('מספר [1]:'), ':[1] רפסמ')
+  assert.strictEqual(B.visual('(ברירת מחדל)'), '(לדחמ תרירב)')
+})
+await check('rtl: lines without Hebrew, and colour codes around a line, are kept', () => {
+  assert.strictEqual(B.visual('  ✓ Node.js 24.18.0'), '  ✓ Node.js 24.18.0')
+  assert.strictEqual(B.visualColored('\x1b[2mשלום\x1b[0m'), '\x1b[2mםולש\x1b[0m')
+})
+await check('rtl: only for a Windows console; a pipe or a file gets the text as it is; HELPER_RTL overrides', () => {
+  const was = process.env.HELPER_RTL
+  delete process.env.HELPER_RTL
+  assert.strictEqual(B.rtlConsole({ isTTY: false }), false)
+  assert.strictEqual(B.rtlConsole({ isTTY: true }), process.platform === 'win32')
+  process.env.HELPER_RTL = 'off'; assert.strictEqual(B.rtlConsole({ isTTY: true }), false)
+  process.env.HELPER_RTL = 'on'; assert.strictEqual(B.rtlConsole({ isTTY: false }), true)
+  if (was === undefined) delete process.env.HELPER_RTL; else process.env.HELPER_RTL = was
+})
+
 // ---- the one-line installer ----
 await check('install.ps1 has no byte-order mark (through irm | iex it would hide the param block)', () => {
   const b = fs.readFileSync(path.join(L.ROOT, 'install.ps1'))
