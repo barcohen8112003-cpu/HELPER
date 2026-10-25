@@ -31,6 +31,7 @@ const TESTS = [
   'src/approval-selftest.js',
   'src/logs-selftest.js',
   'src/claude-code-selftest.js',
+  'scripts/setup-selftest.mjs',
 ]
 
 const failed = []

@@ -4,8 +4,14 @@
   "private": true,
   "type": "module",
   "description": "Personal WhatsApp assistant: memory, reminders, watchers, mail, calendar, computer control",
+  "bin": {
+    "helper": "scripts/helper.mjs"
+  },
   "scripts": {
     "start": "node src/index.js",
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/helper.mjs doctor",
+    "check:setup": "node scripts/setup-selftest.mjs",
     "google": "node src/google-connect.js",
     "check": "node src/selftest.js",
     "check:all": "node scripts/check-all.mjs",

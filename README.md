@@ -47,6 +47,47 @@ Helper זוכר מה שחשוב לך, מזכיר בזמן, עוקב בשקט א�
 
 ## התקנה מהירה
 
+### בפקודה אחת
+
+ב-PowerShell (לא צריך כלום מראש: Node.js ו-Git מותקנים לבד אם חסרים):
+
+```powershell
+irm https://raw.githubusercontent.com/barcohen8112003-cpu/HELPER/main/install.ps1 | iex
+```
+
+בלינוקס או במק (שרת, Raspberry Pi):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/barcohen8112003-cpu/HELPER/main/install.sh | bash
+```
+
+זה מוריד את הפרויקט ל-`~/HELPER`, מתקין את החבילות, מוסיף את הפקודה `helper`, ופותח את אשף ההתקנה. כבר יש לך את הפרויקט? לחיצה כפולה על `setup.bat`, או `npm run setup`.
+
+**האשף** (`helper onboard`) עובר על הכל, שאלה אחר שאלה, ו-Enter תמיד לוקח את ברירת המחדל:
+
+1. בודק את המחשב: Node.js, Git, Claude Code, כרטיס מסך.
+2. מה להתקין: הבוט בוואטסאפ, HELPER למחשב (PD), מנוע הדיבור בעברית.
+3. ספק המודל (OpenRouter, Gemini, Groq, OpenAI או אחר) והמפתח, **ובודק מול הספק שהמפתח עובד** לפני שהוא נשמר.
+4. תוספות לא חובה: ElevenLabs, Tavily, Gemini.
+5. מתקין את החבילות של כל חלק שנבחר.
+6. מוריד את מנוע הדיבור (whisper.cpp לכרטיס NVIDIA או למעבד, והמודל העברי של ivrit.ai).
+7. מחבר את HELPER למחשב ל-HELPER בענן (קוד הגישה מאתר ההגדרות).
+8. קיצורי דרך, והפעלה אוטומטית עם Windows.
+9. מריץ את הבדיקות ומפעיל הכל. בפעם הראשונה נפתח חלון עם קוד QR לוואטסאפ.
+
+אפשר להריץ אותו שוב מתי שרוצים: מה שכבר מוגדר נשמר (הוא שואל "לשנות?"), וה-`.env` הקודם נשמר כ-`.env.before-setup`.
+
+| פקודה | מה היא עושה |
+|---|---|
+| `helper onboard` | אשף ההתקנה (גם `npm run setup` או `setup.bat`) |
+| `helper doctor` | מה מותקן, מה חסר, ואיזו פקודה מתקנת (`--online` בודק גם את המפתח) |
+| `helper start` | מפעיל את הבוט ואת HELPER למחשב (`helper start bot` / `helper start desktop`) |
+| `helper update` | הגרסה האחרונה מ-GitHub והחבילות שלה |
+
+**בלי שאלות** (שרת, סקריפט): `helper onboard --yes --provider=openrouter --api-key=sk-or-... --parts=bot`. כל הדגלים: `node scripts/setup.mjs --help`. מפתח שהספק דוחה עוצר את ההתקנה ולא נשמר.
+
+### ידנית
+
 **צריך:** Windows, Node.js 24 ומעלה, וחשבון אצל ספק מודלים שתואם OpenAI ותומך ב-tool calling (למשל OpenRouter, או Groq בחינם).
 
 1. **מפתחות.** פתח את `.env` ומלא `LLM_BASE_URL`, `LLM_API_KEY` ו-`LLM_MODEL`.
