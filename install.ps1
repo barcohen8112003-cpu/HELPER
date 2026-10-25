@@ -1,9 +1,10 @@
-﻿# HELPER in one command, on Windows. Paste this in PowerShell:
+# HELPER in one command, on Windows. Paste this in PowerShell:
 #
 #   irm https://raw.githubusercontent.com/barcohen8112003-cpu/HELPER/main/install.ps1 | iex
 #
 # It installs Node.js and Git when they are missing (winget), downloads HELPER (or uses this folder when run from
 # inside it), installs its packages, adds the "helper" command, and starts the setup wizard (helper onboard).
+# No byte-order mark in this file: through irm | iex it would hide the param block. setup.bat reads it as UTF-8.
 # Options as a file: -Dir <folder>  -Branch <name>  -NoWizard, and the rest goes to the wizard (e.g. --yes).
 # Through irm | iex there are no arguments, so the same come from the environment: HELPER_DIR, HELPER_BRANCH,
 # HELPER_NO_WIZARD=1, HELPER_NO_LINK=1, HELPER_WIZARD_ARGS="--yes --api-key=...".
@@ -11,6 +12,7 @@ param(
     [string]$Dir = $(if ($env:HELPER_DIR) { $env:HELPER_DIR } else { Join-Path $HOME 'HELPER' }),
     [string]$Branch = $(if ($env:HELPER_BRANCH) { $env:HELPER_BRANCH } else { 'main' }),
     [switch]$NoWizard,
+    [string]$Here,   # the project folder when run from inside it (setup.bat passes it)
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$WizardArgs
 )
 if ($env:HELPER_NO_WIZARD -eq '1') { $NoWizard = $true }
@@ -60,7 +62,7 @@ if (Has 'git') { Ok (git --version) } else { Say 'Git לא מותקן: מורי�
 
 # ---- the project folder ----
 Step 'הפרויקט'
-$here = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
+$here = if ($Here) { $Here.TrimEnd('\') } elseif ($PSScriptRoot) { $PSScriptRoot } else { $null }
 $inRepo = $here -and (Test-Path (Join-Path $here 'package.json')) -and ((Get-Content (Join-Path $here 'package.json') -Raw) -match '"name":\s*"helper"')
 if ($inRepo) {
     $Dir = $here

@@ -46,6 +46,18 @@ await check('providers: a base URL names its provider', () => {
   assert.strictEqual(L.providerOf('https://example.com/v1').id, 'custom')
 })
 
+// ---- the one-line installer ----
+await check('install.ps1 has no byte-order mark (through irm | iex it would hide the param block)', () => {
+  const b = fs.readFileSync(path.join(L.ROOT, 'install.ps1'))
+  assert.ok(!(b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf))
+})
+if (process.platform === 'win32' || fs.existsSync('C:\\Windows\\System32\\WindowsPowerShell')) await check('install.ps1 parses the way irm | iex hands it over', async () => {
+  const { spawnSync } = await import('node:child_process')
+  const ps = "$t=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes('" + path.join(L.ROOT, 'install.ps1') + "'));$e=$null;$null=[System.Management.Automation.Language.Parser]::ParseInput($t,[ref]$null,[ref]$e);$e.Count"
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8', windowsHide: true })
+  assert.strictEqual((r.stdout || '').trim(), '0', r.stdout + r.stderr)
+})
+
 // ---- the speech engine pick ----
 const RELEASES = [
   { tag_name: 'v1.9.5', assets: [] },
