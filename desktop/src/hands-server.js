@@ -27,7 +27,7 @@ function start(dataDir, onStep) {
       if (!step || typeof step.cmd !== 'string') return send(400, { error: 'no cmd' })
       // batch: {cmd:"batch", args:{steps:[{cmd,args}...]}}: several steps in one call, in order, one line back for
       // each. A step that fails stops the rest and says which one failed. Saves a round trip per step.
-      const steps = step.cmd === 'batch' ? (step.args && Array.isArray(step.args.steps) ? step.args.steps.slice(0, 12) : null) : [step]
+      const steps = step.cmd === 'batch' ? (step.args && Array.isArray(step.args.steps) ? step.args.steps.slice(0, 20) : null) : [step]
       if (!steps) return send(200, { ok: false, error: 'batch needs {"steps":[{"cmd":...,"args":{...}}]}' })
       const lines = []
       for (let i = 0; i < steps.length; i++) {
@@ -38,7 +38,11 @@ function start(dataDir, onStep) {
           const text = await hands.run(one)
           if (record) record.push({ cmd: one.cmd, args: one.args || {}, ok: true })
           if (text) lines.push(String(text))
-          if (one.cmd === 'open' && i < steps.length - 1) await new Promise((r) => setTimeout(r, 300))   // the window appears
+          if (i < steps.length - 1) {
+            // A new window appears, a page loads, a tab comes up: a moment before the next step looks inside it.
+            const pause = one.cmd === 'open' ? 300 : ['goto', 'tab', 'press'].includes(one.cmd) ? 300 : 0
+            if (pause) await new Promise((r) => setTimeout(r, pause))
+          }
         } catch (e) {
           if (record && one && one.cmd) record.push({ cmd: one.cmd, args: one.args || {}, ok: false })
           const done = lines.length ? 'כבר בוצע: ' + lines.join(' · ') + '. ' : ''

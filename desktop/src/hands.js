@@ -1,8 +1,12 @@
 // HELPER's hands on this PC: every action the instant commands and Claude Code can take, in one place. Each one is
 // a plain step {cmd, args}, so a run that worked can be saved as a learned shortcut and replayed with no AI.
 'use strict'
+const fs = require('fs')
+const path = require('path')
 const { shell } = require('electron')
 const win = require('./win32')
+const uia = require('./uia')
+const { siteUrl } = require('./sites')
 const apps = require('./apps')
 const store = require('./store')
 
@@ -15,6 +19,7 @@ let ui = {
   step: () => {},                 // (text): a line under the answer while it works
   confirm: async () => false,     // (question) → true when the user said yes
   askHelper: async () => '',      // (question) → HELPER's answer from the cloud (its memory, WhatsApp, mail…)
+  current: () => null,            // the user's own window in front ({hwnd}), never HELPER's bubble
 }
 const setUi = (u) => { ui = Object.assign(ui, u) }
 
@@ -109,6 +114,93 @@ async function firstVideo(query) {
   return { id: m[1], title }
 }
 
+// ---- inside a window ------------------------------------------------------------------------------
+
+const BROWSER = /^(chrome|msedge|firefox|brave|opera|vivaldi|arc)$/i
+const THIS = /^(זה|הזה|החלון הזה|החלון|this|it|current)$/i
+
+/** The window an in-window step works on: the one named, or the user's own window in front. */
+async function inside(name) {
+  if (name != null && name !== '' && !THIS.test(strip(name))) {
+    const w = await waitWindow(name, 3000)
+    if (!w) throw new Error(`אין חלון פתוח של ${strip(name)}`)
+    return w
+  }
+  const fg = ui.current() || win.foreground()
+  if (!fg) throw new Error('אין חלון בחזית')
+  const id = win.handleId(fg.hwnd)
+  return listWindows().find((x) => x.id === id) || { hwnd: fg.hwnd, id, app: fg.app || '', title: strip(fg.title), bounds: fg.bounds }
+}
+
+/** The browser window to use: the one named, the one in front when it is a browser, else the latest one. */
+function browserWindow(name) {
+  if (name && !THIS.test(strip(name))) return findWindow(name)
+  const fg = ui.current() || win.foreground()
+  const list = listWindows()
+  if (fg) {
+    const f = list.find((x) => x.id === win.handleId(fg.hwnd))
+    if (f && BROWSER.test(f.app)) return f
+  }
+  return list.find((x) => BROWSER.test(x.app)) || null
+}
+
+/**
+ * Brings the window to the front and makes sure it got there before anything is typed or clicked: keys that land in
+ * another window are worse than no keys. Tried a few times; then it fails in words.
+ */
+async function bringForward(w, { soft = false } = {}) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (win.isForeground(w.hwnd)) return true
+    win.focus(w.hwnd)
+    await sleep(120 + attempt * 80)
+  }
+  if (win.isForeground(w.hwnd)) return true
+  if (soft) return false
+  throw new Error(`לא הצלחתי להביא את ${appWord(w)} לחזית, אז לא הקלדתי כלום`)
+}
+
+/** The window said the way a person says it: "פנקס רשימות", "כרום"; a store app by its title ("מחשבון"). */
+function appWord(w) {
+  const app = strip(w.app)
+  if (!app || /^(ApplicationFrameHost|explorer)$/i.test(app)) return strip(w.title).replace(/\s+[-–—]\s+.*$/, '') || 'החלון'
+  return require('./phrase').spoken(app)
+}
+
+/** The control asked for, looked for again once when it is not there yet (a page still loading). */
+async function findControl(w, target, kind, filter) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let items = await uia.list(w.hwnd, kind ? { types: uia.KIND_TYPES[kind] } : {})
+    if (filter) items = items.filter(filter)
+    const el = uia.match(items, target, kind)
+    if (el) return { el, items }
+    if (attempt === 0) await sleep(700)
+  }
+  return { el: null }
+}
+
+/** Puts text into whatever has the keyboard: typed, or pasted when long (and the clipboard put back). */
+async function enterText(text) {
+  const t = String(text)
+  if (t.length <= 80) return win.typeSteady(t)
+  const { clipboard } = require('electron')
+  const before = clipboard.readText()
+  clipboard.writeText(t)
+  win.combo('ctrl+v')
+  await sleep(300)
+  clipboard.writeText(before)
+}
+
+/** "וואטסאפ שלום מה קורה" → the window named by the first words, and the rest to write; null when no window fits. */
+function splitWindowAndText(phrase) {
+  const words = strip(phrase).split(/\s+/)
+  for (let k = Math.min(4, words.length - 1); k >= 1; k--) {
+    const name = words.slice(0, k).join(' ').replace(/^-/, '')
+    const w = findWindow(name) || (/^ה\S{2,}/.test(name) ? findWindow(name.slice(1)) : null)
+    if (w) return { w, text: words.slice(k).join(' ').replace(/^[:,-]\s*/, '') }
+  }
+  return null
+}
+
 // ---- the actions --------------------------------------------------------------------------------
 
 /** Each takes args and returns a short Hebrew line for the bubble. Throws with a Hebrew message on failure. */
@@ -147,6 +239,10 @@ const actions = {
     if (app) {
       apps.launch(app)
       noteOpened(app.name)
+      // The next step often works inside it ("ותחשב בו", "ותכתוב בו"): its window is waited for and brought to the
+      // front, so keys and clicks land in it and not in the window that was in front before.
+      const nw = await waitWindow(name, 6000) || await waitWindow(app.name, 500)
+      if (nw) await bringForward(nw, { soft: true })
       return `פותח את ${app.name}`
     }
     if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(strip(name))) {
@@ -175,7 +271,7 @@ const actions = {
   async focus({ name }) {
     const w = await waitWindow(name)
     if (!w) throw new Error(`אין חלון פתוח של ${strip(name)}`)
-    win.focus(w.hwnd)
+    await bringForward(w, { soft: true })
     return `עברתי ל${strip(name)}`
   },
 
@@ -240,9 +336,10 @@ const actions = {
     return 'לחצתי'
   },
 
-  async scroll({ amount = -3 }) {
-    win.scroll(Number(amount))
-    return 'גללתי'
+  async scroll({ amount = -3, window } = {}) {
+    if (window != null && window !== '') await bringForward(await inside(window))
+    win.scroll(Number(amount) || -3)
+    return Number(amount) > 0 ? 'גללתי למעלה' : 'גללתי למטה'
   },
 
   /** op: up | down | mute | set; value 0-100 for set, or a number of steps for up and down. */
@@ -465,6 +562,132 @@ const actions = {
     return `הקובץ האחרון שהורד:\n${latest.name}`
   },
 
+  /** What is inside a window: its buttons, fields, links, tabs and menus by name (kind: button|field|link|tab|menu). */
+  async look({ window, kind } = {}) {
+    const w = await inside(window)
+    const items = await uia.list(w.hwnd, kind && uia.KIND_TYPES[kind] ? { types: uia.KIND_TYPES[kind] } : {})
+    if (!items.length) return `${appWord(w)} לא חושף כפתורים לקריאה. צריך צילום מסך.`
+    return `${appWord(w)} — ${w.title}\n${uia.describe(items)}`
+  },
+
+  /** The words a window shows: a web page, a document, a chat. */
+  async read({ window, max = 3000 } = {}) {
+    const w = await inside(window)
+    const text = await uia.read(w.hwnd, Math.min(12000, Number(max) || 3000))
+    return text ? `${appWord(w)} — ${w.title}\n${text}` : `לא הצלחתי לקרוא טקסט מ${appWord(w)}. צריך צילום מסך.`
+  },
+
+  /** Presses a button, link, menu item, tab or checkbox by its label, inside a window (the one in front by default). */
+  async press({ target, window, kind, times = 1 } = {}) {
+    if (!strip(target)) throw new Error('על מה ללחוץ?')
+    const w = await inside(window)
+    const { el } = await findControl(w, target, kind)
+    if (!el) throw new Error(`לא מצאתי "${strip(target)}" ב${appWord(w)}`)
+    const n = Math.max(1, Math.min(20, Number(times) || 1))
+    for (let k = 0; k < n; k++) {
+      const r = await uia.act(w.hwnd, el.i)
+      if (r.click) {
+        await bringForward(w)
+        win.click(r.click.x, r.click.y)
+      }
+      if (n > 1) await sleep(120)
+    }
+    return `לחצתי על ${strip(el.name) || strip(target)}${n > 1 ? ` ${n} פעמים` : ''}`
+  },
+
+  /**
+   * Writes in a field by its name, or in the main field when none is named (a search box, a message box, a
+   * document). Fields are replaced, documents added to. submit presses Enter after.
+   */
+  async fill({ text, field, window, submit = false, append } = {}) {
+    if (text == null) throw new Error('מה לכתוב?')
+    const w = await inside(window)
+    let el = null
+    if (field) {
+      el = (await findControl(w, field, 'field')).el || (await findControl(w, field)).el
+      if (!el) throw new Error(`לא מצאתי שדה "${strip(field)}" ב${appWord(w)}`)
+    } else {
+      el = uia.defaultField(await uia.list(w.hwnd, { types: uia.KIND_TYPES.field }))
+    }
+    await bringForward(w)
+    if (el) {
+      const r = await uia.focus(w.hwnd, el.i)
+      const doc = el.type === 'Document'
+      if (r.rect && !r.off && r.rect.w > 0) {
+        // A document is clicked near its bottom, so the click does not land on a link or a picture in its middle.
+        win.click(r.rect.x + Math.round(r.rect.w / 2), doc ? r.rect.y + r.rect.h - 12 : r.rect.y + Math.round(r.rect.h / 2))
+        await sleep(120)
+      }
+      const add = append != null ? Boolean(append) : doc
+      win.combo(add ? 'ctrl+end' : 'ctrl+a')
+      await sleep(40)
+      // Added to a document that has words already: on a line of its own, as a person would write it.
+      if (add && doc && !/^\n/.test(String(text))) {
+        const had = await uia.read(w.hwnd, 100).catch(() => '')
+        if (had.trim()) { win.combo('enter'); await sleep(30) }
+      }
+    }
+    await enterText(text)
+    if (submit) { await sleep(120); win.combo('enter') }
+    return `כתבתי${field ? ' בשדה ' + strip(field) : ''} ב${appWord(w)}${submit ? ' ושלחתי' : ''}`
+  },
+
+  /** "תכתוב בוואטסאפ שלום": the window named by the phrase's first words, and the rest written in it. */
+  async write({ phrase } = {}) {
+    const found = splitWindowAndText(phrase)
+    if (!found || !found.text) throw new Error(`אין חלון פתוח של ${strip(phrase).split(/\s+/)[0]}`)
+    return await actions.fill({ text: found.text, window: found.w.id })
+  },
+
+  /** Switches to a browser tab by its title ("יוטיוב", "ג׳ימייל"); close: true closes that tab. */
+  async tab({ title, window, close = false } = {}) {
+    const w = browserWindow(window)
+    if (!w) throw new Error('אין דפדפן פתוח')
+    // The browser's own tab strip near the window's top, not tabs inside the page (YouTube's "תגובות").
+    const top = w.bounds ? w.bounds.y + 90 : Infinity
+    const { el } = await findControl(w, title, 'tab', (it) => it.y == null || it.y < top)
+    if (!el) throw new Error(`לא מצאתי טאב של ${strip(title)}`)
+    await bringForward(w)
+    const r = await uia.act(w.hwnd, el.i)
+    if (r.click) win.click(r.click.x, r.click.y)
+    const name = strip(el.name).replace(/\s*-\s*(אודיו מופעל|audio playing).*$/i, '')
+    if (close) { await sleep(250); win.combo('ctrl+w'); return `סגרתי את הטאב ${name}` }
+    return `עברתי לטאב ${name}`
+  },
+
+  /** Goes to a site in the browser that is already open (this tab, or a new one), not in a new window. */
+  async goto({ url, newtab = false, window } = {}) {
+    const target = siteUrl(url) || (/\s/.test(strip(url)) ? `https://www.google.com/search?q=${encodeURIComponent(strip(url))}` : null)
+    if (!target) throw new Error(`לא מצאתי אתר בשם ${strip(url)}`)
+    const host = target.replace(/^https?:\/\/(www\.)?/, '').replace(/[/?].*$/, '')
+    const w = browserWindow(window)
+    if (!w) { await shell.openExternal(target); return `פתחתי את ${host}` }
+    await bringForward(w)
+    if (newtab) { win.combo('ctrl+t'); await sleep(250) }
+    win.combo('ctrl+l')
+    await sleep(120)
+    await win.typeSteady(target)
+    await sleep(60)
+    win.combo('enter')
+    return `נכנסתי ל${host}${newtab ? ' בטאב חדש' : ''}`
+  },
+
+  /** Several steps inside one window: it comes forward first, and steps that name no window work on it. */
+  async in({ window, steps = [] } = {}) {
+    const w = await inside(window)
+    await bringForward(w)
+    const lines = []
+    for (const s of (Array.isArray(steps) ? steps : []).slice(0, 20)) {
+      if (!s || !actions[s.cmd] || s.cmd === 'in') throw new Error('צעד לא מוכר בתוך החלון: ' + (s && s.cmd))
+      const args = Object.assign({}, s.args || {})
+      if (['press', 'fill', 'read', 'look'].includes(s.cmd) && args.window == null) args.window = w.id
+      if (['key', 'type', 'scroll', 'click'].includes(s.cmd)) await bringForward(w)
+      lines.push((await actions[s.cmd](args)) || '')
+      await sleep(s.cmd === 'press' || s.cmd === 'goto' ? 250 : 60)
+    }
+    return require('./phrase').human(steps, lines) || `עבדתי ב${appWord(w)}`
+  },
+
   async wait({ ms = 500 }) {
     await sleep(Math.min(10000, Number(ms) || 500))
     return ''
@@ -472,7 +695,7 @@ const actions = {
 }
 
 /** Steps whose effect is visible and harmless to repeat: only these become learned shortcuts. */
-const REPLAYABLE = new Set(['open', 'focus', 'close', 'place', 'desktop', 'volume', 'media', 'web', 'search', 'play', 'key', 'wait', 'clipboard', 'system', 'workspace', 'browser_tab'])
+const REPLAYABLE = new Set(['open', 'focus', 'close', 'place', 'desktop', 'volume', 'media', 'web', 'search', 'play', 'key', 'wait', 'clipboard', 'system', 'workspace', 'browser_tab', 'press', 'tab', 'goto', 'scroll'])
 
 async function run(step) {
   const fn = actions[step.cmd]
@@ -480,15 +703,17 @@ async function run(step) {
   return await fn(step.args || {})
 }
 
-/** Runs steps in order; returns their lines. A step that fails stops the rest. */
+/** Runs steps in order; returns one line per step ('' for a silent one). A step that fails stops the rest. */
 async function runAll(steps) {
   const lines = []
-  for (const s of steps) {
-    const line = await run(s)
-    if (line) lines.push(line)
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i]
+    lines.push((await run(s)) || '')
     if (s.cmd === 'open') await sleep(350)   // let a new window appear before the next step looks for it
+    // A page that just loaded or a tab just switched to needs a moment before the next step looks inside it.
+    else if (['goto', 'tab', 'press'].includes(s.cmd) && i < steps.length - 1) await sleep(300)
   }
   return lines
 }
 
-module.exports = { actions, run, runAll, setUi, recentOpened, listWindows, findWindow, waitWindow, pickDisplay, REPLAYABLE, strip }
+module.exports = { actions, run, runAll, setUi, recentOpened, listWindows, findWindow, waitWindow, pickDisplay, REPLAYABLE, strip, siteUrl, splitWindowAndText }

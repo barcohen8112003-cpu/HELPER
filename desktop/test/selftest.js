@@ -152,5 +152,72 @@ check('say: play', () => assert.strictEqual(say([{ cmd: 'play', args: { query: '
 check('say: this window', () => assert.strictEqual(say([{ cmd: 'place', args: { name: 'זה', where: 'left' } }]), 'שמתי את החלון בצד שמאל'))
 check('say: an unknown step keeps the line the hands gave', () => assert.strictEqual(say([{ cmd: 'time', args: {} }], ['השעה 23:25']), 'השעה 23:25'))
 
+// Inside a window: instant phrases
+same('תלחץ על שמור', [{ cmd: 'press', args: { target: 'שמור' } }])
+same('תלחץ על הכפתור הבא', [{ cmd: 'press', args: { target: 'הכפתור הבא' } }])
+same('תלחץ על פלוס 3 פעמים', [{ cmd: 'press', args: { target: 'פלוס', times: 3 } }])
+same('click send', [{ cmd: 'press', args: { target: 'send' } }])
+same('תלחץ אנטר', [{ cmd: 'key', args: { keys: 'enter' } }])
+same('תלחץ על אסקייפ', [{ cmd: 'key', args: { keys: 'esc' } }])
+same('תכתוב בפנקס רשימות תודה רבה על הכל', [{ cmd: 'write', args: { phrase: 'פנקס רשימות תודה רבה על הכל' } }])
+same('תכתוב בוואטסאפ בבקשה תביא חלב ואז תבוא', [{ cmd: 'write', args: { phrase: 'וואטסאפ בבקשה תביא חלב ואז תבוא' } }])
+same('תכתוב בשדה החיפוש חתולים חמודים', [{ cmd: 'fill', args: { field: 'חיפוש', text: 'חתולים חמודים' } }])
+same('תכתוב פה שלום לכולם', [{ cmd: 'type', args: { text: 'שלום לכולם' } }])
+brain('תכתוב לדני שאני מאחר')
+brain('תכתוב באנגלית מכתב לבוס')
+brain('תכתוב בפנקס רשימות את התוצאה שמופיעה עכשיו במחשבון')
+brain('תכתוב בשדה החיפוש את מה שכתוב בלוח')
+same('תעבור לטאב של יוטיוב', [{ cmd: 'tab', args: { title: 'יוטיוב' } }])
+same('תעבור לכרטיסייה של ג׳ימייל', [{ cmd: 'tab', args: { title: 'ג׳ימייל' } }])
+same('תעבור לטאב הבא', [{ cmd: 'browser_tab', args: { action: 'next' } }])
+same('תסגור את הטאב של קיק', [{ cmd: 'tab', args: { title: 'קיק', close: true } }])
+same('סגור טאב', [{ cmd: 'browser_tab', args: { action: 'close' } }])
+same('תיכנס ל-ynet.co.il', [{ cmd: 'goto', args: { url: 'ynet.co.il', newtab: false } }])
+same('תכנס ליוטיוב בטאב חדש', [{ cmd: 'goto', args: { url: 'יוטיוב', newtab: true } }])
+same('תפתח את גיטהאב בטאב חדש', [{ cmd: 'goto', args: { url: 'גיטהאב', newtab: true } }])
+brain('תכנס למייל של דני')
+same('תגלול למטה', [{ cmd: 'scroll', args: { amount: -6 } }])
+same('תגלול למעלה הרבה', [{ cmd: 'scroll', args: { amount: 15 } }])
+same('תעתיק', [{ cmd: 'key', args: { keys: 'ctrl+c' } }])
+same('תדביק פה', [{ cmd: 'key', args: { keys: 'ctrl+v' } }])
+same('תשמור את הקובץ', [{ cmd: 'key', args: { keys: 'ctrl+s' } }])
+same('תחזור אחורה', [{ cmd: 'key', args: { keys: 'alt+left' } }])
+same('תבחר הכל ותעתיק', [{ cmd: 'key', args: { keys: 'ctrl+a' } }, { cmd: 'key', args: { keys: 'ctrl+c' } }])
+same('תלחץ על שמור ואז תסגור את זה', [{ cmd: 'press', args: { target: 'שמור' } }, { cmd: 'close', args: { name: 'זה' } }])
+check('say: keys said as what they did', () => assert.strictEqual(require('../src/phrase').human([{ cmd: 'key', args: { keys: 'ctrl+c' } }], ['לחצתי ctrl+c']), 'העתקתי'))
+
+// Finding a control by what the user called it
+const uia = require('../src/uia')
+const CTRLS = [
+  { i: 0, type: 'Button', name: 'Minimize', enabled: true },
+  { i: 1, type: 'Button', name: 'Save (Ctrl+S)', enabled: true },
+  { i: 2, type: 'Button', name: 'Send', enabled: false },
+  { i: 3, type: 'Edit', name: 'Search', value: '', enabled: true },
+  { i: 4, type: 'Button', name: 'שבע', enabled: true },
+  { i: 5, type: 'Button', name: 'Plus', id: 'plusButton', enabled: true },
+  { i: 6, type: 'TabItem', name: 'YouTube - Google Chrome', enabled: true },
+  { i: 7, type: 'Hyperlink', name: 'התחברות לחשבון', enabled: true },
+  { i: 8, type: 'Button', name: 'Send message', enabled: true },
+  { i: 9, type: 'Document', name: 'Text editor', enabled: true },
+]
+const pick = (q, kind) => { const m = uia.match(CTRLS, q, kind); return m ? m.i : null }
+check('ui: Hebrew word finds the English button', () => assert.strictEqual(pick('שמור'), 1))
+check('ui: words around the name drop', () => assert.strictEqual(pick('על הכפתור שמור'), 1))
+check('ui: a number word finds the digit or its Hebrew', () => assert.strictEqual(pick('7'), 4))
+check('ui: plus by Hebrew', () => assert.strictEqual(pick('פלוס'), 5))
+check('ui: enabled wins over disabled', () => assert.strictEqual(pick('שלח'), 8))
+check('ui: field kind finds the search box', () => assert.strictEqual(pick('חיפוש', 'field'), 3))
+check('ui: tab by part of its title', () => assert.strictEqual(pick('youtube', 'tab'), 6))
+const TABS = [{ i: 0, type: 'TabItem', name: 'Napoleon edit - YouTube - אודיו מופעל' }, { i: 1, type: 'TabItem', name: 'YouTube Music' }, { i: 2, type: 'TabItem', name: 'TikTok Search' }]
+check('ui: a site said in Hebrew finds its tab, the site itself before one that starts the same', () => assert.strictEqual(uia.match(TABS, 'יוטיוב', 'tab').i, 0))
+check('ui: טיקטוק finds TikTok', () => assert.strictEqual(uia.match(TABS, 'טיקטוק', 'tab').i, 2))
+check('ui: a link by one of its words', () => assert.strictEqual(pick('התחברות'), 7))
+check('ui: one letter off still finds it', () => assert.strictEqual(pick('התחברויות לחשבון'), 7))
+check('ui: nothing like it is nothing', () => assert.strictEqual(pick('בננה'), null))
+check('ui: main field is the search box', () => assert.strictEqual(uia.defaultField(CTRLS).i, 3))
+check('ui: described for the brain', () => assert.ok(/כפתור: Save/.test(uia.describe(CTRLS)) && /שדה: Search = \(ריק\)/.test(uia.describe(CTRLS)) && /\(לא פעיל\)/.test(uia.describe(CTRLS))))
+const { siteUrl } = require('../src/sites')
+check('sites: names and addresses', () => assert.deepStrictEqual([siteUrl('ynet.co.il'), siteUrl('יוטיוב'), siteUrl('ג׳ימייל'), siteUrl('בננה'), siteUrl('מייל של דני')], ['https://ynet.co.il', 'https://youtube.com', 'https://mail.google.com', null, null]))
+
 console.log(`${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

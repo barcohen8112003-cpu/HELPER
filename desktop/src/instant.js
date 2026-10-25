@@ -1,6 +1,7 @@
 // Instant commands: what is clear from the words alone runs at once, with no AI. A sentence becomes steps for the
 // hands (hands.js). Anything not understood here goes to the brain (brain.js). Hebrew first, English too.
 'use strict'
+const { siteUrl } = require('./sites')
 
 const POLITE = /(^|\s)(בבקשה|תודה|אפשר|תוכל|תוכלי|יכול|יכולה|רגע|יאללה|בוא|תעשה לי|תעשי לי|please|can you|could you)(?=\s|$)/gi
 const NAME = /^(הלפר|helper|היי הלפר|hey helper)[\s,]+/i
@@ -103,9 +104,84 @@ function playQuery(s) {
   }
 }
 
+// Inside a window: pressing a control by its label, writing in a window or a field, tabs, sites, editing keys.
+const PRESS = /^(?:תלחץ|תלחצי|לחץ|לחצי|ללחוץ|תקליק|תקליקי|קליק|click|press|tap)\s+(?:על\s+|on\s+)?(.+?)(?:\s+(\d{1,2}|פעמיים|שלוש|ארבע|חמש)\s*(?:פעמים)?)?$/i
+const KEY_NAMES = {
+  'אנטר': 'enter', 'enter': 'enter', 'אסקייפ': 'esc', 'escape': 'esc', 'esc': 'esc', 'רווח': 'space', 'space': 'space', 'מקש רווח': 'space',
+  'בקספייס': 'backspace', 'backspace': 'backspace', 'דליט': 'delete', 'delete': 'delete', 'f5': 'f5', 'f11': 'f11', 'f2': 'f2',
+}
+const TIMES = { 'פעמיים': 2, 'שלוש': 3, 'ארבע': 4, 'חמש': 5 }
+const WRITE = /^(?:תכתוב|תכתבי|תכתבו|כתוב|כתבי|תקליד|תקלידי|הקלד|תרשום|תרשמי|רשום)\s+(.+)$/i
+const TAB_GO = /^(?:תעבור|תעברי|עבור|תחזור|תחזרי|לך|switch to|go to)\s*(?:ל-?|אל\s+)?(?:ה)?(?:טאב|כרטיסייה|כרטיסיה|לשונית|tab)\s+(?:של\s+|עם\s+|with\s+)?(.+)$/i
+const TAB_CLOSE = /^(?:תסגור|תסגרי|סגור|סגרי|close)\s+(?:את\s+)?(?:ה)?(?:טאב|כרטיסייה|כרטיסיה|לשונית|tab)\s+(?:של\s+|עם\s+|with\s+)(.+)$/i
+const GOTO = /^(?:תכנס|תיכנס|תכנסי|תיכנסי|כנס|היכנס|תגלוש|גלוש|go to|navigate to)\s+(?:ל-?|אל\s+|לאתר\s+(?:של\s+)?)?(.+?)(\s+(?:בטאב חדש|בכרטיסייה חדשה|בלשונית חדשה|in a new tab))?$/i
+const NEW_TAB = /\s+(?:בטאב חדש|בכרטיסייה חדשה|בלשונית חדשה|in a new tab)$/i
+const EDIT_KEYS = [
+  [/^(תעתיק|תעתיקי|העתק|copy)( את זה| את מה שמסומן)?$/i, 'ctrl+c', 'העתקתי'],
+  [/^(תדביק|תדביקי|הדבק|paste)( את זה| פה| כאן| את מה שהעתקתי)?$/i, 'ctrl+v', 'הדבקתי'],
+  [/^(תגזור|גזור|cut)( את זה)?$/i, 'ctrl+x', 'גזרתי'],
+  [/^(תבחר הכל|בחר הכל|תסמן הכל|סמן הכל|תסמן את הכל|select all)$/i, 'ctrl+a', 'סימנתי הכל'],
+  [/^(תבטל את הפעולה|בטל פעולה|תבטל את מה שעשיתי|תעשה undo|undo|תחזיר את מה שמחקתי)$/i, 'ctrl+z', 'ביטלתי את הפעולה האחרונה'],
+  [/^(תשמור|תשמרי|שמור|save)( את)?( ה)?(קובץ|מסמך|זה|שינויים)?$/i, 'ctrl+s', 'שמרתי'],
+  [/^(תחזור|חזור|תחזרי|go)\s+(אחורה|לדף הקודם|back)$/i, 'alt+left', 'חזרתי לדף הקודם'],
+  [/^(תתקדם|תלך|לך)\s+(קדימה|לדף הבא)$/i, 'alt+right', 'התקדמתי לדף הבא'],
+  [/^(תחפש בדף|חיפוש בדף|find in page)$/i, 'ctrl+f', 'פתחתי חיפוש בדף'],
+]
+
+/**
+ * Writing: "תכתוב בשדה החיפוש חתולים" (a field), "תכתוב בפנקס רשימות קנות חלב" (a window), "תכתוב פה שלום" (where
+ * the cursor is). "תכתוב לדני שאני מאחר" and "תכתוב באנגלית…" are for the brain.
+ */
+function writing(s) {
+  const m = s.match(WRITE)
+  if (!m) return null
+  const rest = m[1]
+  let f
+  // "את התוצאה", "את מה שכתוב", "את הכותרת": words about something to fetch first, not words to write.
+  const about = (t) => /^(את|מה ש|מה שכתוב|זה ש)(\s|$)/.test(t.trim())
+  if ((f = rest.match(/^ב(?:שדה|תיבת|תיבה של|שורת)\s+(?:ה)?(\S+)\s+(.+)$/))) return about(f[2]) ? null : [{ cmd: 'fill', args: { field: f[1], text: f[2] } }]
+  if ((f = rest.match(/^(?:פה|כאן)\s+(.+)$/))) return about(f[1]) ? null : [{ cmd: 'type', args: { text: f[1] } }]
+  if ((f = rest.match(/^ב-?(?!(?:עברית|אנגלית|ערבית|רוסית|צרפתית|ספרדית|גרמנית|ניסוח|קצרה|קצר|פירוט|כתב|שבילי|שבילו|שם)(?:\s|$))(\S+\s.*\S)$/)) && !/\s(את|מה ש|זה ש)\s/.test(' ' + f[1].split(/\s+/).slice(1, 4).join(' ') + ' ')) return [{ cmd: 'write', args: { phrase: f[1] } }]
+  return null
+}
+
 /** One instruction → steps, or null when it is not an instant command. */
 function parseOne(s) {
   let m
+
+  // Editing keys on the window in front: "תעתיק", "תדביק", "תשמור", "תחזור אחורה".
+  for (const [re, keys] of EDIT_KEYS) if (re.test(s)) return [{ cmd: 'key', args: { keys } }]
+
+  // Scrolling: "תגלול למטה", "תגלול למעלה הרבה".
+  if ((m = s.match(/^(?:תגלול|תגללי|גלול|scroll)(?:\s+(למטה|למעלה|down|up))?(?:\s+(הרבה|קצת|a lot|a bit))?$/i))) {
+    const up = /למעלה|up/i.test(m[1] || '')
+    const n = /הרבה|a lot/i.test(m[2] || '') ? 15 : /קצת|a bit/i.test(m[2] || '') ? 3 : 6
+    return [{ cmd: 'scroll', args: { amount: up ? n : -n } }]
+  }
+
+  // Tabs by what is in them: "תעבור לטאב של יוטיוב", "תסגור את הטאב של ג׳ימייל".
+  if ((m = s.match(TAB_CLOSE))) return [{ cmd: 'tab', args: { title: object(m[1]), close: true } }]
+  if ((m = s.match(TAB_GO))) {
+    const title = object(m[1])
+    if (/^(הבא|הבאה|next)$/i.test(title)) return [{ cmd: 'browser_tab', args: { action: 'next' } }]
+    if (/^(הקודם|הקודמת|previous|prev)$/i.test(title)) return [{ cmd: 'browser_tab', args: { action: 'prev' } }]
+    return [{ cmd: 'tab', args: { title } }]
+  }
+
+  // A site in the open browser: "תכנס ל-ynet.co.il", "תיכנס ליוטיוב בטאב חדש".
+  if ((m = s.match(GOTO)) && siteUrl(m[1])) return [{ cmd: 'goto', args: { url: m[1].trim(), newtab: Boolean(m[2]) } }]
+
+  // Pressing a control by its label: "תלחץ על שמור", "תלחץ על הכפתור הבא", "תלחץ על פלוס 3 פעמים".
+  if ((m = s.match(PRESS))) {
+    const target = m[1].trim()
+    const key = KEY_NAMES[target.toLowerCase().replace(/^(על\s+)?(ה)?(מקש\s+)?/, '')]
+    if (key) return [{ cmd: 'key', args: { keys: key } }]
+    const times = m[2] ? (TIMES[m[2]] || Number(m[2])) : 1
+    if (target.split(/\s+/).length <= 6) return [{ cmd: 'press', args: times > 1 ? { target, times } : { target } }]
+  }
+
+  const written = writing(s)
+  if (written) return written
 
   // Time and date.
   if (/^(מה השעה|כמה השעה|מה התאריך|איזה יום היום|what time is it|what's the time)$/i.test(s)) return [{ cmd: 'time' }]
@@ -180,6 +256,8 @@ function parseOne(s) {
   // Open: "תפתח את ספוטיפיי", "תפתח כרום בצד שמאל" (open, then place).
   if ((m = s.match(OPEN))) {
     let rest = m[2]
+    // "תפתח את יוטיוב בטאב חדש": a new tab in the browser that is open, not a new window.
+    if (NEW_TAB.test(rest) && siteUrl(object(rest.replace(NEW_TAB, '')))) return [{ cmd: 'goto', args: { url: object(rest.replace(NEW_TAB, '')), newtab: true } }]
     const p = placeIn(rest)
     if (p) rest = p.rest
     const name = object(rest)
@@ -224,6 +302,13 @@ function parse(text) {
   if ((m = s.match(/^(?:תזכור|תזכרי|זכור|remember)\s+(?:ש|כי|that\s+)(.+)$/i))) return { remember: m[1].trim() }
   if ((m = s.match(/^(?:תשכח|תשכחי|forget)\s+(?:ש|את זה ש|that\s+)(.+)$/i))) return { forget: m[1].trim() }
 
+  // Words to write keep every word the user said ("תודה", "בבקשה" are part of the message) and are never split.
+  const light = String(text || '').replace(/[‎‏‪-‮]/g, '').trim().replace(NAME, '').trim().replace(/^(בבקשה|please)\s+/i, '')
+  if (WRITE.test(light)) {
+    const w = writing(light)
+    if (w) return { steps: w }
+  }
+
   // Two or more instructions are tried first: "תפתח את המחשבון ותשים אותו בצד שמאל" is open + place, not one
   // long app name; when the parts don't all parse, the sentence is tried whole.
   const compound = splitInstructions(s)
@@ -235,7 +320,7 @@ function parse(text) {
 
 /** "X ו-Y", "X ואז Y", "X and Y" → the steps of each, or null. */
 function splitInstructions(s) {
-  const parts = s.split(/\s+(?:ואז|ואחר כך|and then|then|and)\s+|\s+ו(?=(?:תפתח|תשים|תסגור|תעביר|תזיז|תגדיל|תמזער|תחפש|תנגן|תעבור)(?=\s|$))|\s+ו-?(?=\S+\s+(?:משמאל|מימין|שמאלה|ימינה|בצד|למסך))|\s+ו(?=את\s)/)
+  const parts = s.split(/\s+(?:ואז|ואחר כך|and then|then|and)\s+|\s+ו(?=(?:תפתח|תשים|תסגור|תעביר|תזיז|תגדיל|תמזער|תחפש|תנגן|תעבור|תעתיק|תדביק|תשמור|תלחץ|תגלול|תכנס|תיכנס|תסמן|תגזור)(?=\s|$))|\s+ו-?(?=\S+\s+(?:משמאל|מימין|שמאלה|ימינה|בצד|למסך))|\s+ו(?=את\s)/)
   if (parts.length > 1 && parts.length <= 5) {
     const steps = []
     let verb = null

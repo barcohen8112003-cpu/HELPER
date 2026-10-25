@@ -44,6 +44,13 @@ function where(step) {
   return side + ' ב' + screen.replace(/^ה/, '')   // "ב" + "המסך" is spoken "במסך": the article's ה drops
 }
 
+/** Keys said as what they did: "העתקתי", not "לחצתי ctrl+c". */
+const KEY_SAID = {
+  'ctrl+c': 'העתקתי', 'ctrl+v': 'הדבקתי', 'ctrl+x': 'גזרתי', 'ctrl+a': 'סימנתי הכל', 'ctrl+z': 'ביטלתי את הפעולה האחרונה', 'ctrl+s': 'שמרתי',
+  'alt+left': 'חזרתי לדף הקודם', 'alt+right': 'התקדמתי לדף הבא', 'ctrl+f': 'פתחתי חיפוש בדף', enter: 'לחצתי אנטר', esc: 'לחצתי אסקייפ',
+  space: 'לחצתי רווח', backspace: 'מחקתי תו', delete: 'מחקתי', 'alt+f4': 'סגרתי את החלון',
+}
+
 const join = (parts) => (parts.length <= 1 ? parts[0] || '' : parts.slice(0, -1).join(', ') + ' ו' + parts[parts.length - 1])
 
 /**
@@ -98,6 +105,9 @@ function human(steps, lines = [], flat = false) {
         clauses.push(/^לא מצאתי/.test(raw) ? raw : title && title !== raw ? 'מנגן לך ' + title : 'מנגן')
         break
       }
+      case 'key':
+        clauses.push(KEY_SAID[String(a.keys || '').toLowerCase()] || raw)
+        break
       default:
         if (raw) clauses.push(raw)
     }
@@ -125,4 +135,4 @@ function group(steps, lines) {
   return clauses.length > 1 ? clauses.join(', ו') : clauses[0]
 }
 
-module.exports = { human, the, where }
+module.exports = { human, the, where, spoken }

@@ -398,11 +398,11 @@ async function handleAsk(raw, { voice = false } = {}) {
         return finish(seq, raw, `סגור. כשתגיד "${parsed.teach.phrase}" אני ${does && does.steps ? 'עושה את זה מיד' : 'אדע מה לעשות'}`, 'instant', started)
       }
       const lines = await hands.runAll(parsed.steps)
-      return finish(seq, raw, phrase.human(parsed.steps, lines) || lines.join(' · ') || 'בוצע', 'instant', started)
+      return finish(seq, raw, phrase.human(parsed.steps, lines) || lines.filter(Boolean).join(' · ') || 'בוצע', 'instant', started)
     } catch (e) {
       // A name that is no app (often a mishearing: "פלסטרום"): Claude works out what was meant, from the windows and
       // apps on the PC, instead of an error. Any other failure is shown as it is.
-      if (!/^(לא מצאתי אפליקציה|אין חלון פתוח)/.test(e.message)) return finish(seq, raw, e.message, 'instant', started, true)
+      if (!/^(לא מצאתי|אין חלון פתוח|אין דפדפן|אין חלון בחזית)/.test(e.message)) return finish(seq, raw, e.message, 'instant', started, true)
       log('no such app, to the brain:', raw)
     }
   }
@@ -413,7 +413,7 @@ async function handleAsk(raw, { voice = false } = {}) {
     try {
       if (known.steps.length === 1 && known.steps[0].say) return handleAsk(known.steps[0].say, { voice })
       const lines = await hands.runAll(known.steps)
-      return finish(seq, raw, phrase.human(known.steps, lines) || lines.join(' · ') || 'בוצע', 'learned', started)
+      return finish(seq, raw, phrase.human(known.steps, lines) || lines.filter(Boolean).join(' · ') || 'בוצע', 'learned', started)
     } catch (e) {
       store.unlearn(text)   // it no longer works: next time the brain works it out again
       log('learned shortcut failed, forgotten:', text, e.message)
@@ -804,8 +804,17 @@ app.whenReady().then(async () => {
     say: (t) => bubbleState({ mode: 'thinking', text: t }),
     confirm,
     askHelper: async (q) => (await brain.askHelper(q)).reply,
+    // "זה", "תלחץ על שמור", "תכתוב פה": the user's window, even while HELPER's own box has the keyboard.
+    current: () => {
+      const fg = win32.foreground()
+      if (fg && fg.title !== 'HELPER') return fg
+      const back = returnTo || lastOutside
+      return back ? win32.windows().find((w) => win32.handleId(w.hwnd) === win32.handleId(back)) || null : null
+    },
   })
   await handsServer.start(app.getPath('userData'), () => {})
+  // The eyes inside windows start now, so the first "תלחץ על…" is as quick as the rest.
+  setTimeout(() => require('./src/uia').warm(), 3000)
 
   ipcMain.on('audio', (e, data) => onAudio(data))
   ipcMain.on('typed', (e, text) => { endTyping(); if (String(text).trim()) handleAsk(String(text), { voice: false }); else { mode = 'idle'; bubbleState({ mode: 'hidden' }) } })
@@ -881,6 +890,7 @@ app.on('second-instance', (e, argv, cwd, extra) => {
 })
 app.on('window-all-closed', (e) => e.preventDefault())
 app.on('before-quit', () => {
+  try { require('./src/uia').stop() } catch { }
   try { globalShortcut.unregisterAll() } catch { }
   try { hook && hook.uIOhook.stop() } catch { }
   speech && speech.stop()

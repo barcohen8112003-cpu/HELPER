@@ -33,6 +33,7 @@ const GetCurrentThreadId = kernel32.func('uint32_t __stdcall GetCurrentThreadId(
 const GetCursorPos = user32.func('bool __stdcall GetCursorPos(_Out_ POINT *p)')
 const SetCursorPos = user32.func('bool __stdcall SetCursorPos(int x, int y)')
 const LockWorkStation = user32.func('bool __stdcall LockWorkStation()')
+const SwitchToThisWindow = user32.func('void __stdcall SwitchToThisWindow(HWND hwnd, bool altTab)')
 const OpenProcess = kernel32.func('void * __stdcall OpenProcess(uint32_t access, bool inherit, uint32_t pid)')
 const CloseHandle = kernel32.func('bool __stdcall CloseHandle(void *h)')
 const QueryFullProcessImageNameW = kernel32.func('bool __stdcall QueryFullProcessImageNameW(void *h, uint32_t flags, _Out_ uint16_t *buf, _Inout_ uint32_t *size)')
@@ -131,11 +132,17 @@ function focus(hwnd) {
   // A tap of Alt lifts the foreground lock for this one call.
   keys([{ vk: 0x12 }, { vk: 0x12, up: true }])
   BringWindowToTop(hwnd)
-  const ok = SetForegroundWindow(hwnd)
+  let ok = SetForegroundWindow(hwnd)
   ShowWindow(hwnd, SW_SHOW)
   if (them && them !== me) AttachThreadInput(me, them, false)
+  // Windows can still refuse a background app; the Alt+Tab path it uses itself is not refused.
+  const now = GetForegroundWindow()
+  if (!now || koffi.address(now) !== koffi.address(hwnd)) { SwitchToThisWindow(hwnd, true); ok = true }
   return ok
 }
+
+/** True when this window has the keyboard now. */
+const isForeground = (hwnd) => { const h = GetForegroundWindow(); return Boolean(h) && koffi.address(h) === koffi.address(hwnd) }
 
 /** Places a window at {x, y, width, height} in screen pixels (restoring it first when maximized or minimized). */
 function place(hwnd, rect) {
@@ -256,4 +263,4 @@ function scroll(amount) {
 
 const handleId = (hwnd) => String(koffi.address(hwnd))
 
-module.exports = { windows, foreground, focus, focusOwn, place, maximize, minimize, restore, close, keys, combo, type, typeSteady, click, scroll, cursor, VK, lock: () => LockWorkStation(), handleId }
+module.exports = { windows, foreground, focus, isForeground, focusOwn, place, maximize, minimize, restore, close, keys, combo, type, typeSteady, click, scroll, cursor, VK, lock: () => LockWorkStation(), handleId }

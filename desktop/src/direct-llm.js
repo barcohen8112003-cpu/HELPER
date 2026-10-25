@@ -211,6 +211,93 @@ const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'look_window',
+      description: 'Lists what is inside an open window: its buttons, fields, links, tabs and menu items by name. Use before pressing or writing inside a window. Faster and more exact than a screenshot.',
+      parameters: {
+        type: 'object',
+        properties: {
+          window: { type: 'string', description: 'App name or window id; empty for the window in front' },
+          kind: { type: 'string', enum: ['button', 'field', 'link', 'tab', 'menu'] }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_window',
+      description: 'Returns the text a window shows (a web page, a document, a chat), to answer or summarize what is written there.',
+      parameters: { type: 'object', properties: { window: { type: 'string', description: 'App name or window id; empty for the window in front' } } }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'press_control',
+      description: 'Presses a button, link, menu item, tab or checkbox inside a window by its label (Hebrew or English).',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'The label, e.g. "שמור", "Send", "הבא"' },
+          window: { type: 'string', description: 'App name or window id; empty for the window in front' },
+          times: { type: 'number', description: 'How many presses (default 1)' }
+        },
+        required: ['target']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fill_field',
+      description: 'Writes text into a field of a window by the field name; without a field, into the main field (search box, message box, document).',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          field: { type: 'string', description: 'Field name, e.g. "חיפוש", "To", "Subject"' },
+          window: { type: 'string', description: 'App name or window id; empty for the window in front' },
+          submit: { type: 'boolean', description: 'Press Enter after writing' }
+        },
+        required: ['text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'switch_tab',
+      description: 'Switches to (or closes) an open browser tab by its title.',
+      parameters: {
+        type: 'object',
+        properties: { title: { type: 'string' }, close: { type: 'boolean' } },
+        required: ['title']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'goto_site',
+      description: 'Opens a site in the browser that is already open (this tab or a new tab), instead of a new window.',
+      parameters: {
+        type: 'object',
+        properties: { url: { type: 'string', description: 'Address or site name, e.g. ynet.co.il, יוטיוב' }, newtab: { type: 'boolean' } },
+        required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'scroll_window',
+      description: 'Scrolls the window in front (or a named one). Negative is down.',
+      parameters: { type: 'object', properties: { amount: { type: 'number' }, window: { type: 'string' } } }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'latest_download_file',
       description: 'Finds or opens the most recently downloaded file in Downloads folder.',
       parameters: {
@@ -255,6 +342,20 @@ async function executeTool(name, args) {
       return await hands.run({ cmd: 'workspace', args: { mode: args.mode } })
     case 'browser_tab_control':
       return await hands.run({ cmd: 'browser_tab', args: { action: args.action } })
+    case 'look_window':
+      return await hands.run({ cmd: 'look', args })
+    case 'read_window':
+      return await hands.run({ cmd: 'read', args })
+    case 'press_control':
+      return await hands.run({ cmd: 'press', args })
+    case 'fill_field':
+      return await hands.run({ cmd: 'fill', args })
+    case 'switch_tab':
+      return await hands.run({ cmd: 'tab', args })
+    case 'goto_site':
+      return await hands.run({ cmd: 'goto', args })
+    case 'scroll_window':
+      return await hands.run({ cmd: 'scroll', args })
     case 'latest_download_file':
       return await hands.run({ cmd: 'latest_download', args: { open: args.open } })
     default:
@@ -273,6 +374,8 @@ function systemPrompt(extra = {}) {
     'אישיות: חכם, חד, ישיר, מועיל וחם. עברית טבעית ומדוברת. תמיד תשובה ישירה וקצרה.',
     'בלי חנופה, בלי "בטח!", "בשמחה!", "איך עוד אוכל לעזור?". תענה מיד או תבצע את הפעולה.',
     'יש לך שליטה מלאה במחשב דרך הכלים (פתיחת אפליקציות, סידור חלונות, ווליום, יוטיוב, חיפוש, לוח העתקות, מידע מערכת, הרצת פקודות).',
+    'בתוך חלון קיים: look_window כדי לראות מה יש בו, ואז press_control / fill_field לפי השמות. שאלה על מה שכתוב בחלון: read_window. אתר: goto_site בדפדפן הפתוח, טאב קיים: switch_tab.',
+    'משימה מורכבת: תכנן את כל הצעדים ובצע אותם ברצף, ואז משפט קצר על מה שעשית.',
     `זמן נוכחי: ${timeStr}.`,
     extra.foreground ? `חלון פעיל כרגע: ${extra.foreground}` : '',
     extra.windows ? `חלונות פתוחים:\n${extra.windows}` : '',
@@ -330,7 +433,7 @@ async function ask(prompt, extra = {}, onEvent = () => {}) {
 }
 
 async function callWithTools(apiKey, model, messages, onEvent, turn = 0) {
-  if (turn > 5) {
+  if (turn > 10) {
     return { ok: true, text: 'הפעולות בוצעו.' }
   }
 
