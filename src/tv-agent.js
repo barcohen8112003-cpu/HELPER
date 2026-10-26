@@ -39,6 +39,7 @@ screen and which element has the focus, and sometimes a screenshot. Choose exact
 - {"type": "scroll", "direction": "down|up", "index": <n>}
 - {"type": "open_app", "name": "<app name>"}        e.g. Stremio, YouTube, Netflix, Disney+
 - {"type": "open_url", "url": "<link>", "app": "<app name, optional>"}   a link straight into an app
+- {"type": "restart_app", "name": "<app name>", "url": "<link, optional>"}   closes the app for real and opens it again (at the link)
 - {"type": "look"}                                  your next observation includes a screenshot (when the list is not enough: video, posters, a player)
 - {"type": "wait", "amount": <seconds 1-10>}`,
     tips: `Start with open_app or open_url when one fits, instead of walking menus from Home.
@@ -48,9 +49,11 @@ Titles in apps are mostly in English: search "Napoleon", not "נפוליאון".
 Prefer "select" by index; when an element has no index, move the focus with the arrows and press OK.
 In Stremio, a movie page lists sources (streams); pick the first one that looks playable (higher quality is fine) and
 it starts. "Failed to connect to 127.0.0.1:11470" means Stremio's own streaming server on the TV is down: switching
-player (VLC/MPV) will not help. Press back, open Home, open Stremio again (that restarts it), and try a source once
-more; still failing, pick a source that does not need it (a debrid or HTTP one, not a torrent), else need_user saying
-he should restart the TV. Playing a video, pausing, opening apps and searching never need a gate.
+player (VLC/MPV) will not help, and neither does back: it died inside the running app. Use restart_app for Stremio
+with the movie page link (stremio:///detail/movie/<imdb id>), wait 8 seconds for the server, then pick the source again.
+Still failing, pick a source that does not need it (a debrid or HTTP one, not a torrent), else need_user saying he
+should unplug the TV for 10 seconds. A torrent can show only its poster for a minute or two while it buffers: wait and
+look again before deciding it failed. Playing a video, pausing, opening apps and searching never need a gate.
 Buying or renting in a store app, subscribing and deleting are commits: gate them.
 "done" once the screen shows the thing playing or open (look at a screenshot to be sure a video plays).
 Add "step": 2-4 Hebrew words of what you are doing now ("מחפש את הסרט", "בוחר מקור").`,
@@ -72,11 +75,20 @@ Add "step": 2-4 Hebrew words of what you are doing now ("מחפש את הסרט"
     capture: () => picture(),
     async act(a) {
       if (a.type === 'look') return void (wantImage = true)
-      if (a.type === 'open_app' || (a.type === 'open_url' && a.app)) {
+      if (a.type === 'open_app' || a.type === 'restart_app' || (a.type === 'open_url' && a.app)) {
         const { apps = [] } = await call('apps')
         const app = matchApp(apps, a.name || a.app)
         if (!app) throw new Error(`אין בטלוויזיה אפליקציה בשם ${a.name || a.app}`)
         if (a.type === 'open_app') return void (await call('open_app', { pkg: app.pkg }))
+        if (a.type === 'restart_app') {
+          try {
+            await call('restart_app', { pkg: app.pkg, url: a.url ? String(a.url) : '' })
+          } catch (e) {
+            if (/לא מוכרת/.test(e.message)) throw new Error('מסך הבית בטלוויזיה ישן מדי לסגירת אפליקציה (צריך גרסה 2.8)')
+            throw e
+          }
+          return `${app.label} נסגר ונפתח מחדש.`
+        }
         return void (await call('open_url', { url: String(a.url), pkg: app.pkg }))
       }
       if (a.type === 'open_url') return void (await call('open_url', { url: String(a.url), pkg: '' }))

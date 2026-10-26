@@ -26,6 +26,17 @@ export async function findTitle(title, { type = 'movie', year, fetchFn = fetch }
   return { id: pick.id, name: pick.name, year: y(pick), type }
 }
 
+// The agent's DONE / NEED_USER / FAIL line, as one short Hebrew line for the TV screen and the chat.
+export function tvOutcome(result) {
+  const m = String(result || '').match(/^(DONE|NEED_USER|FAIL|DENIED|STOPPED): ([^\n]*)/)
+  if (!m) return 'סיימתי בטלוויזיה.'
+  const [, status, text] = m
+  if (status === 'DONE') return text || 'בוצע בטלוויזיה.'
+  if (status === 'NEED_USER') return `צריך אותך: ${text}`
+  if (status === 'DENIED') return 'לא אישרת, אז לא קניתי ולא שכרתי כלום.'
+  return `לא הצלחתי בטלוויזיה: ${text}`
+}
+
 export const stremioLink = (t) => `stremio:///detail/${t.type}/${t.id}`
 
 const str = (description) => ({ type: 'string', description })
@@ -107,9 +118,37 @@ export const tvTools = [
     description: 'מבצע כל משימה בטלוויזיה מקצה לקצה: הסוכן רואה מה יש על המסך (רשימה וצילום) ולוחץ כמו בשלט עד שזה קורה. "תפעיל בסטרימיו את נפוליאון ותבחר מקור", "תמצא את הפרק הבא של...", "תדליק כתוביות", "תשים ביוטיוב שיר של...". לכל מה שהשלט הפשוט וה-tv_play לא גומרים לבד. קנייה או השכרה באפליקציה עוצרת לאישור. מחזיר DONE, NEED_USER, DENIED או FAIL.',
     parameters: obj({ goal: str('המטרה במילים של המשתמש, מלאה, עם שם הסרט/סדרה באנגלית אם יש') }),
     async run({ goal }, ctx) {
+      // It can take minutes (a torrent buffering), longer than the TV waits for an answer: it runs in the background,
+      // and its outcome goes up on the TV screen and comes in the chat.
+      if (ctx.background) {
+        const job = ctx.background('בטלוויזיה: ' + String(goal).slice(0, 40), goal, async (signal) => {
+          const result = await runOnTv(goal, { ...ctx, signal })
+          const line = tvOutcome(result)
+          await tvCall('show', { text: line }).catch(() => {})
+          return line
+        })
+        return `"${job.title}" רץ ברקע. אמור לו במשפט קצר אחד שאתה עושה את זה עכשיו בטלוויזיה, בלי לחכות.`
+      }
       const result = await runOnTv(goal, ctx)
       return `${result}
 [Reply in one short spoken Hebrew line, masculine singular. DONE: what is on the TV now. NEED_USER: exactly what he must do with the remote. FAIL: the honest reason.]`
+    },
+  },
+  {
+    name: 'tv_restart_app',
+    enabled: tvConnected,
+    description: 'סוגר אפליקציה בטלוויזיה לגמרי ופותח אותה מחדש. כש-Stremio לא טוען ("Failed to connect to 127.0.0.1:11470", "הסטרימיו לא טוען") או כשאפליקציה נתקעה.',
+    parameters: obj({ app: str('שם האפליקציה, למשל Stremio') }),
+    async run({ app }) {
+      const found = matchApp(await appList(), app)
+      if (!found) return `לא מצאתי בטלוויזיה אפליקציה בשם "${app}".`
+      try {
+        await tvCall('restart_app', { pkg: found.pkg, url: '' })
+      } catch (e) {
+        if (/לא מוכרת/.test(e.message)) return 'מסך הבית של HELPER בטלוויזיה ישן מדי בשביל זה (צריך גרסה 2.8). בינתיים: לנתק את הטלוויזיה מהחשמל ל-10 שניות.'
+        throw e
+      }
+      return `סגרתי ופתחתי מחדש את ${found.label}. אם זה Stremio, אפשר לבחור מקור שוב בעוד כמה שניות.`
     },
   },
   {
@@ -184,5 +223,5 @@ export const tvTools = [
 
 export const tvPrompt = () =>
   tvConnected()
-    ? '- TV in the living room (HELPER home screen on a Chromecast with Google TV): tv_do (any task on the TV: it sees the screen and works the remote until done), tv_open_app, tv_play (a specific movie or series in Stremio), tv_key, tv_volume, tv_status, tv_list_apps, tv_set_button, tv_show. They act at once, like a remote; do not ask first. When a message comes from source "tv" he is talking to you from the TV itself: answer in one or two short spoken sentences.\n'
+    ? '- TV in the living room (HELPER home screen on a Chromecast with Google TV): tv_do (any task on the TV: it sees the screen and works the remote until done), tv_open_app, tv_play (a specific movie or series in Stremio), tv_restart_app (Stremio not loading: closes and reopens it), tv_key, tv_volume, tv_status, tv_list_apps, tv_set_button, tv_show. They act at once, like a remote; do not ask first. When a message comes from source "tv" he is talking to you from the TV itself: answer in one or two short spoken sentences.\n'
     : ''

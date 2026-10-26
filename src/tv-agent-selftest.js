@@ -85,5 +85,17 @@ ok(formatTvNodes(SCREENS.movie.nodes).includes('[1] "Torrentio 1080p" (focused, 
   ok(tv.calls.some((c) => c.op === 'act' && c.args.keys === 'down' && c.args.times === 3), 'keys go through with a count')
 }
 
+{
+  const tv = fakeTv()
+  const body = tvBody({ call: tv.call })
+  const said = await body.act({ type: 'restart_app', name: 'Stremio', url: 'stremio:///detail/movie/tt13287846' })
+  const r = tv.calls.find((c) => c.op === 'restart_app')
+  ok(r && r.args.pkg === 'com.stremio.one' && r.args.url.endsWith('tt13287846') && said.includes('Stremio'), 'restart_app closes and reopens Stremio at the film')
+  const old = tvBody({ call: async (op) => { if (op === 'apps') return { apps: APPS }; throw new Error('פעולה לא מוכרת: ' + op) } })
+  let err = ''
+  try { await old.act({ type: 'restart_app', name: 'Stremio' }) } catch (e) { err = e.message }
+  ok(err.includes('2.8'), 'an older home screen is named, not a silent failure')
+}
+
 console.log(`${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

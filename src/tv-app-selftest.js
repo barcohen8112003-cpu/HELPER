@@ -102,6 +102,12 @@ globalThis.fetch = async () => ({ ok: true, json: async () => ({ metas: [] }) })
 ok((await tool('tv_play').run({ title: 'Nothing Like This' })).includes('לא מצאתי'), 'a title not in the catalog is said so')
 globalThis.fetch = realFetch
 
+// tv_do can outlast the TV's wait for an answer: it starts in the background and answers at once.
+const jobs = []
+const started = await tool('tv_do').run({ goal: 'תפעיל בסטרימיו את נפוליאון' }, { background: (title, instruction, run) => (jobs.push({ title, run }), { title }) })
+ok(jobs.length === 1 && typeof jobs[0].run === 'function' && started.includes('ברקע'), 'tv_do runs in the background and answers at once')
+ok(jobs[0].title.includes('נפוליאון'), 'the job is named after what was asked')
+
 ws.close()
 await new Promise((r) => setTimeout(r, 100))
 ok(!tv.tvConnected(), 'a closed TV is no longer connected')
