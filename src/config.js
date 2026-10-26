@@ -173,8 +173,11 @@ const build = () => ({
   learning: ['on', '1', 'true', 'yes'].includes(env('SELF_LEARNING').toLowerCase()),
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
+  // GEMINI_CLOUD: Gemini as one more Chromium on the cloud desktop (signed in there once). On by default when the
+  // cloud desktop is on; GEMINI_CLOUD=off turns it off.
   gemini: {
-    url: env('GEMINI_URL'),
+    url: env('GEMINI_URL') || 'https://gemini.google.com/app',
+    cloud: env('GEMINI_CLOUD').toLowerCase() !== 'off' && (['1', 'true', 'yes', 'on'].includes(env('GEMINI_CLOUD').toLowerCase()) || ['1', 'true', 'yes', 'on'].includes(env('CLOUD_DESKTOP').toLowerCase())),
     port: Number(env('GEMINI_DEBUG_PORT', '9224')) || 9224,
     timeoutMinutes: Math.max(2, Number(env('GEMINI_TIMEOUT_MINUTES', '15')) || 15),
   },

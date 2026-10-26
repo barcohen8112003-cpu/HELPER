@@ -45,6 +45,7 @@ function startCloudBrowsers() {
   if (cloudWebtopOn()) ensureCloudWebtop().catch((e) => console.log(`[webtop] ${e.message}`))
   if (cloudGoogleHomeOn()) ensureCloudBrowser('google-home').catch((e) => console.log(`[google-home] ${e.message}`))
   if (errandCloudOn()) ensureCloudBrowser('errand').catch((e) => console.log(`[errand] ${e.message}`))
+  if (config.gemini.cloud) ensureCloudBrowser('gemini').catch((e) => console.log(`[gemini] ${e.message}`))
 }
 if (config.desktop.enabled) {
   startCloudDesktop().then(startCloudBrowsers).catch((e) => console.log(`[desktop] ${e.message}`))

@@ -200,6 +200,9 @@ function startListening() {
   bubble.webContents.send('play', null)   // talking over HELPER stops its voice
   if (mode === 'thinking') brain.cancel()
   mode = 'listening'
+  listenSeq++
+  live = null
+  liveText = ''
   voiceAsk = true
   log('listening')
   bubbleState({ mode: 'listening', mark: Boolean(mark) })
@@ -209,7 +212,7 @@ function startListening() {
 function stopListening(cancel) {
   if (mode !== 'listening') return
   bubble.webContents.send('record', { action: cancel ? 'cancel' : 'stop', purpose: 'ask' })
-  if (cancel) { mode = 'idle'; bubbleState({ mode: 'hidden' }) } else { mode = 'thinking'; bubbleState({ mode: 'thinking', text: 'מתמלל…' }) }
+  if (cancel) { mode = 'idle'; bubbleState({ mode: 'hidden' }) } else { mode = 'thinking'; bubbleState({ mode: 'thinking', text: 'מתמלל…', heard: liveText }) }
 }
 
 /** The window that was in front before HELPER took the keyboard: it gets it back, so "זה" and typing mean it. */
@@ -304,7 +307,50 @@ function speechHints() {
   return names.concat(['תפעיל', 'תנגן', 'תפתח', 'תשים', 'בצד שמאל', 'בצד ימין', 'המסך השני', 'ווליום', 'השיר', 'סרטון']).join(', ')
 }
 
-async function onAudio({ wav, purpose }) {
+// ---- live transcript while listening -----------------------------------------------------------------
+// The bubble sends the recording so far; one is transcribed at a time and only the newest waiting one is kept.
+// The last result is remembered with how much audio it covered: when that already holds all of the speech, the
+// final transcription is skipped (the answer starts the moment the user stops talking).
+let listenSeq = 0
+let live = null           // {seq, samples, promise} for the latest preview transcribed or being transcribed
+let liveWaiting = null
+let liveRunning = false
+let liveText = ''         // what the live transcript last said, shown while the final one is made
+
+function onPartial(snap) {
+  if (mode !== 'listening' || !snap || !snap.wav) return bubble.webContents.send('live', null)
+  liveWaiting = { seq: listenSeq, snap }
+  if (!liveRunning) runPartial()
+}
+
+async function runPartial() {
+  const job = liveWaiting
+  liveWaiting = null
+  if (!job) return
+  liveRunning = true
+  const bytes = Buffer.from(job.snap.wav)
+  const promise = speech.hasSpeech(bytes) ? speech.transcribe(ROOT, bytes, speech.HINTS).catch(() => '') : Promise.resolve('')
+  live = { seq: job.seq, samples: job.snap.samples, promise }
+  const text = await promise
+  liveRunning = false
+  if (job.seq === listenSeq && text) liveText = text
+  if (job.seq === listenSeq && mode === 'listening') bubble.webContents.send('live', { text })
+  else bubble.webContents.send('live', null)
+  if (liveWaiting) runPartial()
+}
+
+/** The live transcript, when it already covers everything said (and a little quiet after), else null. */
+async function liveCovering(lastLoud) {
+  const l = live
+  if (!l || l.seq !== listenSeq || typeof lastLoud !== 'number') return null
+  if (l.samples < lastLoud + 3200) return null   // 0.2 s past the last loud moment
+  const text = await l.promise
+  return text || null
+}
+
+const isCommand = (t) => { const p = instant.parse(t); return Boolean(p && (p.steps || p.teach || p.remember)) }
+
+async function onAudio({ wav, purpose, lastLoud }) {
   const bytes = Buffer.from(wav)
   log('audio', purpose, bytes.length, 'bytes, speech:', speech.hasSpeech(bytes), 'level:', speech.level(bytes).toFixed(3))
   // Under a quarter second: accidental tap or instant release.
@@ -333,8 +379,16 @@ async function onAudio({ wav, purpose }) {
       // Free text: no command hints and no word snapping, or ordinary sentences would be bent toward commands.
       text = await speech.transcribe(ROOT, bytes, '', { snapWords: false })
     } else {
-      // Three readings of the same recording, the one that is a command (or has the most command words) wins.
-      text = await speech.transcribeBest(ROOT, bytes, [speech.HINTS, '', speechHints()], (t) => { const p = instant.parse(t); return Boolean(p && (p.steps || p.teach || p.remember)) })
+      // The live transcript, when it heard it all and it is a command: no need to listen again.
+      const ready = await liveCovering(lastLoud)
+      if (ready && isCommand(ready)) { text = ready; log('used live transcript') }
+      else if (ready) {
+        // It heard it all but it is not a command: the two other readings, in case one of them is.
+        const other = await speech.transcribeBest(ROOT, bytes, ['', speechHints()], isCommand)
+        text = isCommand(other) ? other : ready
+      }
+      // Otherwise three readings of the same recording, the one that is a command (or has the most command words) wins.
+      else text = await speech.transcribeBest(ROOT, bytes, [speech.HINTS, '', speechHints()], isCommand)
     }
   } catch (e) {
     log('speech failed', e.message)
@@ -817,6 +871,9 @@ app.whenReady().then(async () => {
   setTimeout(() => require('./src/uia').warm(), 3000)
 
   ipcMain.on('audio', (e, data) => onAudio(data))
+  ipcMain.on('partial', (e, snap) => onPartial(snap))
+  // The user stopped talking: send it, as if the key was pressed again.
+  ipcMain.on('endpoint', () => { if (mode === 'listening') { log('end of speech'); stopListening(false) } })
   ipcMain.on('typed', (e, text) => { endTyping(); if (String(text).trim()) handleAsk(String(text), { voice: false }); else { mode = 'idle'; bubbleState({ mode: 'hidden' }) } })
   ipcMain.on('confirm', (e, yes) => { endTyping(); if (pendingConfirm) { const r = pendingConfirm; pendingConfirm = null; r(Boolean(yes)); if (!yes) answer('ביטלתי'); else bubbleState({ mode: 'thinking', text: 'ממשיך…' }) } })
   ipcMain.on('hover', (e, on) => {

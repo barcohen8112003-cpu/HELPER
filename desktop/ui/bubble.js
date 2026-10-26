@@ -128,7 +128,7 @@ helper.on('state', (s) => {
     if (prevMode !== 'listening') playTone('start')
     heard.textContent = ''
     heardBox.style.display = 'none'
-    text.innerHTML = '<span class="status">מקשיב… לחץ שוב לסיום (או שחרר אם החזקת)</span>'
+    text.innerHTML = '<span class="status">מקשיב… דבר, ואשלח כשתסיים</span><div class="live" id="live"></div>'
   } else if (s.mode === 'thinking') {
     text.innerHTML = ''
     const st = document.createElement('span')
@@ -163,10 +163,33 @@ helper.on('state', (s) => {
 })
 
 // ---- microphone ----------------------------------------------------------------------------------
+// While the user talks, the recording so far goes to the app every half second and comes back as text (one at a
+// time); the moment a pause begins one more goes, so the text is ready by the time the pause means "done".
+let liveBusy = false, liveTimer = null, liveSpeaking = false
+function sendPartial() {
+  if (liveBusy || !Recorder.recording()) return
+  const snap = Recorder.snapshot()
+  if (!snap) return
+  liveBusy = true
+  helper.send('partial', snap)
+}
+function stopLive() { clearInterval(liveTimer); liveTimer = null; liveSpeaking = false }
+helper.on('live', (r) => {
+  liveBusy = false
+  const el = $('live')
+  if (el && mode === 'listening' && r && r.text) el.textContent = r.text
+})
+
 helper.on('record', async (r) => {
   if (r.action === 'start') {
+    liveBusy = false
+    stopLive()
     try {
-      await Recorder.start(r.purpose, r.mic)
+      await Recorder.start(r.purpose, r.mic, r.purpose !== 'ask' ? {} : {
+        onSpeech: () => { liveSpeaking = true; liveTimer = setInterval(sendPartial, 500) },
+        onQuiet: () => { liveBusy = false; sendPartial() },
+        onEnd: () => { stopLive(); helper.send('endpoint') },
+      })
     } catch (e) {
       mode = 'answer'
       playTone('error')
@@ -174,8 +197,10 @@ helper.on('record', async (r) => {
       text.classList.add('error')
     }
   } else {
+    stopLive()
+    const lastLoud = Recorder.lastLoud()
     const wav = Recorder.stop(r.action === 'cancel')
-    if (wav) helper.send('audio', { wav, purpose: r.purpose })
+    if (wav) helper.send('audio', { wav, purpose: r.purpose, lastLoud })
   }
 })
 

@@ -11,7 +11,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import WebSocket from 'ws'
 import { config } from './config.js'
-import { SELECTORS, BLOCKERS, DOWNLOAD_WORDS } from './gemini-selectors.js'
+import { SELECTORS, BLOCKERS, DOWNLOAD_WORDS, SPARK_WORDS, DOC_LINK } from './gemini-selectors.js'
+import { ensureCloudBrowser } from './webtop-browser.js'
 
 const SETTLE_MS = 3000
 const POLL_MS = 1500
@@ -19,7 +20,7 @@ const STABLE_POLLS = 3
 const UPLOAD_WAIT_MS = 120000
 const DOWNLOAD_WAIT_MS = 60000
 
-export const geminiEnabled = () => Boolean(config.gemini.url)
+export const geminiEnabled = () => Boolean(config.gemini.url && (config.gemini.cloud || process.env.GEMINI_URL))
 const base = () => `http://127.0.0.1:${config.gemini.port}`
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -36,10 +37,12 @@ export class GeminiError extends Error {
 // ── the debugging connection ────────────────────────────────────────────────
 
 async function targets() {
+  // In the cloud the window is one of the desktop's browsers: started here when it is not up.
+  if (config.gemini.cloud) await ensureCloudBrowser('gemini').catch(() => {})
   try {
     return await (await fetch(`${base()}/json`, { signal: AbortSignal.timeout(5000) })).json()
   } catch {
-    throw new GeminiError('closed', 'חלון ה-Gemini לא פתוח. צריך להפעיל את gemini-browser.bat ולהשאיר אותו פתוח.')
+    throw new GeminiError('closed', config.gemini.cloud ? 'הדפדפן של Gemini בענן לא עלה.' : 'חלון ה-Gemini לא פתוח. צריך להפעיל את gemini-browser.bat ולהשאיר אותו פתוח.')
   }
 }
 
@@ -125,6 +128,16 @@ const FIND = `(function find(list, within) {
 const js = (v) => JSON.stringify(v)
 const exists = (cdp, list, within) => evaluate(cdp, `!!${FIND}(${js(list)}, ${js(within || null)})`)
 const click = (cdp, list, within) => evaluate(cdp, `(() => { const e = ${FIND}(${js(list)}, ${js(within || null)}); if (!e) return false; e.click(); return true })()`)
+// A real mouse click at the element's middle. A file chooser opens only from a real click (user activation),
+// never from element.click() run by a script.
+async function mouseClick(cdp, list) {
+  const at = await evaluate(cdp, `(() => { const e = ${FIND}(${js(list)}, null); if (!e) return null; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+  if (!at) return false
+  await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y })
+  await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', clickCount: 1 })
+  await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', clickCount: 1 })
+  return true
+}
 const count = (cdp, list) => evaluate(cdp, `(() => { for (const s of ${js(list)}) { const n = document.querySelectorAll(s).length; if (n) return n } return 0 })()`)
 
 async function waitFor(cdp, list, ms) {
@@ -155,7 +168,7 @@ async function checkBlocked(cdp) {
   }
   const hasInput = await exists(cdp, SELECTORS.input)
   if (/accounts\.google\.com/i.test(page.url) || (!hasInput && BLOCKERS.login.some((re) => re.test(page.text)))) {
-    throw new GeminiError('login', 'Gemini לא מחובר. צריך להיכנס לחשבון בחלון ה-Gemini (gemini-browser.bat).')
+    throw new GeminiError('login', config.gemini.cloud ? 'Gemini לא מחובר. צריך להיכנס לחשבון Google פעם אחת בחלון Gemini בשולחן העבודה בענן (אתר ההגדרות, שולחן העבודה, תפריט Gemini).' : 'Gemini לא מחובר. צריך להיכנס לחשבון בחלון ה-Gemini (gemini-browser.bat).')
   }
 }
 
@@ -177,13 +190,13 @@ async function attach(cdp, files) {
   const before = await count(cdp, SELECTORS.attachment)
   try {
     const chooser = new Promise((resolve) => cdp.on('Page.fileChooserOpened', resolve))
-    if (!(await click(cdp, SELECTORS.uploadMenu))) throw new GeminiError('selector', 'לא מצאתי את כפתור העלאת הקבצים ב-Gemini.')
+    if (!(await mouseClick(cdp, SELECTORS.uploadMenu))) throw new GeminiError('selector', 'לא מצאתי את כפתור העלאת הקבצים ב-Gemini.')
     await sleep(800)
     // Some versions open the chooser from the button itself, others from an item in a menu.
     const opened = await Promise.race([chooser, sleep(1500).then(() => null)])
     let params = opened
     if (!params) {
-      if (!(await click(cdp, SELECTORS.uploadItem))) throw new GeminiError('selector', 'לא מצאתי בתפריט את האפשרות להעלות קבצים.')
+      if (!(await mouseClick(cdp, SELECTORS.uploadItem))) throw new GeminiError('selector', 'לא מצאתי בתפריט את האפשרות להעלות קבצים.')
       params = await Promise.race([chooser, sleep(10000).then(() => null)])
     }
     if (!params) throw new GeminiError('upload', 'חלון בחירת הקבצים של Gemini לא נפתח.')
@@ -309,6 +322,98 @@ export async function runGemini({ prompt, files = [], dir, timeoutMs = config.ge
   } finally {
     cdp.close()
     browser?.close()
+  }
+}
+
+// ── Spark: Gemini's agent, which makes the Google Docs file itself ─────────────
+
+// Picks Spark in the mode/tool picker: an element named Spark, after opening the picker if it is not in sight.
+async function selectSpark(cdp) {
+  const pick = () =>
+    evaluate(
+      cdp,
+      `(() => {
+        const visible = (e) => e.offsetParent !== null || e.getClientRects().length > 0
+        const re = new RegExp(${js(SPARK_WORDS.source)}, 'i')
+        const all = [...document.querySelectorAll('button, a, [role="menuitem"], [role="menuitemradio"], [role="option"], [role="tab"], mat-chip, [role="button"]')].filter(visible)
+        const hit = all.find((e) => re.test((e.getAttribute('aria-label') || '') + ' ' + (e.innerText || '').slice(0, 60)))
+        if (!hit) return false
+        hit.click()
+        return true
+      })()`
+    )
+  if (await pick()) return true
+  for (const opener of [SELECTORS.modePicker, SELECTORS.toolsMenu]) {
+    if (!(await click(cdp, opener))) continue
+    await sleep(900)
+    if (await pick()) return true
+    for (const type of ['keyDown', 'keyUp']) await cdp.call('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await sleep(300)
+  }
+  return false
+}
+
+// Google Docs (or Sheets/Slides) links anywhere in the conversation, newest last.
+const docLinks = (cdp) =>
+  evaluate(
+    cdp,
+    `(() => {
+      const re = new RegExp(${js(DOC_LINK.source)}, 'g')
+      const hrefs = [...document.querySelectorAll('a[href]')].map((a) => a.href)
+      const text = document.body ? document.body.innerText : ''
+      return [...new Set([...hrefs.filter((h) => new RegExp(${js(DOC_LINK.source)}).test(h)), ...(text.match(re) || [])])]
+    })()`
+  ).catch(() => [])
+
+export const SPARK_FOLLOW_UP = 'שלח לי בבקשה את הקישור למסמך Google Docs שיצרת.'
+
+// Sends a task to Gemini Spark with files attached, waits until a Google Docs link shows up, and returns
+// { url, text, spark } (url null when Spark answered without one: its text says why). Throws GeminiError.
+export async function runSpark({ prompt, files = [], dir, timeoutMs = config.gemini.timeoutMinutes * 60000, onStep = () => {} }) {
+  if (!geminiEnabled()) throw new GeminiError('closed', 'Gemini לא מוגדר.')
+  fs.mkdirSync(dir, { recursive: true })
+  const cdp = await pageConnection()
+  const end = Date.now() + timeoutMs
+  try {
+    onStep("פותח צ'אט חדש ב-Gemini")
+    await newChat(cdp)
+    const known = new Set(await docLinks(cdp))
+    const spark = await selectSpark(cdp)
+    if (files.length) onStep('מעלה את הקבצים ל-Gemini')
+    await attach(cdp, files)
+    const ask = spark ? prompt : `${prompt}
+
+(תשתמש ב-Spark כדי ליצור את מסמך ה-Google Docs, ותחזיר לי את הקישור אליו.)`
+    let before = await send(cdp, ask)
+    onStep(spark ? 'Spark עובד על המסמך' : 'Gemini עובד על המסמך')
+    let asked = false
+    while (Date.now() < end) {
+      let text = ''
+      try {
+        text = await waitForAnswer(cdp, before, Math.max(30000, end - Date.now()))
+      } catch (e) {
+        if (!(e instanceof GeminiError && e.code === 'timeout')) throw e
+      }
+      // Spark keeps working after its first reply: the link can appear minutes later, in the same answer.
+      const waitUntil = Math.min(end, Date.now() + 4 * 60000)
+      while (Date.now() < waitUntil) {
+        const fresh = (await docLinks(cdp)).filter((u) => !known.has(u))
+        if (fresh.length) return { url: fresh[fresh.length - 1], text: (await lastAnswerText(cdp)).trim(), spark }
+        if (await exists(cdp, SELECTORS.generating)) { await sleep(POLL_MS); continue }
+        await sleep(5000)
+        if (!asked) break
+      }
+      if (asked) return { url: null, text: (text || (await lastAnswerText(cdp))).trim(), spark }
+      asked = true
+      before = await send(cdp, SPARK_FOLLOW_UP)
+    }
+    throw new GeminiError('timeout', `Gemini לא סיים תוך ${Math.round(timeoutMs / 60000)} דקות.`)
+  } catch (e) {
+    const err = e instanceof GeminiError ? e : new GeminiError('selector', e.message)
+    if (err.code !== 'closed') err.screenshot = await screenshot(cdp, dir)
+    throw err
+  } finally {
+    cdp.close()
   }
 }
 
