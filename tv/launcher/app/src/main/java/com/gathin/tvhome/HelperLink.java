@@ -1,6 +1,7 @@
 package com.gathin.tvhome;
 
 import android.accessibilityservice.AccessibilityService;
+import android.app.ActivityManager;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.os.Bundle;
@@ -104,7 +105,7 @@ final class HelperLink {
         public void onOpen(WebSocket ws, Response response) {
             backoffMs = 2000;
             try {
-                ws.send(new JSONObject().put("type", "hello").put("device", Build.MODEL).put("version", "2.7-helper").toString());
+                ws.send(new JSONObject().put("type", "hello").put("device", Build.MODEL).put("version", "2.8-helper").toString());
             } catch (Exception ignored) { }
             Log.i(TAG, "connected");
         }
@@ -132,6 +133,7 @@ final class HelperLink {
             JSONObject msg = new JSONObject(text);
             reply.put("id", msg.optInt("id"));
             JSONObject args = msg.optJSONObject("args");
+            if ("restart_app".equals(msg.optString("op"))) { restartApp(ws, msg.optInt("id"), args == null ? new JSONObject() : args); return; }
             if ("capture".equals(msg.optString("op"))) { capture(ws, msg.optInt("id"), args == null ? 960 : args.optInt("width", 960)); return; }
             if (args == null) args = new JSONObject();
             reply.put("result", run(msg.optString("op"), args));
@@ -360,6 +362,33 @@ final class HelperLink {
         } catch (Exception e) {
             fail(ws, reply, String.valueOf(e.getMessage()));
         }
+    }
+
+    /**
+     * Closes an app for real and opens it again (at a link, when given): Home first so it is in the background, then
+     * Android ends its process, then it starts fresh. Brings back what died inside it (Stremio's streaming server).
+     */
+    private void restartApp(WebSocket ws, int id, JSONObject args) {
+        final JSONObject reply = new JSONObject();
+        try { reply.put("id", id); } catch (Exception ignored) { }
+        final String pkg = args.optString("pkg");
+        final String url = args.optString("url");
+        if (pkg.isEmpty()) { fail(ws, reply, "חסר שם חבילה"); return; }
+        service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME);
+        main.postDelayed(() -> {
+            try {
+                ActivityManager am = (ActivityManager) service.getSystemService(Context.ACTIVITY_SERVICE);
+                am.killBackgroundProcesses(pkg);
+            } catch (Exception e) {
+                Log.w(TAG, "kill " + pkg + ": " + e.getMessage());
+            }
+            main.postDelayed(() -> {
+                boolean opened = !url.isEmpty() ? Helper.openUrl(service, url, pkg) : Helper.openApp(service, pkg);
+                if (!opened) { fail(ws, reply, "האפליקציה " + pkg + " לא נפתחה מחדש"); return; }
+                try { reply.put("ok", true).put("result", new JSONObject()); } catch (Exception ignored) { }
+                ws.send(reply.toString());
+            }, 1200);
+        }, 1500);
     }
 
     private static void fail(WebSocket ws, JSONObject reply, String error) {
