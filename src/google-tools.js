@@ -153,6 +153,28 @@ export const googleTools = [
     },
   },
   {
+    name: 'docs_create',
+    enabled: google.googleEnabled,
+    description: 'יוצר קובץ חדש ב-Google Drive של המשתמש ומחזיר קישור: מסמך Docs (תוכן ב-Markdown: כותרות #, רשימות, **מודגש**) או גיליון Sheets (תוכן CSV). "תכתוב לי מסמך", "תעשה לי טבלה", "תסכם לדוקס".',
+    parameters: obj({ title: str('שם הקובץ'), content: str('התוכן המלא: Markdown למסמך, CSV לגיליון'), kind: str('doc או sheet'), account: ACCOUNT }, ['title', 'content']),
+    async run({ title, content, kind, account }) {
+      const made = await google.driveCreate(writable(account), { name: title, content, kind: kind === 'sheet' ? 'sheet' : 'doc' })
+      return `נוצר "${made.name}": ${made.link}`
+    },
+  },
+  {
+    name: 'drive_send_file',
+    enabled: google.googleEnabled,
+    description: 'שולח למשתמש בשיחה קובץ מ-Google Drive (מסמכי Google יוצאים כ-Word/Excel/PowerPoint). id מ-drive_search או מ-classroom.',
+    parameters: obj({ account: str('החשבון שבו נמצא הקובץ'), id: str('מזהה הקובץ') }),
+    async run({ account, id }, ctx) {
+      if (!ctx.sendMedia) return 'אין לאן לשלוח קובץ מהשיחה הזאת.'
+      const got = await google.driveDownload(one(account), id, { maxBytes: 60 * 1024 * 1024 })
+      await ctx.sendMedia({ buffer: got.buffer, mime: got.mime, name: got.name, caption: got.name })
+      return `נשלח: ${got.name}`
+    },
+  },
+  {
     name: 'drive_read',
     enabled: google.googleEnabled,
     description: 'קורא את התוכן של מסמך Docs, גיליון Sheets, מצגת Slides או קובץ טקסט מ-Drive.',

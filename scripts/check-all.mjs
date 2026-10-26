@@ -32,6 +32,8 @@ const TESTS = [
   'src/logs-selftest.js',
   'src/claude-code-selftest.js',
   'src/gemini-spark-selftest.js',
+  'src/tv-agent-selftest.js',
+  'src/google-docs-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

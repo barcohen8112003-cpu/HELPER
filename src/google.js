@@ -369,3 +369,53 @@ export async function driveRead(email, id) {
   else throw new Error(`אי אפשר לקרוא קובץ מסוג ${meta.mimeType}`)
   return `${meta.name}\n\n${(await api(email, url, { text: true })).slice(0, 12000)}`
 }
+
+// ---- writing to Drive (drive.file: only files Helper itself creates) ----
+
+const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** Simple Markdown (headings, bullets, numbered lists, bold, paragraphs) as HTML that Docs imports, right to left. */
+export function markdownToHtml(md) {
+  const inline = (t) => escapeHtml(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|\s)\*(.+?)\*(?=\s|$)/g, '$1<i>$2</i>')
+  const out = []
+  let list = null
+  const close = () => { if (list) out.push(`</${list}>`); list = null }
+  for (const raw of String(md || '').replace(/\r/g, '').split('\n')) {
+    const line = raw.trimEnd()
+    let m
+    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { close(); out.push(`<h${m[1].length} dir="rtl">${inline(m[2])}</h${m[1].length}>`); continue }
+    if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) { if (list !== 'ul') { close(); list = 'ul'; out.push('<ul dir="rtl">') } out.push(`<li>${inline(m[1])}</li>`); continue }
+    if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) { if (list !== 'ol') { close(); list = 'ol'; out.push('<ol dir="rtl">') } out.push(`<li>${inline(m[1])}</li>`); continue }
+    close()
+    if (line.trim()) out.push(`<p dir="rtl">${inline(line)}</p>`)
+  }
+  close()
+  return `<html><body dir="rtl">${out.join('\n')}</body></html>`
+}
+
+const KINDS = {
+  doc: { mime: 'application/vnd.google-apps.document', source: 'text/html' },
+  sheet: { mime: 'application/vnd.google-apps.spreadsheet', source: 'text/csv' },
+}
+
+/** A new Google Docs (from Markdown) or Sheets (from CSV) file. Returns { id, name, link }. */
+export async function driveCreate(email, { name, kind = 'doc', content = '' }) {
+  const spec = KINDS[kind] || KINDS.doc
+  const body = kind === 'sheet' ? String(content) : markdownToHtml(content)
+  const boundary = `helper${Date.now().toString(36)}`
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: String(name || 'מסמך').slice(0, 200), mimeType: spec.mime })}\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Type: ${spec.source}; charset=UTF-8\r\n\r\n`),
+    Buffer.from(body, 'utf8'),
+    Buffer.from(`\r\n--${boundary}--`),
+  ])
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${await accessToken(email)}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body: payload,
+    signal: AbortSignal.timeout(60000),
+  })
+  if (!res.ok) throw new Error(`Google HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  const f = await res.json()
+  return { id: f.id, name: f.name, link: f.webViewLink }
+}

@@ -47,7 +47,10 @@ Stremio search stremio:///search?search=<words>; YouTube https://www.youtube.com
 Titles in apps are mostly in English: search "Napoleon", not "נפוליאון".
 Prefer "select" by index; when an element has no index, move the focus with the arrows and press OK.
 In Stremio, a movie page lists sources (streams); pick the first one that looks playable (higher quality is fine) and
-it starts. Playing a video, pausing, opening apps and searching never need a gate.
+it starts. "Failed to connect to 127.0.0.1:11470" means Stremio's own streaming server on the TV is down: switching
+player (VLC/MPV) will not help. Press back, open Home, open Stremio again (that restarts it), and try a source once
+more; still failing, pick a source that does not need it (a debrid or HTTP one, not a torrent), else need_user saying
+he should restart the TV. Playing a video, pausing, opening apps and searching never need a gate.
 Buying or renting in a store app, subscribing and deleting are commits: gate them.
 "done" once the screen shows the thing playing or open (look at a screenshot to be sure a video plays).
 Add "step": 2-4 Hebrew words of what you are doing now ("מחפש את הסרט", "בוחר מקור").`,
