@@ -26,6 +26,7 @@ const TIMEOUT_MS = {
   browserProbe: 30000,
   runCommand: 70000,
   readSessionPage: 90000,
+  downloadSessionFile: 120000,
   readTimetable: 90000,
   sessionKeepAlive: 90000,
   getHomeDevices: 30000,
@@ -441,6 +442,7 @@ export async function homeHandlers() {
   // Webtop's Chrome listens on 127.0.0.1 only. These run here, next to that window.
   const session = await import('./session.js')
   handlers.readSessionPage = (url, maxChars) => session.readSessionPage(url, maxChars)
+  handlers.downloadSessionFile = (url, name) => session.downloadSessionFile(url, name)
   handlers.readTimetable = () => session.readTimetable()
   handlers.sessionKeepAlive = () => session.sessionKeepAlive()
   const home = await import('./google-home.js')

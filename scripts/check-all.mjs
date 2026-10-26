@@ -34,6 +34,7 @@ const TESTS = [
   'src/gemini-spark-selftest.js',
   'src/tv-agent-selftest.js',
   'src/google-docs-selftest.js',
+  'src/webtop-file-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

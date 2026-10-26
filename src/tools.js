@@ -24,7 +24,7 @@ import { skillTools, builderTools } from './learning-tools.js'
 import { auditTools } from './audit.js'
 import { askGemini, geminiApiEnabled } from './gemini-api.js'
 import { runSpark, geminiEnabled } from './gemini.js'
-import { downloadWebtopFile } from './webtop-browser.js'
+import { downloadSessionFile } from './session.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
@@ -317,7 +317,10 @@ ${await askGemini(question)}`
         }
         if (webtop_url || webtop_file) {
           setStep('מוריד את הקובץ מ-Webtop')
-          files.push(await downloadWebtopFile(webtop_url, webtop_file, dir))
+          const got = await downloadSessionFile(webtop_url, webtop_file)
+          const file = path.join(dir, path.basename(String(got.name)).replace(/[\\/:*?"<>|]/g, '_'))
+          fs.writeFileSync(file, Buffer.from(got.data, 'base64'))
+          files.push(file)
         }
         try {
           const done = await runSpark({ prompt: task, files, dir, onStep: setStep })
