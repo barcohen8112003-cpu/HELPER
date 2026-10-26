@@ -45,6 +45,7 @@ const APPS = [
   { pkg: 'com.netflix.ninja', label: 'Netflix' },
   { pkg: 'com.google.android.youtube.tv', label: 'YouTube' },
   { pkg: 'com.spotify.tv.android', label: 'Spotify' },
+  { pkg: 'com.stremio.one', label: 'Stremio' },
   { pkg: 'com.android.vending', label: 'Google Play Store' },
 ]
 const ws = await new Promise((resolve) => {
@@ -80,6 +81,26 @@ ok((await tool('tv_status').run({})).includes('35%'), 'status reads the volume')
 ok((await tool('tv_set_button').run({ button: 'youtube', app: 'spotify' })).includes('Spotify') && last('set_button').args.pkg === 'com.spotify.tv.android', 'the YouTube button can open Spotify')
 await tool('tv_set_button').run({ button: 'youtube', app: 'default' })
 ok(last('set_button').args.pkg === '', 'a button goes back to its default')
+
+// Stremio: its Hebrew name, and a movie opened on its own page (the catalog answered offline here).
+await tool('tv_open_app').run({ app: 'סטרימיו' })
+ok(last('open_app').args.pkg === 'com.stremio.one', 'סטרימיו opens Stremio')
+const CATALOG = { metas: [
+  { id: 'tt0374900', name: 'Napoleon Dynamite', releaseInfo: '2004' },
+  { id: 'tt0018192', name: 'Napoleon', releaseInfo: '1927' },
+  { id: 'tt13287846', name: 'Napoleon', releaseInfo: '2023' },
+] }
+const realFetch = globalThis.fetch
+const asked = []
+globalThis.fetch = async (url) => (asked.push(String(url)), { ok: true, json: async () => CATALOG })
+const played = await tool('tv_play').run({ title: 'Napoleon' })
+ok(last('open_url')?.args.url === 'stremio:///detail/movie/tt13287846' && last('open_url').args.pkg === 'com.stremio.one', 'Napoleon opens the 2023 film in Stremio')
+ok(played.includes('2023') && asked[0].includes('search=Napoleon'), 'it says which one it opened')
+await tool('tv_play').run({ title: 'Napoleon', year: '1927' })
+ok(last('open_url').args.url.endsWith('tt0018192'), 'a year picks that one')
+globalThis.fetch = async () => ({ ok: true, json: async () => ({ metas: [] }) })
+ok((await tool('tv_play').run({ title: 'Nothing Like This' })).includes('לא מצאתי'), 'a title not in the catalog is said so')
+globalThis.fetch = realFetch
 
 ws.close()
 await new Promise((r) => setTimeout(r, 100))

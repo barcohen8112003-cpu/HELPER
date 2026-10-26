@@ -35,7 +35,10 @@
     "check:logs": "node src/logs-selftest.js",
     "check:claude-code": "node src/claude-code-selftest.js",
     "check:tv": "node src/tv-app-selftest.js",
-    "check:spark": "node src/gemini-spark-selftest.js"
+    "check:spark": "node src/gemini-spark-selftest.js",
+    "check:tv-agent": "node src/tv-agent-selftest.js",
+    "check:docs": "node src/google-docs-selftest.js",
+    "check:webtop-file": "node src/webtop-file-selftest.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "~6.7.24",

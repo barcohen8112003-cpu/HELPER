@@ -154,7 +154,7 @@ function gateCard(g) {
 const pointed = (a) => Number.isFinite(a.index) || (Number.isFinite(a.x) && Number.isFinite(a.y))
 const isCommitAction = (a) => a && (['click', 'double_click', 'tap', 'long_press'].includes(a.type) ? pointed(a) : a.type === 'key')
 // Actions that land on a control, so the page or screen is asked what that control is before they run.
-const PROBED = ['click', 'double_click', 'tap', 'long_press', 'type', 'key']
+const PROBED = ['click', 'double_click', 'tap', 'select', 'long_press', 'type', 'key']
 
 // Runs the loop. Returns a line for the main model that starts with DONE, NEED_USER, DENIED or FAIL.
 // ctx: { confirm(text, media?), sendMedia, signal }. `think` replaces the model call (self-tests only).

@@ -38,6 +38,15 @@
     <!-- Android 11+ package visibility: lets the launcher list the TV apps it shows as tiles, and the
          apps that declare a module card (docs/specs/card.md). -->
     <queries>
+        <!-- HELPER opens links in apps: a movie page in Stremio (stremio:///detail/...), a web page. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="stremio" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
         <!-- HELPER: the speech recognizer, and Google Play for its pill. -->
         <intent>
             <action android:name="android.speech.RecognitionService" />

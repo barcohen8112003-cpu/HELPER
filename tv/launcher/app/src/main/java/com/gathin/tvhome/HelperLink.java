@@ -1,6 +1,12 @@
 package com.gathin.tvhome;
 
 import android.accessibilityservice.AccessibilityService;
+import android.graphics.Bitmap;
+import android.graphics.Rect;
+import android.os.Bundle;
+import android.util.Base64;
+import android.view.Display;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
@@ -17,6 +23,8 @@ import android.view.KeyEvent;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -46,6 +54,8 @@ final class HelperLink {
     private WebSocket socket;
     private long backoffMs = 2000;
     private boolean stopped;
+    /** What the last "observe" listed, by index, for "act". */
+    private final List<AccessibilityNodeInfo> lastNodes = new ArrayList<>();
 
     HelperLink(AccessibilityService service) {
         this.service = service;
@@ -94,7 +104,7 @@ final class HelperLink {
         public void onOpen(WebSocket ws, Response response) {
             backoffMs = 2000;
             try {
-                ws.send(new JSONObject().put("type", "hello").put("device", Build.MODEL).put("version", "2.6-helper").toString());
+                ws.send(new JSONObject().put("type", "hello").put("device", Build.MODEL).put("version", "2.7-helper").toString());
             } catch (Exception ignored) { }
             Log.i(TAG, "connected");
         }
@@ -122,6 +132,7 @@ final class HelperLink {
             JSONObject msg = new JSONObject(text);
             reply.put("id", msg.optInt("id"));
             JSONObject args = msg.optJSONObject("args");
+            if ("capture".equals(msg.optString("op"))) { capture(ws, msg.optInt("id"), args == null ? 960 : args.optInt("width", 960)); return; }
             if (args == null) args = new JSONObject();
             reply.put("result", run(msg.optString("op"), args));
             reply.put("ok", true);
@@ -150,6 +161,13 @@ final class HelperLink {
                 if (!Helper.openApp(service, pkg)) throw new Exception("האפליקציה " + pkg + " לא נפתחת");
                 return new JSONObject();
             }
+            case "open_url": {
+                String url = args.optString("url");
+                if (!Helper.openUrl(service, url, args.optString("pkg"))) throw new Exception("אין בטלוויזיה אפליקציה שפותחת את " + url);
+                return new JSONObject();
+            }
+            case "observe": return observe();
+            case "act": return act(args, audio);
             case "key": {
                 int times = Math.max(1, Math.min(20, args.optInt("times", 1)));
                 for (int i = 0; i < times; i++) key(audio, args.optString("key"));
@@ -210,6 +228,143 @@ final class HelperLink {
         long now = SystemClock.uptimeMillis();
         audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, media, 0));
         audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, media, 0));
+    }
+
+    // ---- eyes and hands for the TV agent ----
+
+    /** The screen as a numbered list: what can be read, focused, selected or typed into, with where it is. */
+    private JSONObject observe() throws Exception {
+        for (AccessibilityNodeInfo n : lastNodes) { try { n.recycle(); } catch (Exception ignored) { } }
+        lastNodes.clear();
+        JSONArray nodes = new JSONArray();
+        AccessibilityNodeInfo root = service.getRootInActiveWindow();
+        if (root != null) walk(root, nodes, 0);
+        android.util.DisplayMetrics dm = service.getResources().getDisplayMetrics();
+        String pkg = InputKeyService.currentPackage;
+        return new JSONObject().put("nodes", nodes).put("pkg", pkg == null ? "" : pkg).put("label", label(service, pkg))
+                .put("width", dm.widthPixels).put("height", dm.heightPixels);
+    }
+
+    private void walk(AccessibilityNodeInfo n, JSONArray out, int depth) throws Exception {
+        if (n == null || depth > 40 || out.length() >= 150) return;
+        if (!n.isVisibleToUser()) return;
+        CharSequence text = n.getText(), desc = n.getContentDescription();
+        boolean useful = (text != null && text.length() > 0) || (desc != null && desc.length() > 0) || n.isEditable() || n.isFocused()
+                || ((n.isClickable() || n.isFocusable()) && n.getChildCount() == 0);
+        if (useful) {
+            Rect r = new Rect();
+            n.getBoundsInScreen(r);
+            JSONObject o = new JSONObject().put("i", lastNodes.size());
+            if (text != null && text.length() > 0) o.put("text", text.toString().substring(0, Math.min(120, text.length())));
+            if (desc != null && desc.length() > 0) o.put("desc", desc.toString().substring(0, Math.min(120, desc.length())));
+            if (n.getViewIdResourceName() != null) o.put("id", n.getViewIdResourceName().replaceAll("^.*:id/", ""));
+            if (n.isClickable()) o.put("click", true);
+            if (n.isFocusable()) o.put("focusable", true);
+            if (n.isFocused()) o.put("focused", true);
+            if (n.isSelected()) o.put("selected", true);
+            if (n.isEditable()) o.put("editable", true);
+            o.put("box", r.left + "," + r.top + "," + r.right + "," + r.bottom);
+            out.put(o);
+            lastNodes.add(AccessibilityNodeInfo.obtain(n));
+        }
+        for (int i = 0; i < n.getChildCount(); i++) {
+            AccessibilityNodeInfo c = n.getChild(i);
+            if (c != null) { walk(c, out, depth + 1); c.recycle(); }
+        }
+    }
+
+    /** One step: select an element (it is clicked, or focused and OK pressed), type into a field, or press a key. */
+    private JSONObject act(JSONObject a, AudioManager audio) throws Exception {
+        String type = a.optString("type");
+        if (type.equals("key")) {
+            int times = Math.max(1, Math.min(20, a.optInt("times", 1)));
+            for (int i = 0; i < times; i++) key(audio, a.optString("keys", a.optString("key")));
+            return new JSONObject().put("ok", true);
+        }
+        if (type.equals("select") || type.equals("tap")) {
+            AccessibilityNodeInfo n = node(a);
+            if (n == null) throw new Exception("אין רכיב " + a.optInt("index", -1) + " ברשימה");
+            for (AccessibilityNodeInfo p = n; p != null; p = p.getParent()) {
+                if (p.isClickable() && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return new JSONObject().put("ok", true).put("info", "clicked");
+            }
+            // Not clickable: give it the focus and press OK, the way the remote would.
+            n.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+            n.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
+            key(audio, "ok");
+            return new JSONObject().put("ok", true).put("info", "focused and pressed OK");
+        }
+        if (type.equals("type")) {
+            AccessibilityNodeInfo n = a.has("index") ? node(a) : null;
+            if (n == null) {
+                AccessibilityNodeInfo root = service.getRootInActiveWindow();
+                n = root == null ? null : root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            }
+            if (n == null || !n.isEditable()) throw new Exception("אין שדה טקסט פעיל");
+            Bundle b = new Bundle();
+            b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, a.optString("text"));
+            if (!n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b)) throw new Exception("השדה לא קיבל את הטקסט");
+            return new JSONObject().put("ok", true);
+        }
+        if (type.equals("scroll")) {
+            AccessibilityNodeInfo n = a.has("index") ? node(a) : null;
+            boolean back = a.optString("direction").equals("up") || a.optString("direction").equals("left");
+            for (AccessibilityNodeInfo p = n; p != null; p = p.getParent()) {
+                if (p.isScrollable() && p.performAction(back ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return new JSONObject().put("ok", true);
+            }
+            key(audio, back ? "up" : "down");
+            return new JSONObject().put("ok", true).put("info", "pressed " + (back ? "up" : "down"));
+        }
+        throw new Exception("פעולה לא מוכרת: " + type);
+    }
+
+    private AccessibilityNodeInfo node(JSONObject a) {
+        int i = a.optInt("index", -1);
+        if (i < 0 || i >= lastNodes.size()) return null;
+        AccessibilityNodeInfo n = lastNodes.get(i);
+        n.refresh();
+        return n;
+    }
+
+    /** A JPEG of the screen, scaled to `width`, sent when it is ready (Android 11+). */
+    private void capture(WebSocket ws, int id, int width) {
+        final JSONObject reply = new JSONObject();
+        try { reply.put("id", id); } catch (Exception ignored) { }
+        if (Build.VERSION.SDK_INT < 30) { fail(ws, reply, "צילום מסך דורש Android 11"); return; }
+        try {
+            service.takeScreenshot(Display.DEFAULT_DISPLAY, service.getMainExecutor(), new AccessibilityService.TakeScreenshotCallback() {
+                @Override public void onSuccess(AccessibilityService.ScreenshotResult r) {
+                    new Thread(() -> {
+                        try {
+                            Bitmap hw = Bitmap.wrapHardwareBuffer(r.getHardwareBuffer(), r.getColorSpace());
+                            r.getHardwareBuffer().close();
+                            if (hw == null) { fail(ws, reply, "צילום המסך ריק"); return; }
+                            Bitmap soft = hw.copy(Bitmap.Config.ARGB_8888, false);
+                            hw.recycle();
+                            int w = Math.max(320, Math.min(1920, width));
+                            int h = Math.round(soft.getHeight() * (w / (float) soft.getWidth()));
+                            Bitmap small = Bitmap.createScaledBitmap(soft, w, h, true);
+                            if (small != soft) soft.recycle();
+                            ByteArrayOutputStream out = new ByteArrayOutputStream();
+                            small.compress(Bitmap.CompressFormat.JPEG, 60, out);
+                            small.recycle();
+                            reply.put("ok", true).put("result", new JSONObject()
+                                    .put("image", Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)).put("width", w).put("height", h));
+                            ws.send(reply.toString());
+                        } catch (Exception e) {
+                            fail(ws, reply, String.valueOf(e.getMessage()));
+                        }
+                    }).start();
+                }
+                @Override public void onFailure(int error) { fail(ws, reply, "צילום המסך נכשל (" + error + ")"); }
+            });
+        } catch (Exception e) {
+            fail(ws, reply, String.valueOf(e.getMessage()));
+        }
+    }
+
+    private static void fail(WebSocket ws, JSONObject reply, String error) {
+        try { reply.put("ok", false).put("error", error); } catch (Exception ignored) { }
+        ws.send(reply.toString());
     }
 
     /** Every app with a TV or phone launcher entry, once each. */

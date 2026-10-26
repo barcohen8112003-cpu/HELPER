@@ -1,6 +1,9 @@
 // A site that needs a login (Webtop) is read through a browser window that stays open on this computer, signed in.
 // webtop-browser.bat opens that window with a debugging port; the person signs in there once. This module attaches
 // to it, reads pages from the live session, and reloads the page every few minutes so the school's timeout never hits.
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import WebSocket from 'ws'
 import { config } from './config.js'
 import { remoteActive, remoteCall, bridgeConnected } from './pc-bridge.js'
@@ -252,6 +255,63 @@ export function readSessionPage(url, maxChars = 12000) {
   )
 }
 
+// One file from a Webtop page, downloaded in the signed-in window: the page is opened, the link or button whose
+// text holds `name` is clicked, and the file that lands is returned as { name, data (base64) }. Nothing signs in.
+const FILE_WAIT_MS = 60000
+function downloadLocal(url, name) {
+  return runLocal(async ({ call, once }) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-webtop-file-'))
+    try {
+      await call('Page.enable')
+      await call('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: dir })
+      if (url) {
+        const loaded = once('Page.loadEventFired')
+        await call('Page.navigate', { url })
+        await loaded
+        await new Promise((r) => setTimeout(r, SETTLE_MS))
+      }
+      await snapshot(call)
+      const want = String(name || '').trim().toLowerCase()
+      const { result } = await call('Runtime.evaluate', {
+        returnByValue: true,
+        expression: `(() => {
+          const want = ${JSON.stringify(want)}
+          const visible = (e) => e.offsetParent !== null || e.getClientRects().length > 0
+          const label = (e) => ((e.innerText || '') + ' ' + (e.getAttribute('title') || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' + (e.getAttribute('download') || '') + ' ' + (e.getAttribute('href') || '')).toLowerCase()
+          const all = [...document.querySelectorAll('a, button, [role="button"], [onclick]')].filter(visible)
+          const doc = /\\.(pdf|docx?|pptx?|xlsx?|zip|jpe?g|png)(\\?|$)/i
+          const hit = all.find((e) => want && label(e).includes(want)) || (!want ? all.find((e) => doc.test(e.getAttribute('href') || '')) : null)
+          if (!hit) return 'missing'
+          hit.removeAttribute('target')
+          hit.click()
+          return 'clicked'
+        })()`,
+      })
+      if (result?.value !== 'clicked') throw fail(`לא מצאתי בדף של Webtop קובץ בשם "${name}".`, 'אפשר לשלוח לי את הקישור לדף שבו הקובץ.')
+      const end = Date.now() + FILE_WAIT_MS
+      while (Date.now() < end) {
+        await new Promise((r) => setTimeout(r, 1000))
+        const now = fs.readdirSync(dir)
+        const done = now.filter((f) => !f.endsWith('.crdownload'))
+        if (done.length && !now.some((f) => f.endsWith('.crdownload'))) {
+          return { name: done[0], data: fs.readFileSync(path.join(dir, done[0])).toString('base64') }
+        }
+      }
+      throw fail('הקובץ מ-Webtop לא ירד תוך דקה.', 'אולי הוא נפתח כדף ולא כקובץ.')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
+
+export function downloadSessionFile(url, name) {
+  return runSessionRead(
+    () => downloadLocal(url, name),
+    () => remoteCall('downloadSessionFile', [url, name]),
+    sessionTransport(),
+  )
+}
+
 // The week's timetable, read from where each entry sits in the grid: days are columns, lessons are rows, and an
 // empty slot has no element at all, so the text alone cannot say which lesson an entry is.
 // -> [{ day: 0 (Sunday) - 5, lesson, subject, teacher, room, cancelled }]
@@ -350,3 +410,6 @@ export async function sessionKeepAlive() {
     }
   }
 }
+
+// The download itself, in the window this process can reach (for the self-test).
+export { downloadLocal as downloadSessionFileHere }
