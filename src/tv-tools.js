@@ -1,6 +1,32 @@
 // Tools the model uses to run the TV through the HELPER home screen on it. Opening an app, a remote key or the
 // volume is what a remote control does, so none of them asks first.
 import { tvConnected, tvCall, matchApp } from './tv-app.js'
+import { runOnTv } from './tv-agent.js'
+
+const CINEMETA = 'https://v3-cinemeta.strem.io'
+
+// A movie or series in Stremio's own catalog (Cinemeta, which Stremio itself uses): the best match for the English
+// title, the year when given. Returns { id, name, year, type } or null.
+export async function findTitle(title, { type = 'movie', year, fetchFn = fetch } = {}) {
+  const q = String(title || '').trim()
+  if (!q) return null
+  const url = `${CINEMETA}/catalog/${type}/top/search=${encodeURIComponent(q)}.json`
+  const res = await fetchFn(url, { signal: AbortSignal.timeout(10000) })
+  if (!res.ok) throw new Error(`הקטלוג של Stremio לא ענה (${res.status})`)
+  const metas = ((await res.json()).metas || []).filter((m) => m && /^tt\d+$/.test(m.id || ''))
+  if (!metas.length) return null
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const y = (m) => String(m.releaseInfo || m.year || '').slice(0, 4)
+  const exact = metas.filter((m) => norm(m.name) === norm(q))
+  const pick = (year && metas.find((m) => y(m) === String(year) && norm(m.name) === norm(q))) ||
+    (year && metas.find((m) => y(m) === String(year))) ||
+    // Same name: the newest (the "Napoleon" people mean today is 2023, not 1927).
+    exact.sort((a, b) => Number(y(b) || 0) - Number(y(a) || 0))[0] ||
+    metas[0]
+  return { id: pick.id, name: pick.name, year: y(pick), type }
+}
+
+export const stremioLink = (t) => `stremio:///detail/${t.type}/${t.id}`
 
 const str = (description) => ({ type: 'string', description })
 const num = (description) => ({ type: 'number', description })
@@ -50,6 +76,40 @@ export const tvTools = [
       if (!found) return `לא מצאתי בטלוויזיה אפליקציה בשם "${app}". אפשר לבדוק עם tv_list_apps, או להתקין אותה מ-Google Play.`
       await tvCall('open_app', { pkg: found.pkg })
       return `פתחתי בטלוויזיה את ${found.label}.`
+    },
+  },
+  {
+    name: 'tv_play',
+    enabled: tvConnected,
+    description: 'פותח בטלוויזיה סרט או סדרה מסוימים ב-Stremio, ישר בדף שלו עם רשימת המקורות ("תפעיל בסטרימיו את נפוליאון", "תשים את הסרט X בטלוויזיה"). title: השם באנגלית, כפי שהוא ב-IMDb (נפוליאון = Napoleon).',
+    parameters: obj({ title: str('שם הסרט או הסדרה באנגלית'), year: str('שנת יציאה, אם ידועה או נאמרה'), type: str('movie או series') }, ['title']),
+    async run({ title, year, type }) {
+      const kind = type === 'series' ? 'series' : 'movie'
+      const found = await findTitle(title, { type: kind, year })
+      if (!found) return `לא מצאתי ב-Stremio ${kind === 'series' ? 'סדרה' : 'סרט'} בשם "${title}".`
+      const app = matchApp(await appList(), 'stremio')
+      if (!app) return 'Stremio לא מותקן בטלוויזיה. אפשר להתקין אותו מ-Google Play.'
+      try {
+        await tvCall('open_url', { url: stremioLink(found), pkg: app.pkg })
+      } catch (e) {
+        if (/לא מוכרת/.test(e.message)) {
+          await tvCall('open_app', { pkg: app.pkg })
+          return `פתחתי את Stremio, אבל מסך הבית של HELPER בטלוויזיה ישן ולא יודע לפתוח סרט ישירות. צריך לעדכן אותו (גרסה 2.7). בינתיים לחפש שם "${found.name}".`
+        }
+        throw e
+      }
+      return `פתחתי ב-Stremio את ${found.name} (${found.year}). צריך לבחור מקור בשלט ולהפעיל.`
+    },
+  },
+  {
+    name: 'tv_do',
+    enabled: tvConnected,
+    description: 'מבצע כל משימה בטלוויזיה מקצה לקצה: הסוכן רואה מה יש על המסך (רשימה וצילום) ולוחץ כמו בשלט עד שזה קורה. "תפעיל בסטרימיו את נפוליאון ותבחר מקור", "תמצא את הפרק הבא של...", "תדליק כתוביות", "תשים ביוטיוב שיר של...". לכל מה שהשלט הפשוט וה-tv_play לא גומרים לבד. קנייה או השכרה באפליקציה עוצרת לאישור. מחזיר DONE, NEED_USER, DENIED או FAIL.',
+    parameters: obj({ goal: str('המטרה במילים של המשתמש, מלאה, עם שם הסרט/סדרה באנגלית אם יש') }),
+    async run({ goal }, ctx) {
+      const result = await runOnTv(goal, ctx)
+      return `${result}
+[Reply in one short spoken Hebrew line, masculine singular. DONE: what is on the TV now. NEED_USER: exactly what he must do with the remote. FAIL: the honest reason.]`
     },
   },
   {
@@ -124,5 +184,5 @@ export const tvTools = [
 
 export const tvPrompt = () =>
   tvConnected()
-    ? '- TV in the living room (HELPER home screen on a Chromecast with Google TV): tv_open_app, tv_key, tv_volume, tv_status, tv_list_apps, tv_set_button, tv_show. They act at once, like a remote; do not ask first. When a message comes from source "tv" he is talking to you from the TV itself: answer in one or two short spoken sentences.\n'
+    ? '- TV in the living room (HELPER home screen on a Chromecast with Google TV): tv_do (any task on the TV: it sees the screen and works the remote until done), tv_open_app, tv_play (a specific movie or series in Stremio), tv_key, tv_volume, tv_status, tv_list_apps, tv_set_button, tv_show. They act at once, like a remote; do not ask first. When a message comes from source "tv" he is talking to you from the TV itself: answer in one or two short spoken sentences.\n'
     : ''

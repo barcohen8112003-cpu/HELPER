@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.view.KeyEvent;
 
 import org.json.JSONObject;
@@ -130,6 +131,20 @@ final class Helper {
         if (i == null) i = pm.getLaunchIntentForPackage(pkg);
         if (i == null) return false;
         c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        return true;
+    }
+
+    /** Opens a link (stremio:///detail/movie/tt..., https://...) in the given app, or in whatever handles it. */
+    static boolean openUrl(Context c, String url, String pkg) {
+        if (url == null || url.isEmpty()) return false;
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PackageManager pm = c.getPackageManager();
+        if (pkg != null && !pkg.isEmpty()) {
+            Intent own = new Intent(i).setPackage(pkg);
+            if (own.resolveActivity(pm) != null) i = own;
+        }
+        if (i.resolveActivity(pm) == null) return false;
+        c.startActivity(i);
         return true;
     }
 
