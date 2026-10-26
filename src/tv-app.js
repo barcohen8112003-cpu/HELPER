@@ -77,6 +77,7 @@ export function tvCall(op, args = {}) {
 const ALIASES = {
   'נטפליקס': 'netflix', 'יוטיוב': 'youtube', 'ספוטיפיי': 'spotify', 'דיסני': 'disney', 'פליי': 'play store',
   'חנות': 'play store', 'גוגל פליי': 'play store', 'הגדרות': 'settings', 'פריים': 'prime video', 'אמזון': 'prime video',
+  'סטרימיו': 'stremio', 'סטרמיו': 'stremio', 'סטרימו': 'stremio', 'קודי': 'kodi', 'פלקס': 'plex', 'טוויץ': 'twitch',
   'יס': 'yes', 'הוט': 'hot', 'סלקום': 'cellcom', 'פרטנר': 'partner', 'כאן': 'kan', 'קשת': 'mako', 'רשת': 'reshet',
 }
 export function matchApp(apps, query) {
