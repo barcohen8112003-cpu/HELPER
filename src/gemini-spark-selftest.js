@@ -41,7 +41,7 @@ send.onclick = () => {
 
 const server = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(PAGE) }).listen(WEB, '127.0.0.1')
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-spark-'))
-const proc = spawn(chrome, ['--headless=new', `--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', `--user-data-dir=${profile}`, '--no-first-run', `http://127.0.0.1:${WEB}/`], { stdio: 'ignore' })
+const proc = spawn(chrome, ['--headless=new', `--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', `--user-data-dir=${profile}`, '--no-first-run', '--disable-gpu', '--disable-dev-shm-usage', ...(process.platform === 'linux' ? ['--no-sandbox'] : []), `http://127.0.0.1:${WEB}/`], { stdio: 'ignore' })
 
 process.env.GEMINI_URL = `http://127.0.0.1:${WEB}/`
 process.env.GEMINI_DEBUG_PORT = String(PORT)
@@ -49,9 +49,12 @@ process.env.GEMINI_CLOUD = 'off'
 let ok = true
 const check = (name, cond, info = '') => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${info ? '  ' + info : ''}`); if (!cond) ok = false }
 try {
-  for (let i = 0; i < 40; i++) {
-    try { await fetch(`http://127.0.0.1:${PORT}/json/version`); break } catch { await new Promise((r) => setTimeout(r, 250)) }
+  let up = false
+  for (let i = 0; i < 120 && !up; i++) {
+    try { up = (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).some((t) => t.type === 'page' && t.url.startsWith(`http://127.0.0.1:${WEB}`)) } catch {}
+    if (!up) await new Promise((r) => setTimeout(r, 250))
   }
+  if (!up) throw new Error(`Chrome did not start (${chrome})`)
   const { runSpark } = await import('./gemini.js')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-spark-work-'))
   const file = path.join(dir, 'intro-science.pdf')
