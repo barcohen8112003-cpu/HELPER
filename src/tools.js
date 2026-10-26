@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { config } from './config.js'
+import { config, DATA_DIR } from './config.js'
 import { state, save, newId } from './store.js'
 import { webSearch, fetchPage } from './web.js'
 import * as google from './google.js'
@@ -23,6 +23,8 @@ import { memoryTools } from './memory-tools.js'
 import { skillTools, builderTools } from './learning-tools.js'
 import { auditTools } from './audit.js'
 import { askGemini, geminiApiEnabled } from './gemini-api.js'
+import { runSpark, geminiEnabled } from './gemini.js'
+import { downloadWebtopFile } from './webtop-browser.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
@@ -283,6 +285,50 @@ export const tools = [
     async run({ question }) {
       return `Gemini ענה:
 ${await askGemini(question)}`
+    },
+  },
+  {
+    name: 'gemini_spark',
+    enabled: geminiEnabled,
+    description: "שולח משימה ל-Gemini Spark (הסוכן של Gemini בחשבון Google של המשתמש), עם קבצים מצורפים, ו-Spark יוצר בעצמו מסמך Google Docs ומחזיר קישור. כשהמשתמש מבקש להעביר קובץ ל-Gemini/Spark ושיעשה ממנו מסמך דוקס. קבצים: מ-Drive/Classroom (id מ-drive_search או classroom) ו/או קובץ מדף ב-Webtop. רץ ברקע, הקישור מגיע בהודעה.",
+    parameters: obj(
+      {
+        task: str('ההוראה ל-Spark במילים של המשתמש, מלאה: מה לעשות עם הקובץ ואיזה מסמך Docs ליצור. Spark לא רואה את השיחה.'),
+        drive_files: str('קבצים מ-Drive או Classroom, כל אחד "account|id", מופרדים בפסיק. ריק אם אין'),
+        webtop_url: str('כתובת הדף ב-Webtop שבו הקובץ, אם הקובץ ב-Webtop'),
+        webtop_file: str('שם הקובץ (או חלק ממנו) כפי שהוא מופיע בדף ב-Webtop'),
+      },
+      ['task']
+    ),
+    async run({ task, drive_files, webtop_url, webtop_file }, ctx) {
+      if (!ctx.background) return 'אי אפשר להתחיל את זה מכאן.'
+      const title = 'Gemini Spark: מסמך דוקס'
+      const job = ctx.background(title, task, async (signal, setStep) => {
+        const dir = path.join(DATA_DIR, 'gemini-work', String(Date.now()))
+        fs.mkdirSync(dir, { recursive: true })
+        const files = []
+        for (const item of String(drive_files || '').split(',').map((x) => x.trim()).filter(Boolean)) {
+          const [account, id] = item.includes('|') ? item.split('|') : ['', item]
+          setStep('מוריד קובץ מ-Drive')
+          const got = await google.driveDownload(account.trim(), id.trim(), { maxBytes: 50 * 1024 * 1024 })
+          const file = path.join(dir, got.name.replace(/[\/:*?"<>|]/g, '_'))
+          fs.writeFileSync(file, got.buffer)
+          files.push(file)
+        }
+        if (webtop_url || webtop_file) {
+          setStep('מוריד את הקובץ מ-Webtop')
+          files.push(await downloadWebtopFile(webtop_url, webtop_file, dir))
+        }
+        try {
+          const done = await runSpark({ prompt: task, files, dir, onStep: setStep })
+          if (done.url) return `המסמך מוכן: ${done.url}`
+          return `Gemini ענה בלי קישור למסמך:\n${done.text.slice(0, 1500)}`
+        } catch (e) {
+          if (e.screenshot && fs.existsSync(e.screenshot)) await ctx.sendMedia?.({ buffer: fs.readFileSync(e.screenshot), mime: 'image/png', name: 'gemini.png', caption: 'מה שראיתי ב-Gemini' }).catch(() => {})
+          throw e
+        }
+      })
+      return `"${job.title}" רץ ברקע. אמור למשתמש בשורה אחת שהעברת ל-Spark ושהקישור למסמך יגיע כאן.`
     },
   },
   {

@@ -47,6 +47,16 @@ const SITES = {
     // on .google.com. With browser sign-in off, account consistency is disabled and the cookies are left alone.
     extraArgs: ['--allow-browser-signin=false'],
   },
+  // Gemini (and its Spark agent), signed in once on the shared desktop. Same DICE sign-out guard as Google Home.
+  gemini: {
+    label: 'Gemini',
+    headed: true,
+    profile: () => path.join(DATA_DIR, 'gemini-profile'),
+    port: () => config.gemini.port,
+    url: () => config.gemini.url,
+    enabled: () => config.gemini.cloud,
+    extraArgs: ['--allow-browser-signin=false'],
+  },
   errand: {
     label: 'קניות',
     headed: true,
@@ -386,5 +396,46 @@ export function webtopInput(action) {
       return { ok: true }
     }
     throw new Error('פעולה לא מוכרת')
+  })
+}
+
+// Downloads one file from a Webtop page in the cloud browser: opens the page, clicks the link or button whose text
+// (or title) holds `name`, and waits for the file to land in `dir`. Returns its path. Nothing here signs in.
+export async function downloadWebtopFile(url, name, dir, { waitMs = 60000 } = {}) {
+  if (!cloudWebtopOn()) throw new Error('הורדת קבצים מ-Webtop עובדת רק מהדפדפן של Webtop בענן (WEBTOP_CLOUD=1).')
+  fs.mkdirSync(dir, { recursive: true })
+  const before = new Set(fs.readdirSync(dir))
+  return withCloudPage('webtop', async (call) => {
+    await call('Page.enable')
+    await call('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: path.resolve(dir) })
+    if (url) {
+      await call('Page.navigate', { url })
+      await new Promise((r) => setTimeout(r, 4000))
+    }
+    const { result } = await call('Runtime.evaluate', {
+      returnByValue: true,
+      expression: `(() => {
+        if (document.querySelector('input[type=password]')) return 'login'
+        const want = ${JSON.stringify(String(name || '').trim().toLowerCase())}
+        const visible = (e) => e.offsetParent !== null || e.getClientRects().length > 0
+        const label = (e) => ((e.innerText || '') + ' ' + (e.getAttribute('title') || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' + (e.getAttribute('download') || '')).toLowerCase()
+        const all = [...document.querySelectorAll('a, button, [role="button"], [onclick]')].filter(visible)
+        const hit = all.find((e) => want && label(e).includes(want)) || (!want ? all.find((e) => /\.(pdf|docx?|pptx?|xlsx?)(\?|$)/i.test(e.getAttribute('href') || '')) : null)
+        if (!hit) return 'missing'
+        hit.removeAttribute('target')
+        hit.click()
+        return 'clicked'
+      })()`,
+    })
+    if (result?.value === 'login') throw new Error('Webtop בענן לא מחובר. צריך להיכנס אליו פעם אחת דרך אתר ההגדרות.')
+    if (result?.value !== 'clicked') throw new Error(`לא מצאתי בדף של Webtop קובץ בשם "${name}".`)
+    const end = Date.now() + waitMs
+    while (Date.now() < end) {
+      await new Promise((r) => setTimeout(r, 1000))
+      const now = fs.readdirSync(dir)
+      const fresh = now.filter((f) => !before.has(f) && !f.endsWith('.crdownload'))
+      if (fresh.length && !now.some((f) => f.endsWith('.crdownload'))) return path.join(dir, fresh[0])
+    }
+    throw new Error('הקובץ מ-Webtop לא ירד תוך דקה.')
   })
 }
