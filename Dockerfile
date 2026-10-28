@@ -27,7 +27,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
-COPY persona.md persona.short.md ./
+COPY persona.md persona.short.md persona.voice.md ./
 
 # Everything that must survive a restart lives here: the WhatsApp session, connected accounts, memory, watches.
 # Mount a persistent disk at this path.

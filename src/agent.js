@@ -4,6 +4,7 @@ import { config, mailEnabled, ROOT } from './config.js'
 
 const PERSONA_FILE = path.join(ROOT, 'persona.md')
 const PERSONA_SHORT = path.join(ROOT, 'persona.short.md')
+const VOICE_FILE = path.join(ROOT, 'persona.voice.md')
 import { calendarOn } from './calendar.js'
 import { googleAccounts, googleEnabled } from './google.js'
 import { state, save } from './store.js'
@@ -38,6 +39,16 @@ export function persona() {
     return fs.readFileSync(config.llm.light && fs.existsSync(PERSONA_SHORT) ? PERSONA_SHORT : PERSONA_FILE, 'utf8').trim()
   } catch {
     return 'קצר, ענייני וידידותי.'
+  }
+}
+
+// The voice check, placed last in the system prompt in both modes: after a long tool manual the model
+// otherwise writes like a tool operator. Read on every turn, like persona().
+export function voiceCheck() {
+  try {
+    return fs.readFileSync(VOICE_FILE, 'utf8').trim()
+  } catch {
+    return ''
   }
 }
 
@@ -90,7 +101,7 @@ ${locationLine(true) ? `\n${locationLine(true)}\n` : ''}
 ${config.learning ? `- Teaching yourself: asked for something you do not know how to do, skill_search first. No lesson? Call learn_how: it learns it in Claude Code or Gemini, in the background, not you, so this model is not spent on it. Tell him in one line that you are learning it and will come back, and do not research it yourself for the lesson. Could not do it at all: skill_gap. Needs a capability in code (a conversion, a calculation, a parser) that no tool covers: build_tool. Lessons and new tools are kept only with his approval.
 ` : ''}
 Memory about the user:
-${memory}${state.summary ? `\n\nEarlier in this conversation:\n${state.summary}` : ''}${learning ? `\n\n${learning}` : ''}`
+${memory}${state.summary ? `\n\nEarlier in this conversation:\n${state.summary}` : ''}${learning ? `\n\n${learning}` : ''}${voiceCheck() ? `\n\n${voiceCheck()}` : ''}`
 }
 
 // `memory` is the memory section for this turn (see memoryBlock): built once per turn, not once per model call.
@@ -139,7 +150,7 @@ ${phoneRoutePrompt(false)}${tvPrompt()}
 ${config.learning ? `• לימוד עצמי: כשמבקשים ממך משהו שאתה לא יודע איך לעשות, קודם skill_search. אין לקח? קרא ל-learn_how: הוא לומד את זה ב-Claude Code או ב-Gemini, ברקע, לא אתה, כדי לא לשרוף את המודל הזה. אמור למשתמש בשורה אחת שאתה לומד ושתחזור אליו, ואל תחקור בעצמך לצורך הלימוד. לא הצלחת בכלל: skill_gap. צריך יכולת בקוד (המרה, חישוב, פענוח) ואין כלי שמכסה אותה: build_tool. לקחים וכלים חדשים נכנסים רק באישור המשתמש.
 ` : ''}${locationLine() ? `\n${locationLine()}\n` : ''}
 זיכרון על המשתמש:
-${memory}${state.summary ? `\n\nסיכום של מה שדובר קודם בשיחה:\n${state.summary}` : ''}${learning ? `\n\n${learning}` : ''}`
+${memory}${state.summary ? `\n\nסיכום של מה שדובר קודם בשיחה:\n${state.summary}` : ''}${learning ? `\n\n${learning}` : ''}${voiceCheck() ? `\n\n${voiceCheck()}` : ''}`
 }
 
 // Hard cap, in case compaction keeps failing.
