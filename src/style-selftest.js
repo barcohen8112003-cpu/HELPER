@@ -1,6 +1,7 @@
 // The style check set: replies written the way models tend to write, and what Naor should actually get.
 // Every change to src/style.js or persona.md is checked against it. Offline, no model.
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { polish, styleTells, humanError } from './style.js'
 
 const CASES = [
@@ -60,4 +61,16 @@ for (const [err, want] of [
   assert.match(humanError(err), want)
   passed++
 }
+// The voice card (persona.voice.md, last in the system prompt): every "good" example must pass the same checks,
+// and at least half the "bad" ones must be caught, so the card and the checks keep agreeing.
+const card = fs.readFileSync(new URL('../persona.voice.md', import.meta.url), 'utf8')
+const pairs = [...card.matchAll(/^- "(.+?)" → "(.+?)"/gm)]
+assert.ok(pairs.length >= 5, 'the voice card has its bad/good examples')
+for (const [, , good] of pairs) {
+  assert.deepEqual(styleTells(good), [], `voice card example reads like a bot: ${good}`)
+  assert.equal(polish(good), good, `polish changes a good example: ${good}`)
+  passed += 2
+}
+assert.ok(pairs.filter(([, bad]) => styleTells(bad).length).length * 2 >= pairs.length, 'most bad examples are caught')
+passed++
 console.log(`${passed} בדיקות עברו, 0 נכשלו (${CASES.length} הודעות בסט)`)

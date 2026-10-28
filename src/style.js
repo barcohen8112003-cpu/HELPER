@@ -82,5 +82,5 @@ export function humanError(e) {
 }
 
 // What still reads like a bot after polishing, for the style check set (src/style-selftest.js).
-const TELLS = [/כמודל שפה/, /אני (?:רק )?(?:מודל|בינה מלאכותית|AI)\b/, /חשוב לציין ש/, /בסופו של דבר,/, /לסיכום,/, /אשמח לעזור/, /במה אוכל לעזור/, /^#{1,6} /m, /\*\*/, / [—–] /]
+const TELLS = [/כמודל שפה/, /אני (?:רק )?(?:מודל|בינה מלאכותית|AI)\b/, /חשוב לציין ש/, /בסופו של דבר,/, /לסיכום,/, /אשמח לעזור/, /במה אוכל לעזור/, /^#{1,6} /m, /\*\*/, / [—–] /, /להלן/, /בוצע בהצלחה/, /נשלחה בהצלחה/, /אני מצטער,? אך/, /^בוצע[.!]/m, /^הבנתי שאתה/m]
 export const styleTells = (text) => TELLS.filter((r) => r.test(text)).map((r) => r.source)
