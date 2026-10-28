@@ -192,6 +192,9 @@ const build = () => ({
   // Daily encrypted backup to the owner's Google Drive (src/backup.js).
   backup: { passphrase: process.env.BACKUP_PASSPHRASE || '', account: env('BACKUP_GOOGLE_ACCOUNT').toLowerCase() },
   geminiApi: { key: env('GEMINI_API_KEY'), model: env('GEMINI_MODEL', 'gemini-2.5-flash') },
+  // Bird (bird.com, formerly MessageBird): WhatsApp Business sends through its official API (src/bird.js).
+  // BIRD_WHATSAPP_FROM is the connected business number; it may stay empty for a Bird-managed template.
+  bird: { key: env('BIRD_API_KEY'), from: env('BIRD_WHATSAPP_FROM') },
   classroomWork: {
     mode: ['auto', 'ask', 'off'].includes(env('CLASSROOM_AUTOWORK', 'auto')) ? env('CLASSROOM_AUTOWORK', 'auto') : 'auto',
     maxMb: Math.max(1, Number(env('CLASSROOM_MAX_MB', '50')) || 50),
