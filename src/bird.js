@@ -79,3 +79,60 @@ export async function sendWhatsAppText({ to, text, from = config.bird.from }, { 
     throw explain(e)
   }
 }
+
+// ── Inbound: the user writes to Helper's own WhatsApp number and Helper answers in that chat ──
+// Bird posts every event to /bird/webhook (signed, Standard Webhooks). Only a text message from BIRD_OWNER_NUMBER is
+// answered; everything else (other senders, delivery receipts, media) is acknowledged and dropped.
+const seen = new Map()
+const alreadySeen = (id) => {
+  const now = Date.now()
+  for (const [k, t] of seen) if (now - t > 3600_000) seen.delete(k)
+  if (!id || seen.has(id)) return Boolean(id)
+  seen.set(id, now)
+  return false
+}
+
+export const birdChatEnabled = () => Boolean(config.bird.key && config.bird.webhookSecret && config.bird.owner)
+
+function chunks(text, size = 3800) {
+  const out = []
+  let rest = String(text || '').trim()
+  while (rest.length > size) {
+    let cut = rest.lastIndexOf('\n', size)
+    if (cut < size / 2) cut = size
+    out.push(rest.slice(0, cut).trim())
+    rest = rest.slice(cut).trim()
+  }
+  if (rest) out.push(rest)
+  return out
+}
+
+// Returns { status, body } for the HTTP route. `agent(text, { source })` is Helper's brain; `fetchFn` is for tests.
+export async function handleBirdWebhook(raw, headers, { agent, fetchFn, wait = false } = {}) {
+  if (!birdChatEnabled()) return { status: 404, body: { error: 'Bird chat is not set up' } }
+  let event
+  try {
+    const verifier = new BirdClient({ apiKey: config.bird.key, webhooks: { secret: config.bird.webhookSecret }, ...(fetchFn && { fetch: fetchFn }) })
+    event = verifier.webhooks.unwrap(raw, headers)
+  } catch {
+    return { status: 400, body: { error: 'bad signature' } }
+  }
+  if (event.type !== 'whatsapp.received') return { status: 200, body: { ignored: event.type } }
+  const d = event.data || {}
+  const text = String(d.text?.body || '').trim()
+  const sender = toE164(d.from?.phone_number)
+  if (d.direction !== 'inbound' || !text || !sender || sender !== toE164(config.bird.owner)) return { status: 200, body: { ignored: 'not the owner' } }
+  if (alreadySeen(d.whatsapp_id)) return { status: 200, body: { ignored: 'duplicate' } }
+  const from = toE164(d.to?.phone_number) || config.bird.from
+  const work = (async () => {
+    let reply
+    try {
+      reply = await agent(text, { voice: false, source: 'bird' })
+    } catch (e) {
+      reply = `משהו השתבש: ${e.message}`
+    }
+    for (const part of chunks(reply)) await sendWhatsAppText({ to: sender, text: part, from }, { fetchFn })
+  })().catch((e) => console.log(`[bird] ${e.message}`))
+  if (wait) await work
+  return { status: 200, body: { ok: true } }
+}
