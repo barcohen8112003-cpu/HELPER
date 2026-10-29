@@ -31,6 +31,7 @@ import { backupTick } from './backup.js'
 import { humanError } from './style.js'
 import { takeProactiveSlot } from './metrics.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
+import { announceRelease } from './release-notes.js'
 import * as groups from './groups.js'
 import { groupAdders } from './group-tools.js'
 
@@ -138,6 +139,7 @@ const wa = await startWhatsApp(async (m) => {
     save()
     console.log(`צומד לצ'אט ${m.jids[0]}`)
     await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו אפשר לכתוב לי כאן.\n\n${HELP}`)
+    tellRelease()
     return
   }
   if (!isOwner(m)) return
@@ -287,7 +289,7 @@ const wa = await startWhatsApp(async (m) => {
     if (activeTurn?.ac === ac) activeTurn = null
     finish()
   })
-}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m) })
+}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m), bindSync: groups.bindGroupSync })
 
 // Default pairing: the moment the QR is scanned, the assistant lives in the account's "message yourself" chat.
 // Skipped after /unpair, where the user picks a chat with the pairing code instead.
@@ -302,11 +304,17 @@ async function pairWithSelf(me) {
     reconciled = true
     monitoring.reconcile().catch((e) => console.log(`[watch] ${e.message}`))
   }
-  if (state.owner || state.manualPair) return
-  state.owner = { jid: me.jid, jids: [me.jid, me.lid].filter(Boolean), self: true, selfChat: true }
-  save()
-  console.log('מחובר לצ\'אט שלך עם עצמך. כתוב שם כדי לדבר עם העוזר.')
-  await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו כותבים לי כאן, בצ'אט שלך עם עצמך.\n\n${EXAMPLES}\n\n${HELP}`)
+  if (!state.owner && !state.manualPair) {
+    state.owner = { jid: me.jid, jids: [me.jid, me.lid].filter(Boolean), self: true, selfChat: true }
+    save()
+    console.log('מחובר לצ\'אט שלך עם עצמך. כתוב שם כדי לדבר עם העוזר.')
+    await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו כותבים לי כאן, בצ'אט שלך עם עצמך.\n\n${EXAMPLES}\n\n${HELP}`)
+  }
+  if (state.owner) tellRelease()
+}
+
+function tellRelease() {
+  announceRelease({ send: (text) => wa.send(state.owner.jid, text) }).catch((e) => console.log(`[release] ${e.message}`))
 }
 
 const sendMedia = (media) => wa.sendMedia(state.owner.jid, media)

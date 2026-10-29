@@ -7,6 +7,7 @@ import QRCode from 'qrcode'
 import baileys, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, normalizeMessageContent, jidNormalizedUser, downloadMediaMessage } from '@whiskeysockets/baileys'
 import { DATA_DIR } from './config.js'
 import { state as store, save } from './store.js'
+import { ingestGroupMetadata, syncParticipatingGroups } from './groups.js'
 
 const CATCH_UP = 12 * 3600
 const MAX_SEEN = 500
@@ -95,6 +96,20 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
     sock.ev.on('contacts.update', (list) => learn(list))
     sock.ev.on('messaging-history.set', ({ contacts }) => learn(contacts))
 
+    // Names of every group he is in, not only groups that happen to speak after we connect.
+    // Old messages are not fetched. A failure here must not take the socket down.
+    const syncGroups = () => syncParticipatingGroups(sock).catch((e) => console.log(`[groups] ${e.message}`))
+    groupHooks?.bindSync?.(syncGroups)
+    const keepNames = (list) => {
+      try {
+        ingestGroupMetadata(list)
+      } catch (e) {
+        console.log(`[groups] ${e.message}`)
+      }
+    }
+    sock.ev.on('groups.upsert', keepNames)
+    sock.ev.on('groups.update', keepNames)
+
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
       if (qr) {
         // Nobody is scanning: stop instead of printing codes forever. Exit code 2 tells start.bat not to restart.
@@ -143,6 +158,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
         }
         // Deferred a tick so the caller already holds the returned handle when this runs.
         setTimeout(() => Promise.resolve(onReady({ jid: ownIds()[0], lid: ownIds()[1] || null })).catch((e) => console.log(`[whatsapp] ${e.message}`)))
+        syncGroups()
       }
       if (connection === 'close') {
         ready = false
@@ -155,11 +171,6 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
         const delay = Math.min(60000, 3000 * 2 ** attempts++)
         setTimeout(() => connect().catch((e) => console.log(`[whatsapp] ${e.message}`)), delay)
       }
-    })
-
-    // Group names change now and then; the new one is kept.
-    sock.ev.on('groups.update', (list) => {
-      for (const g of list || []) if (g.id && g.subject) groupHooks?.setGroupName(g.id, g.subject)
     })
 
     sock.ev.on('messages.upsert', ({ messages }) => {

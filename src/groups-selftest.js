@@ -180,6 +180,57 @@ ok(groups.load().buffer.length === 0 && groups.load().items.length === 0, 'turni
 groups.forgetAll()
 ok(Object.keys(groups.load().groups).length === 0, 'forget deletes everything')
 
+// ── names are known before anyone writes, and matching is loose ─────────────
+groups.reset()
+let syncs = 0
+groups.bindGroupSync(() => { syncs++ })
+groups.setEnabled(true, NOW)
+ok(syncs === 1 && groups.load().readingSince === NOW, 'turning groups on syncs names and remembers when reading started')
+groups.setEnabled(true, NOW)
+ok(syncs === 1, 'turning groups on again does not sync twice')
+groups.bindGroupSync(null)
+groups.setGroupName(CLASS, 'י3 כיתה 🔥')
+groups.setGroupName(BALL, 'כדורגל ⚽ שכונה')
+const status = groups.statusText()
+ok(/קבוצות \(2\)/.test(status) && status.includes('י3 כיתה') && status.includes('כדורגל'), 'status lists the count and the names')
+ok(groups.feedback({ kind: 'group', name: '  י3   כיתה ', how: 'more' }).includes('י3 כיתה'), 'a name matches without spaces or emoji')
+ok(groups.feedback({ kind: 'group', name: 'כדורגל', how: 'less' }).includes('כדורגל'), 'a substring matches')
+const channel = groups.feedback({ kind: 'group', name: 'ערוץ בית הספר', how: 'mute' })
+ok(channel.includes('לא מצאתי') && channel.includes('ערוץ וואטסאפ'), 'an unknown name says it might be a channel')
+groups.reset()
+groups.setEnabled(true, new Date(2026, 9, 28, 17, 5).getTime())
+groups.setModel(async () => '{"items":[]}')
+const partial = await groups.missed({ hours: 24, nowMs: NOW })
+ok(partial.includes('אני קורא קבוצות רק מ-17:05 היום'), 'a short reading window says from when it started')
+ok(!partial.includes('לא נכתב כמעט כלום'), 'that window is not described as if the whole day was empty')
+
+groups._resetGroupSyncClock()
+let fetches = 0
+const sock = {
+  async groupFetchAllParticipating() {
+    fetches++
+    return {
+      [CLASS]: { id: CLASS, subject: 'י3 כיתה' },
+      '999@newsletter': { id: '999@newsletter', subject: 'ערוץ בית הספר' },
+    }
+  },
+}
+const synced = await groups.syncParticipatingGroups(sock, NOW)
+ok(synced.synced === 1 && fetches === 1 && groups.load().groups[CLASS].name === 'י3 כיתה', 'participating groups are registered by name')
+ok(!groups.load().groups['999@newsletter'], 'a WhatsApp channel is not stored')
+const again = await groups.syncParticipatingGroups(sock, NOW + 5 * 60000)
+ok(again.skipped === 'throttled' && fetches === 1, 'a sync waits about 10 minutes')
+ok(groups.ingestGroupMetadata([{ id: BALL, subject: 'כדורגל שכונה' }]) === 1 && groups.load().groups[BALL].name === 'כדורגל שכונה', 'groups.upsert keeps the name current')
+ok(groups.ingestGroupMetadata([{ id: '1@newsletter', subject: 'חדשות' }]) === 0, 'groups.update ignores a channel')
+groups.setEnabled(false)
+groups._resetGroupSyncClock()
+const whileOff = await groups.syncParticipatingGroups(sock, NOW + 20 * 60000)
+ok(whileOff.skipped === 'off' && fetches === 1, 'sync does not run while groups are off')
+groups.setEnabled(true, NOW)
+groups._resetGroupSyncClock()
+const boom = await groups.syncParticipatingGroups({ groupFetchAllParticipating: async () => { throw new Error('boom') } }, NOW + 30 * 60000)
+ok(boom.error === 'boom' && boom.synced === 0, 'a failed sync does not throw')
+
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(`${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

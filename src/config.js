@@ -177,6 +177,8 @@ const build = () => ({
   // Self-teaching (lessons, tools it writes for itself, the night study). Off unless SELF_LEARNING=on: while it is off
   // none of its tools exist for the model, nothing is added to the prompt, and nothing runs at night.
   learning: ['on', '1', 'true', 'yes'].includes(env('SELF_LEARNING').toLowerCase()),
+  // One Hebrew WhatsApp note after a deploy. UPDATE_NOTES=off skips it; anything else (including unset) sends.
+  updateNotes: !['off', '0', 'false', 'no'].includes(env('UPDATE_NOTES', 'on').toLowerCase()),
   // Agent mode (src/planner.js): a goal of several stages gets a plan, steps and a check against "done" before the
   // answer. AGENT_SHOW_PLAN=off keeps the plan to itself instead of sending it once in the chat.
   // AGENT_MAX_STEPS: how many model steps a turn with a plan may take (one without a plan keeps the short limit).

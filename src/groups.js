@@ -36,6 +36,7 @@ const empty = () => ({
   lastExtract: 0,
   lastAsked: 0,
   nextItem: 1,
+  readingSince: 0, // ms when tracking was turned on; 0 if it has not been
 })
 
 let cache = null
@@ -94,6 +95,12 @@ export const groupsOn = () => load().enabled ?? settings().on
 const hash = (jid) => createHash('sha256').update(String(jid || '')).digest('hex').slice(0, 12)
 const clamp = (n) => Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, Math.round(n * 100) / 100))
 const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+// Group names are matched without case, spaces or emoji, so "י3 כיתה 🔥" and "י3כיתה" are the same group.
+export const foldName = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+export const groupNameMatches = (name, query) => {
+  const q = foldName(query)
+  return q.length > 0 && foldName(name).includes(q)
+}
 
 // ── what a message is about, without a model ────────────────────────────────
 const TYPES = [
@@ -159,13 +166,76 @@ export function capture(msg, nowMs = Date.now()) {
 }
 
 export const knowsGroup = (jid) => Boolean(load().groups[jid]?.name)
-export function setGroupName(jid, name) {
-  if (!jid || !name) return
+
+const blankGroup = () => ({ name: '', weight: 0, muted: false, seen: 0, mine: 0, lastAt: 0 })
+
+// One write for a whole participating-group list. Channels (@newsletter) are not groups we can read.
+export function setGroupNames(list) {
   const s = load()
-  const g = (s.groups[jid] ||= { name: '', weight: 0, muted: false, seen: 0, mine: 0, lastAt: 0 })
-  if (g.name === name) return
-  g.name = String(name).slice(0, 60)
-  persist()
+  let changed = 0
+  for (const item of list || []) {
+    const jid = item?.jid || item?.id
+    const name = item?.name || item?.subject
+    if (!jid || !name || String(jid).endsWith('@newsletter')) continue
+    const g = (s.groups[jid] ||= blankGroup())
+    const next = String(name).slice(0, 60)
+    if (g.name === next) continue
+    g.name = next
+    changed++
+  }
+  if (changed) persist()
+  return changed
+}
+
+export function setGroupName(jid, name) {
+  setGroupNames([{ jid, name }])
+}
+
+// groups.upsert / groups.update payloads. Returns how many real groups were in the list.
+export function ingestGroupMetadata(list) {
+  if (!groupsOn()) return 0
+  const rows = []
+  for (const g of list || []) {
+    const jid = g?.id
+    const name = g?.subject
+    if (!jid || !name || String(jid).endsWith('@newsletter')) continue
+    rows.push({ jid, name })
+  }
+  setGroupNames(rows)
+  return rows.length
+}
+
+const SYNC_GAP = 10 * 60 * 1000
+let lastGroupSync = 0
+export const _resetGroupSyncClock = () => {
+  lastGroupSync = 0
+}
+
+function metadataList(all) {
+  if (Array.isArray(all)) return all
+  if (!all || typeof all !== 'object') return []
+  return Object.entries(all).map(([key, g]) => ({ ...(g || {}), id: g?.id || key }))
+}
+
+// Names only: groupFetchAllParticipating does not download old messages. Best-effort, at most once per 10 minutes.
+export async function syncParticipatingGroups(sock, now = Date.now()) {
+  if (!groupsOn() || typeof sock?.groupFetchAllParticipating !== 'function') return { synced: 0, skipped: 'off' }
+  if (now - lastGroupSync < SYNC_GAP) return { synced: 0, skipped: 'throttled' }
+  lastGroupSync = now
+  try {
+    const all = await sock.groupFetchAllParticipating()
+    const n = ingestGroupMetadata(metadataList(all))
+    console.log(`[groups] synced ${n} groups`)
+    return { synced: n }
+  } catch (e) {
+    console.log(`[groups] ${e.message}`)
+    return { synced: 0, error: e.message }
+  }
+}
+
+let syncHook = null
+export function bindGroupSync(fn) {
+  syncHook = typeof fn === 'function' ? fn : null
 }
 const groupName = (jid) => load().groups[jid]?.name || 'קבוצה'
 
@@ -308,10 +378,9 @@ const THRESHOLD = 3
 export function openItems({ sinceMs = 0, group = '', nowMs = Date.now(), all = false } = {}) {
   const s = load()
   const today = ymd(new Date(nowMs))
-  const g = norm(group)
   return s.items
     .filter((i) => i.status !== 'dismissed' && i.at >= sinceMs && (!i.date || i.date >= today))
-    .filter((i) => !g || norm(groupName(i.g)).includes(g))
+    .filter((i) => !group || groupNameMatches(groupName(i.g), group))
     .filter((i) => all || itemScore(i, s) >= THRESHOLD)
     .sort((a, b) => itemScore(b, s) - itemScore(a, s) || (a.date || '9').localeCompare(b.date || '9'))
 }
@@ -332,14 +401,17 @@ export async function missed({ hours, group, nowMs = Date.now() } = {}) {
   // Since he last asked, but never more than three days back; the first time, the last day.
   const from = hours ? nowMs - hours * 3600000 : s.lastAsked ? Math.max(s.lastAsked + 1, nowMs - 72 * 3600000) : nowMs - 24 * 3600000
   const items = openItems({ sinceMs: from, group, nowMs })
-  const scanned = s.buffer.filter((m) => m.at >= from && (!group || norm(groupName(m.g)).includes(norm(group))))
+  const scanned = s.buffer.filter((m) => m.at >= from && (!group || groupNameMatches(groupName(m.g), group)))
   const perGroup = new Map()
   for (const m of scanned) perGroup.set(groupName(m.g), (perGroup.get(groupName(m.g)) || 0) + 1)
   // Asking about a group by name says it matters to him.
-  if (group) for (const g of Object.values(s.groups)) if (norm(g.name).includes(norm(group))) g.weight = clamp(g.weight + 0.1)
+  if (group) for (const g of Object.values(s.groups)) if (groupNameMatches(g.name, group)) g.weight = clamp(g.weight + 0.1)
   s.lastAsked = nowMs
   persist()
-  const head = scanned.length ? `עברתי על ${scanned.length} הודעות ב-${perGroup.size} קבוצות.` : 'לא נכתב כמעט כלום בקבוצות מאז.'
+  const started = readingNote(s.readingSince, nowMs, from)
+  const head = scanned.length
+    ? `${started}עברתי על ${scanned.length} הודעות ב-${perGroup.size} קבוצות.`
+    : started || 'לא נכתב כמעט כלום בקבוצות מאז.'
   if (!items.length) return `${head} אין משהו שצריך לעשות איתו משהו.`
   return [`${head} מה שחשוב:`, ...items.slice(0, 12).map((i) => itemLine(i, nowMs, true)), '', 'אפשר להוסיף ליומן או למשימות לפי המספר, או להגיד מה פחות מעניין.'].join('\n')
 }
@@ -365,8 +437,11 @@ export function feedback({ kind, name, how }) {
     persist(true)
     return `רשמתי לגבי ${hits.map((x) => x.name).join(', ')}: ${how === 'more' ? 'מה שנכתב שם יקבל עדיפות' : how === 'unmute' ? 'חזר לרגיל' : 'פחות חשוב'}.`
   }
-  const hits = Object.entries(s.groups).filter(([, g]) => norm(g.name).includes(q))
-  if (!hits.length) return `לא מצאתי קבוצה בשם "${name}". הקבוצות שאני מכיר: ${Object.values(s.groups).map((g) => g.name).filter(Boolean).slice(0, 15).join(', ') || 'עוד אף אחת'}.`
+  const hits = Object.entries(s.groups).filter(([, g]) => groupNameMatches(g.name, name))
+  if (!hits.length) {
+    const known = Object.values(s.groups).map((g) => g.name).filter(Boolean).slice(0, 15).join(', ')
+    return `לא מצאתי קבוצה בשם "${name}". זה לא קבוצה — אולי זה ערוץ וואטסאפ, ואותם אני לא יכול לקרוא. הקבוצות שאני מכיר: ${known || 'עוד אף אחת'}.`
+  }
   for (const [jid, g] of hits) {
     if (how === 'mute') {
       g.muted = true
@@ -423,12 +498,29 @@ export async function addItems(ids, { to = 'auto', adders, confirm }) {
   return [done.length && `הוספתי:\n${done.join('\n')}`, failed.length && `לא הצלחתי:\n${failed.join('\n')}`].filter(Boolean).join('\n')
 }
 
-export function setEnabled(on) {
+function readingNote(since, nowMs, from) {
+  if (!since || since > nowMs || since <= from) return ''
+  const d = new Date(since)
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const when = ymd(d) === ymd(new Date(nowMs)) ? 'היום' : `${d.getDate()}.${d.getMonth() + 1}`
+  return `אני קורא קבוצות רק מ-${hm} ${when}. `
+}
+
+export function setEnabled(on, now = Date.now()) {
   const s = load()
-  s.enabled = on
-  // Turning it off forgets what was read. What he learned it to care about stays.
-  if (!on) (s.buffer = []), (s.items = [])
+  const was = groupsOn()
+  s.enabled = Boolean(on)
+  // Turning it off forgets what was read. What he learned to care about stays.
+  // Turning it on does not read old history; it only asks WhatsApp for the current group names.
+  if (!on) {
+    s.buffer = []
+    s.items = []
+    s.readingSince = 0
+  } else if (!was) {
+    s.readingSince = now
+  }
   persist(true)
+  if (on && !was) Promise.resolve(syncHook?.()).catch((e) => console.log(`[groups] ${e.message}`))
   return on
     ? 'התחלתי לעקוב אחרי הקבוצות. אני קורא מעכשיו והלאה (לא היסטוריה), שומר רק אצלך ורק יומיים, ושולח לך רק מה שחשוב. קבוצה שלא תרצה שאקרא: "תשתיק את קבוצת ..."'
     : 'הפסקתי לעקוב אחרי הקבוצות ומחקתי את מה ששמרתי מהן.'
@@ -443,9 +535,10 @@ export function forgetAll() {
 
 export function statusText() {
   const s = load()
-  const groups = Object.values(s.groups).filter((g) => g.name)
+  const named = Object.values(s.groups).filter((g) => g.name)
   const lines = [`מעקב קבוצות: ${groupsOn() ? 'פעיל' : 'כבוי'}${settings().autoAdd ? ' · מוסיף ליומן לבד' : ''}`, `שמורות ${s.buffer.length} הודעות (עד ${settings().keepHours} שעות), ${s.items.filter((i) => i.status === 'new').length} פריטים פתוחים.`]
-  if (groups.length) lines.push('', 'קבוצות:', ...groups.sort((a, b) => b.weight - a.weight).slice(0, 20).map((g) => `- ${g.name}${g.muted ? ' (מושתקת)' : ''}${g.weight ? ` · משקל ${g.weight > 0 ? '+' : ''}${g.weight}` : ''}`))
+  lines.push('', named.length ? `קבוצות (${named.length}):` : 'קבוצות (0): עוד לא הכרתי אף קבוצה.')
+  if (named.length) lines.push(...named.sort((a, b) => b.weight - a.weight || a.name.localeCompare(b.name, 'he')).slice(0, 30).map((g) => `- ${g.name}${g.muted ? ' (מושתקת)' : ''}${g.weight ? ` · משקל ${g.weight > 0 ? '+' : ''}${g.weight}` : ''}`))
   const senders = Object.values(s.senders).filter((x) => x.weight)
   if (senders.length) lines.push('', 'שולחים:', ...senders.slice(0, 10).map((x) => `- ${x.name || '?'} · ${x.weight > 0 ? '+' : ''}${x.weight}`))
   const topics = Object.entries(s.topics)

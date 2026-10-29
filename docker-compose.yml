@@ -7,7 +7,12 @@
 #   docker compose logs -f
 services:
   helper:
-    build: .
+    build:
+      context: .
+      args:
+        # Optional. The notes stage prefers `git rev-parse` from the build context.
+        # Set this only when the context has no .git: GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build
+        GIT_SHA: ${GIT_SHA:-}
     container_name: helper
     restart: unless-stopped
     env_file: .env
