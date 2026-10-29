@@ -692,6 +692,7 @@ export const allTools = () => [...tools.filter(isOn), ...extendedTools.filter(is
 // and Hebrew costs two to three times the tokens of English, so on a small per-minute budget this is what makes
 // a second and third model call fit in the same minute.
 const BRIEF = {
+  whatsapp_groups: 'WhatsApp groups he is in. read = the actual text written in a group; use for questions about what someone wrote, e.g. was there a quiz/test in X. Pass group, hours (default 48) and query. Do not say you cannot read group messages. missed = important items only. status = every group name. on/off only when he asks.',
   open_loop: 'Notebook of what he left open. add (no need to ask) when he will deal with it later, waits for someone, or a task stays half done, with follow_up_when; close once settled; list.',
   update_plan: 'Plan for a goal of several stages: goal, steps with status (pending/doing/done/skipped/blocked), done_when. Call before acting and again as steps change, with the whole list. Not for a simple question.',
   remember: 'Save a lasting fact about the user.',

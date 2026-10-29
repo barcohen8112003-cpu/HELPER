@@ -17,15 +17,17 @@ export const groupTools = [
     name: 'whatsapp_groups',
     description:
       'קבוצות הוואטסאפ של המשתמש (כיתה, שכבה, חוגים, פרויקטים): מה חשוב שם בלי לקרוא הכל. ' +
+      'read = הטקסט עצמו שנכתב בקבוצה מאז שהמעקב הופעל (group, hours, query). זה מה שמשתמשים בו כששואלים מה נכתב, למשל "היה בוחן בכיתה י6?". אסור להגיד שאי אפשר לקרוא הודעות בקבוצה. ' +
       'missed = "מה פספסתי?" / "מה היה בקבוצות?" (אפשר group לקבוצה אחת, hours לטווח). ' +
       'add = להוסיף פריטים לפי מספר ליומן או למשימות (המשתמש מאשר). dismiss = להוריד פריטים. ' +
       'feedback = ללמוד מה חשוב לו: kind group/sender/topic, how more/less/mute/unmute (למשל "הקבוצה של הכדורגל לא מעניינת" = group less, "תשתיק את..." = mute, "מה שהמחנכת כותבת חשוב" = sender more). ' +
-      'on/off = להתחיל או להפסיק לעקוב (רק כשהוא מבקש). status = מה פעיל ומה נלמד. forget = למחוק את כל מה שנשמר מהקבוצות.',
+      'on/off = להתחיל או להפסיק לעקוב (רק כשהוא מבקש). status = מה פעיל וכל שמות הקבוצות (אפשר group לסינון). forget = למחוק את כל מה שנשמר מהקבוצות.',
     parameters: obj(
       {
-        action: { type: 'string', enum: ['missed', 'add', 'dismiss', 'feedback', 'status', 'on', 'off', 'forget'] },
-        group: str('שם קבוצה או חלק ממנו, לסינון ב-missed'),
-        hours: { type: 'number', description: 'missed: כמה שעות אחורה (ברירת מחדל: מאז הפעם הקודמת שהוא שאל)' },
+        action: { type: 'string', enum: ['missed', 'read', 'add', 'dismiss', 'feedback', 'status', 'on', 'off', 'forget'] },
+        group: str('שם קבוצה או חלק ממנו, ל-read, missed או status'),
+        hours: { type: 'number', description: 'read: כמה שעות אחורה (ברירת מחדל 48). missed: כמה שעות אחורה (ברירת מחדל: מאז הפעם הקודמת שהוא שאל)' },
+        query: str('read: מילה לסינון בתוך ההודעות, למשל בוחן'),
         items: { type: 'array', items: { type: 'number' }, description: 'add/dismiss: מספרי הפריטים מהרשימה' },
         to: { type: 'string', enum: ['auto', 'calendar', 'tasks'], description: 'add: לאן (auto = מבחנים ואירועים ליומן, שיעורי בית למשימות)' },
         kind: { type: 'string', enum: ['group', 'sender', 'topic'], description: 'feedback: על מה' },
@@ -35,9 +37,10 @@ export const groupTools = [
       },
       ['action']
     ),
-    async run({ action, group, hours, items, to = 'auto', kind = 'group', name, how = 'less', account }, ctx) {
+    async run({ action, group, hours, query, items, to = 'auto', kind = 'group', name, how = 'less', account }, ctx) {
       if (action === 'missed') return groups.missed({ hours: Number(hours) || 0, group })
-      if (action === 'status') return groups.statusText()
+      if (action === 'read') return groups.recent({ group, hours: Number(hours) || 48, query })
+      if (action === 'status') return groups.statusText(group)
       if (action === 'on') return groups.setEnabled(true)
       if (action === 'off') return groups.setEnabled(false)
       if (action === 'forget') return groups.forgetAll()
