@@ -10,6 +10,8 @@ node_modules/
 home-relay/config.json
 home-relay/pc-bridge.config.json
 .auto-update-bad-commit
+# accept:real reports: evidence from test runs stays on the machine that ran them.
+/accept-reports/
 
 # TV launcher build output
 tv/launcher/.gradle/
