@@ -73,4 +73,23 @@ for (const [, , good] of pairs) {
 }
 assert.ok(pairs.filter(([, bad]) => styleTells(bad).length).length * 2 >= pairs.length, 'most bad examples are caught')
 passed++
+const personas = ['persona.md', 'persona.short.md', 'persona.voice.md'].map((name) => ({
+  name,
+  text: fs.readFileSync(new URL(`../${name}`, import.meta.url), 'utf8'),
+}))
+for (const { name, text } of personas) {
+  for (const phrase of ['homework is his call', 'gemini_spark', 'classroom_assignments', 'drive_search', '10th-grade level', 'conversation summary', 'live exam']) {
+    assert.ok(text.includes(phrase), `${name} missing ${phrase}`)
+  }
+  passed++
+}
+const shortPersona = personas.find((f) => f.name === 'persona.short.md').text
+const teachingLine = shortPersona.split('\n').find((line) => line.startsWith('TEACHING'))
+assert.ok(shortPersona.indexOf('\nHOMEWORK:') < shortPersona.indexOf('\nVOICE'), 'homework is its own line above the voice rules')
+assert.ok(teachingLine && !teachingLine.includes('gemini_spark') && !teachingLine.includes('homework is his call'), 'teaching no longer carries the homework rule')
+const fullPersona = personas.find((f) => f.name === 'persona.md').text
+assert.ok(fullPersona.indexOf('### 1.1 Homework') < fullPersona.indexOf('## 2. Your voice'), 'homework sits near the top of the full persona')
+const voicePersona = personas.find((f) => f.name === 'persona.voice.md').text
+assert.ok(voicePersona.indexOf('HOMEWORK:') < voicePersona.indexOf('Bad, then good'), 'the voice check states homework before the tone examples')
+passed += 3
 console.log(`${passed} בדיקות עברו, 0 נכשלו (${CASES.length} הודעות בסט)`)

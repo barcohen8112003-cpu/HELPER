@@ -1,5 +1,6 @@
 // Offline checks for response-time stats and the daily budget of messages Helper sends on its own.
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 process.env.MESSAGE_BUDGET = '3'
 process.env.LLM_PRICES = 'paid-model=2/8, bad entry'
 process.env.MONTHLY_COST_LIMIT = '1'
@@ -43,4 +44,11 @@ assert.ok(/\$1\.12 מתוך \$1/.test(sent.at(-1).text)); passed++
 // The monthly line about last month: silent when last month had no use, and asked about only once.
 assert.equal(sent.filter((m) => m.key.startsWith('cost-month')).length, 0); passed++
 assert.ok(metricsSummary().cost.startsWith('החודש: 6 קריאות')); passed++
+// The scheduler used to pass runTask as `now`, which threw and skipped the monthly summary.
+await costTick(notify, async function runTask() {})
+assert.equal(sent.filter((m) => m.key.startsWith('cost-month')).length, 0); passed++
+assert.equal(sent.filter((m) => m.key.startsWith('cost-alert')).length, 2); passed++
+const scheduler = fs.readFileSync(new URL('./scheduler.js', import.meta.url), 'utf8')
+assert.match(scheduler, /\(n\) => costTick\(n\)/); passed++
+assert.doesNotMatch(scheduler, /weekly, costTick,/); passed++
 console.log(`${passed} בדיקות עברו, 0 נכשלו`)

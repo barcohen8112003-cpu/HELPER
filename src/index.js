@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomInt } from 'node:crypto'
 import { config, DATA_DIR } from './config.js'
+import { lockHeldByOther } from './instance-lock.js'
 import { state, save } from './store.js'
 import { startWhatsApp } from './whatsapp.js'
 import { runTurn, runTask, runBackground, resetHistory, compact, setSettingsUrl } from './agent.js'
@@ -54,19 +55,17 @@ if (config.desktop.enabled) {
 }
 
 // One assistant per data folder: two would share the WhatsApp session and answer every message twice.
+// The lock lives on the persistent disk, so a reboot can leave a PID that now belongs to tini or a browser.
+// Only a live node process running src/index.js, other than us, counts. Anything else is deleted.
 const LOCK = path.join(DATA_DIR, 'helper.lock')
 const HEALTHY = path.join(DATA_DIR, 'healthy')
-const running = (pid) => {
-  try {
-    return process.kill(pid, 0)
-  } catch (e) {
-    return e.code === 'EPERM'
+if (fs.existsSync(LOCK)) {
+  const lockedBy = Number(fs.readFileSync(LOCK, 'utf8'))
+  if (lockHeldByOther(lockedBy)) {
+    console.log(`העוזר כבר רץ (תהליך ${lockedBy}). סגור את החלון השני לפני שמפעילים שוב.`)
+    process.exit(2)
   }
-}
-const lockedBy = Number(fs.existsSync(LOCK) && fs.readFileSync(LOCK, 'utf8'))
-if (lockedBy && lockedBy !== process.pid && running(lockedBy)) {
-  console.log(`העוזר כבר רץ (תהליך ${lockedBy}). סגור את החלון השני לפני שמפעילים שוב.`)
-  process.exit(2)
+  fs.rmSync(LOCK, { force: true })
 }
 fs.writeFileSync(LOCK, String(process.pid))
 fs.rmSync(HEALTHY, { force: true })
