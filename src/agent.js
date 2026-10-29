@@ -26,6 +26,7 @@ import { record as recordAudit } from './audit.js'
 import { learnFrom } from './memory-learn.js'
 import { agentRules, planBlock, looksLikeGoal, needsVerify, verifyPrompt, planText, savedPlan, keepPlan, clearPlan } from './planner.js'
 import { proactiveRules, loopsBlock, noteUserMessage } from './proactive.js'
+import { checkLinks } from './links.js'
 
 const MAX_HISTORY = 60
 // In light mode the whole request has to fit a few thousand tokens, so history is folded much sooner.
@@ -387,6 +388,13 @@ async function closingAnswer(messages, ctx = {}, scaffold = new Set()) {
   return reply
 }
 
+// Everything this turn already had in hand, for checkLinks: tool results, his message, memory and the settings site.
+function seenThisTurn(mark) {
+  const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => p.text || '').join(' ') : '')
+  const turn = state.history.slice(mark).filter((m) => m.role !== 'assistant').map((m) => textOf(m.content))
+  return [...turn, state.summary || '', ...state.memory.map((m) => m.fact || ''), settingsUrl].join('\n')
+}
+
 // ctx: { confirm(text) => Promise<boolean>, sendMedia, say, react }
 // image: optional data URL, sent to the model for this turn only and kept out of the saved history.
 export async function runTurn(userText, ctx, image) {
@@ -400,7 +408,14 @@ export async function runTurn(userText, ctx, image) {
   // He wrote: Helper's own messages are being answered, and he is in the conversation right now.
   noteUserMessage()
   try {
-    const reply = await converse(state.history, ctx)
+    let reply = await converse(state.history, ctx)
+    // A link that no tool opened this turn is opened once before it goes out; a dead one is taken out (src/links.js).
+    const checked = await checkLinks(reply, seenThisTurn(mark)).catch(() => reply)
+    if (checked !== reply) {
+      const last = state.history.findLast((m) => m.role === 'assistant')
+      if (last) last.content = checked
+      reply = checked
+    }
     keepPlan(ctx.plan)
     if (image) userMsg.content = `${userText} [צורפה תמונה]`
     for (const m of state.history) {

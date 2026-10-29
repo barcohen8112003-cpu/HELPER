@@ -40,5 +40,29 @@ export async function getNews(hours = 12) {
     .sort((a, b) => b.at - a.at)
 }
 
-export const formatNews = (items) =>
-  items.map((n) => `${new Date(n.at).toLocaleString('he-IL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })} [${n.source}] ${n.title}`).join('\n')
+const when = (at) => new Date(at).toLocaleString('he-IL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+
+// For get_news: each headline with its time, source and link, so an answer can point at where it was published.
+export const formatNews = (items) => items.map((n) => `${when(n.at)} [${n.source}] ${n.title}${n.link ? ` ${n.link}` : ''}`).join('\n')
+
+// For the morning digest: the same headlines numbered, so every line the model writes names the one it came from.
+export const numberedNews = (items) => items.map((n, i) => `[${i + 1}] ${when(n.at)} [${n.source}] ${n.title}`).join('\n')
+
+// The model's digest lines ("• text [3]" or "• text [3,5]") turned into what he reads: the line, its source and the
+// real link of the headline it cites. A line that cites no fetched headline is dropped, so nothing in the digest
+// can come from the model's memory.
+export function attachSources(text, items) {
+  const out = []
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    const refs = [...line.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)].flatMap((m) => m[1].split(',').map((x) => Number(x.trim())))
+    const cited = refs.map((n) => items[n - 1]).filter(Boolean)
+    if (!cited.length) continue
+    const body = line.replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, '').replace(/^[•\-*]\s*/, '').trim()
+    if (!body) continue
+    const first = cited.find((n) => n.link) || cited[0]
+    out.push(`• ${body} (${first.source})${first.link ? `\n${first.link}` : ''}`)
+  }
+  return out.join('\n')
+}

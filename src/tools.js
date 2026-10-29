@@ -200,6 +200,8 @@ export const tools = [
     parameters: obj({ text: str('נוסח ההודעה') }),
     async run({ text }, ctx) {
       if (!ctx.say) return 'אין חיבור לוואטסאפ מהשיחה הזאת'
+      // In his WhatsApp chat itself a second message only splits the answer in two: it belongs in the reply.
+      if (ctx.source === 'whatsapp') return 'לא נשלח: אתה כבר בוואטסאפ שלו. כתוב את זה בתוך התשובה עצמה, הודעה אחת.'
       await ctx.say(text)
       return 'נשלח לוואטסאפ'
     },

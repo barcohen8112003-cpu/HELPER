@@ -51,7 +51,8 @@ export function nightText(s) {
   return lines.length ? ['נצבר בלילה:', ...lines].join('\n') : ''
 }
 
-// deps: { send(text) => Promise<messageId>, now() => Date, getDay() => Promise<{ reminders, events, homework }> }
+// deps: { send(text) => Promise<messageId>, now() => Date, getDay() => Promise<{ reminders, events, homework }>,
+//   news?() => Promise<string> (the morning news lines, '' for none) }
 export function createDelivery(deps) {
   const now = () => deps.now()
 
@@ -185,8 +186,11 @@ export function createDelivery(deps) {
     const t = now()
     const today = t.toDateString()
     if (s.brief.lastDate === today || t.getHours() * 60 + t.getMinutes() < at) return false
-    const text = await buildBrief()
+    const day = await buildBrief()
     s.brief.lastDate = today
+    // The morning news, when it is set for about the same time, rides in the same message (deps.news, src/scheduler.js).
+    const news = deps.news ? await Promise.resolve(deps.news()).catch((e) => (console.log(`[news] ${e.message}`), '')) : ''
+    const text = news ? `${day || 'בוקר טוב.'}\n\n📰 *מה קרה מאז אתמול בערב*\n${news}` : day
     if (text) await sendNow(text, { event_id: `brief:${today}` })
     // In the only-today mode the night's alerts are not part of that message; they leave on their own, if there are any.
     const night = config.briefOnlyToday ? nightText(s) : ''
