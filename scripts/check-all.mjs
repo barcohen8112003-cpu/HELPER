@@ -8,6 +8,7 @@ import path from 'node:path'
 const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..')
 const TESTS = [
   'src/selftest.js',
+  'src/instance-lock-selftest.js',
   'src/toolkit/_selftest.js',
   'src/memory-selftest.js',
   'src/learning-selftest.js',

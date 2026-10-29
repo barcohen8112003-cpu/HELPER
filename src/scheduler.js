@@ -432,7 +432,9 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, costTick, news, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      // costTick's second argument is a Date. The loop passes runTask as that argument, which threw
+      // 'now.getFullYear is not a function' and skipped the monthly cost summary.
+      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, (n) => costTick(n), news, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {

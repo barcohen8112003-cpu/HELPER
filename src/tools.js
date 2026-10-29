@@ -290,7 +290,7 @@ ${await askGemini(question)}`
   {
     name: 'gemini_spark',
     enabled: geminiEnabled,
-    description: "שולח משימה ל-Gemini Spark (הסוכן של Gemini בחשבון Google של המשתמש), עם קבצים מצורפים, ו-Spark יוצר בעצמו מסמך Google Docs ומחזיר קישור. כשהמשתמש מבקש להעביר קובץ ל-Gemini/Spark ושיעשה ממנו מסמך דוקס. גם כשהוא מבקש לעשות מטלה מ-Classroom או מ-Webtop מוכנה להגשה (״תעשה לי את המשימה״): שלח את קובץ המטלה עם הוראה לפתור את כולה ברמה של כיתה י'. קבצים: מ-Drive/Classroom (id מ-drive_search או classroom) ו/או קובץ מדף ב-Webtop. רץ ברקע, הקישור מגיע בהודעה.",
+    description: "שולח משימה ל-Gemini Spark (הסוכן של Gemini בחשבון Google של המשתמש), עם קבצים מצורפים, ו-Spark יוצר בעצמו מסמך Google Docs ומחזיר קישור. כשהמשתמש מבקש להעביר קובץ ל-Gemini/Spark ושיעשה ממנו מסמך דוקס. כשהוא מזכיר Gemini או Spark בשביל מטלה, שלח מיד את קובץ המטלה עם הוראה לפתור את כולה ברמה של כיתה י'. בלי אזכור של Gemini או Spark, אל תקרא לכלי הזה. קבצים: מ-Drive/Classroom (id מ-drive_search או classroom) ו/או קובץ מדף ב-Webtop. רץ ברקע, הקישור מגיע בהודעה.",
     parameters: obj(
       {
         task: str('ההוראה ל-Spark במילים של המשתמש, מלאה: מה לעשות עם הקובץ ואיזה מסמך Docs ליצור. Spark לא רואה את השיחה.'),
