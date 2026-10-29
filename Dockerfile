@@ -1,3 +1,16 @@
+# Commit list for the post-deploy WhatsApp note. `git pull --ff-only && docker compose up -d --build`
+# is enough: this stage reads .git when the build context has it (a normal checkout) and writes
+# build-info.json. .git is not copied into the final image. Without .git the build still succeeds and
+# GIT_SHA is used; an unknown sha sends no WhatsApp note.
+FROM node:24-slim AS notes
+RUN apt-get update && apt-get \
+    install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+ARG GIT_SHA=
+ENV GIT_SHA=$GIT_SHA
+RUN mkdir -p /out && node scripts/write-build-info.mjs --out /out/build-info.json
+
 # The assistant as a container, for running on a server (Render, or anywhere Docker runs).
 FROM node:24-slim
 
@@ -28,6 +41,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
 COPY persona.md persona.short.md persona.voice.md ./
+COPY --from=notes /out/build-info.json ./build-info.json
+ARG GIT_SHA=
+ENV GIT_SHA=${GIT_SHA}
 
 # Everything that must survive a restart lives here: the WhatsApp session, connected accounts, memory, watches.
 # Mount a persistent disk at this path.
