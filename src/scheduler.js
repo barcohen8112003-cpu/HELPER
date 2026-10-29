@@ -13,6 +13,7 @@ import { openGaps, clearGaps, proposeSkill } from './skills.js'
 import { learnerBackend, research } from './learner.js'
 import { weeklyDue, weekAhead, deadlineReminders, isoDay } from './study.js'
 import { phoneEnabled, phoneKeepAlive } from './phone.js'
+import { mayReachOut, markReachedOut, takeDueLoop, followUpPrompt, checkInContext } from './proactive.js'
 
 const NEWS_WINDOW = 4 * 60
 const FIRST_CHECK_IN = 3 * 60000
@@ -382,13 +383,27 @@ async function checkIn(notify, runTask) {
   // The first one comes a few minutes after start-up, so it is clear the feature is alive; then at the set pace.
   const wait = s.lastAt ? everyMinutes * 60000 : FIRST_CHECK_IN
   if (s.count >= maxPerDay || Date.now() - Math.max(s.lastAt, startedAt) < wait) return
+  // He is talking to Helper right now, or did not answer the last ones: not now.
+  if (!mayReachOut()) return
   s.lastAt = Date.now()
   save()
-  const reply = await runTask(CHECK_IN)
+  const reply = await runTask(CHECK_IN + checkInContext())
   if (!reply) return
   s.count++
+  markReachedOut()
   save()
   await notify(reply)
+}
+
+// Coming back to something he left open (src/proactive.js), once its time has come. One per round, a few a day.
+async function followUps(notify, runTask) {
+  if (inQuietHours()) return
+  const loop = takeDueLoop()
+  if (!loop) return
+  const reply = await runTask(followUpPrompt(loop))
+  if (!reply) return
+  markReachedOut()
+  await notify(reply, false, `loop:${loop.id}:${loop.nudges}`)
 }
 
 // Saturday evening: the coming week in one message (assignments, exams, calendar).
@@ -432,7 +447,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
     busy = true
     try {
       listenToGmail()
-      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, costTick, news, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, costTick, news, followUps, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {
@@ -469,3 +484,6 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
   setInterval(tick, TICK)
   setTimeout(tick, 3000)
 }
+
+// Exposed for the self-tests only.
+export const _test = { followUps, checkIn }

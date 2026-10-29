@@ -25,6 +25,7 @@ import { learningBlock } from './learning-tools.js'
 import { record as recordAudit } from './audit.js'
 import { learnFrom } from './memory-learn.js'
 import { agentRules, planBlock, looksLikeGoal, needsVerify, verifyPrompt, planText, savedPlan, keepPlan, clearPlan } from './planner.js'
+import { proactiveRules, loopsBlock, noteUserMessage } from './proactive.js'
 
 const MAX_HISTORY = 60
 // In light mode the whole request has to fit a few thousand tokens, so history is folded much sooner.
@@ -87,6 +88,7 @@ ${sessionEnabled() ? `- Webtop (${config.webtop.url}): fetch_page on this site r
 - Long work (controlling the computer or phone, a shopping errand, research across many sites, code to write and run) goes to start_background_task, so he can keep talking to you. Answer him in one line that it started. Quick lookups you do yourself.
 - Be economical: every tool call costs time. Use the fewest calls that answer the question, at most 3 for a lookup, then answer with what you have and say what you did not check. A goal with a plan takes the calls its steps need.
 - ${agentRules(true)}
+- ${proactiveRules(true)}
 - Older tool output is shortened after you read it. When a page gives you a fact you need (a price, a date), carry it forward in your own words.
 - Save lasting facts with remember without asking. A reminder is a fixed text; schedule_task is a real check you run later.
 - Prices and facts: read the page before quoting, always give the link.
@@ -153,6 +155,7 @@ ${phoneRoutePrompt(false)}${tvPrompt()}
 • אל תמציא מחירים, תאריכים או עובדות. אם לא הצלחת לבדוק, אמור זאת.
 • אם כלי נכשל, אמור מה נכשל ולמה.
 • ${agentRules(false)}
+• ${proactiveRules(false)}
 ${config.learning ? `• לימוד עצמי: כשמבקשים ממך משהו שאתה לא יודע איך לעשות, קודם skill_search. אין לקח? קרא ל-learn_how: הוא לומד את זה ב-Claude Code או ב-Gemini, ברקע, לא אתה, כדי לא לשרוף את המודל הזה. אמור למשתמש בשורה אחת שאתה לומד ושתחזור אליו, ואל תחקור בעצמך לצורך הלימוד. לא הצלחת בכלל: skill_gap. צריך יכולת בקוד (המרה, חישוב, פענוח) ואין כלי שמכסה אותה: build_tool. לקחים וכלים חדשים נכנסים רק באישור המשתמש.
 ` : ''}${locationLine() ? `\n${locationLine()}\n` : ''}
 ${agent ? `${agent}\n\n` : ''}זיכרון על המשתמש:
@@ -301,6 +304,8 @@ async function work(messages, ctx, scaffold) {
   const query = lastUserText(messages)
   const memory = memoryBlock(query, { english: config.llm.light })
   const learning = learningBlock(query, { english: config.llm.light })
+  // What he left open, so a message that settles one closes it. Read once per turn: open_loop answers for itself.
+  const loops = loopsBlock(config.llm.light)
   // A background task is long work by definition; a scheduled check is usually one lookup.
   const goalHint = ctx.source === 'job' || (ctx.source !== 'task' && looksLikeGoal(query))
   const signal = ctx.signal
@@ -313,7 +318,7 @@ async function work(messages, ctx, scaffold) {
     const defs = toolDefs(tools)
     shortenOldResults(messages)
     // A scheduled run has nobody waiting on it, so it waits for the main model rather than settle for a weaker one.
-    const agent = planBlock(ctx, config.llm.light, goalHint)
+    const agent = [planBlock(ctx, config.llm.light, goalHint), loops].filter(Boolean).join('\n\n')
     const msg = await llm([{ role: 'system', content: systemPrompt(memory, learning, agent) }, ...messages], defs, undefined, ctx?.patient ? LONG_PATIENCE : undefined, undefined, signal)
     const assistant = { role: 'assistant', content: msg.content ?? '' }
     if (msg.tool_calls?.length) assistant.tool_calls = msg.tool_calls
@@ -392,6 +397,8 @@ export async function runTurn(userText, ctx, image) {
   // A plan left open in an earlier message (out of steps, waiting on him) is offered back, so "תמשיך" continues it.
   ctx = ctx ?? {}
   ctx.plan ??= savedPlan()
+  // He wrote: Helper's own messages are being answered, and he is in the conversation right now.
+  noteUserMessage()
   try {
     const reply = await converse(state.history, ctx)
     keepPlan(ctx.plan)
@@ -430,7 +437,7 @@ export async function runTask(instruction, ctx) {
 
 const BACKGROUND_PROMPT = `[משימת רקע. המשתמש ביקש אותה בצ'אט וממשיך לדבר איתך בינתיים; הוא לא רואה את השלבים.]
 בצע אותה עם הכלים שלך עד הסוף. פעולה שמשנה משהו בעולם (תשלום, שליחה, מחיקה) מבקשת אישור כרגיל.
-בסוף כתוב הודעה אחת קצרה עם התוצאה: מה עשית, מה מצאת, קישורים, ומה לא הצלחת לבדוק.
+בסוף כתוב הודעה אחת קצרה עם התוצאה: מה עשית, מה מצאת, קישורים, ומה לא הצלחת לבדוק. אם יש דבר הבא ברור שאתה יכול לעשות בשבילו, הצע אותו בשורה אחת. אם נשאר משהו פתוח שתלוי בו או במישהו אחר, רשום אותו עם open_loop.
 המשימה: `
 
 // A background task: its own conversation (it does not see the chat), and only its result joins the history,

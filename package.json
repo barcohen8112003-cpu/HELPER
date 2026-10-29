@@ -33,6 +33,7 @@
     "check:study": "node src/study-selftest.js",
     "check:approval": "node src/approval-selftest.js",
     "check:agent": "node src/agent-selftest.js",
+    "check:proactive": "node src/proactive-selftest.js",
     "check:logs": "node src/logs-selftest.js",
     "check:claude-code": "node src/claude-code-selftest.js",
     "check:tv": "node src/tv-app-selftest.js",
