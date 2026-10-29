@@ -95,7 +95,13 @@ const build = () => ({
   liveMail: env('LIVE_MAIL', 'true') !== 'false',
   newsTime: env('NEWS_BRIEF_TIME'),
   // Self-initiated messages: how many a day at most (0 = never), and the least time between two.
-  proactive: { maxPerDay: Math.max(0, Number(env('CHECK_IN_PER_DAY', '0')) || 0), everyMinutes: Math.max(30, Number(env('CHECK_IN_EVERY_MINUTES', '180')) || 180) },
+  // Helper writing first (src/proactive.js): check-ins a few times a day, and coming back to what he left open.
+  // Both skip quiet hours, wait while he is mid-conversation, and stop after MAX_UNANSWERED unanswered messages.
+  proactive: {
+    maxPerDay: Math.max(0, Number(env('CHECK_IN_PER_DAY', '2')) || 0),
+    everyMinutes: Math.max(30, Number(env('CHECK_IN_EVERY_MINUTES', '180')) || 180),
+    followUpsPerDay: Math.max(0, Number(env('FOLLOW_UPS_PER_DAY', '3')) || 0),
+  },
   newsFeeds: env('NEWS_FEEDS', DEFAULT_FEEDS).split(',').map((s) => s.trim()).filter(Boolean),
   tavilyKey: env('TAVILY_API_KEY'),
   // Speech can live on a different provider than the chat model; it defaults to the same one.
