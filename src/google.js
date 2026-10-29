@@ -241,6 +241,13 @@ export async function calendarChanges(email, sinceIso) {
 }
 
 export async function calendarAdd(email, { title, start, end, description }) {
+  // A date alone (YYYY-MM-DD) is an all-day event.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    const next = new Date(`${start}T12:00:00Z`)
+    next.setUTCDate(next.getUTCDate() + 1)
+    const ev = await api(email, EVENTS, { body: { summary: title, description, start: { date: start }, end: { date: next.toISOString().slice(0, 10) } } })
+    return ev.htmlLink
+  }
   const from = new Date(start)
   if (isNaN(from)) throw new Error('זמן התחלה לא תקין, נדרש YYYY-MM-DDTHH:MM')
   const to = end ? new Date(end) : new Date(from.getTime() + 3600000)

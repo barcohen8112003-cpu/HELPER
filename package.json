@@ -32,13 +32,16 @@
     "check:phone-app": "node src/phone-app-selftest.js",
     "check:study": "node src/study-selftest.js",
     "check:approval": "node src/approval-selftest.js",
+    "check:agent": "node src/agent-selftest.js",
+    "check:proactive": "node src/proactive-selftest.js",
     "check:logs": "node src/logs-selftest.js",
     "check:claude-code": "node src/claude-code-selftest.js",
     "check:tv": "node src/tv-app-selftest.js",
     "check:spark": "node src/gemini-spark-selftest.js",
     "check:tv-agent": "node src/tv-agent-selftest.js",
     "check:docs": "node src/google-docs-selftest.js",
-    "check:webtop-file": "node src/webtop-file-selftest.js"
+    "check:webtop-file": "node src/webtop-file-selftest.js",
+    "check:groups": "node src/groups-selftest.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "~6.7.24",

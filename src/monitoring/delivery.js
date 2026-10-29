@@ -37,6 +37,7 @@ export function todayText(day, today) {
   const todo = [...(day.tasks || []).map((t) => `- ${t.title}${t.overdue ? ' (באיחור)' : ''}`), ...(day.reminders || []).map((r) => `- ${r.time} ${r.text}`)]
   if (todo.length) lines.push('', 'משימות להיום:', ...todo)
   if (day.lessons) lines.push('', 'שיעורים:', day.lessons)
+  if (day.groups?.length) lines.push('', 'מהקבוצות:', ...day.groups.map((g) => `- ${g}`))
   if (!lines.length) return config.briefAlways ? 'בוקר טוב. אין היום יומן, משימות או שיעורים.' : ''
   return [`בוקר טוב. היום ${today.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' })}:`, ...lines].join('\n')
 }
@@ -150,6 +151,7 @@ export function createDelivery(deps) {
     const agenda = [...day.events.map((e) => `- ${e.when} ${e.title}`), ...day.reminders.map((r) => `- ${r.time} ${r.text}`)]
     if (agenda.length) lines.push(`היום (${today.toLocaleDateString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric' })}):`, ...agenda)
     if (day.homework?.length) lines.push('', 'מטלות שאין לי אישור שהוגשו:', ...day.homework.map((h) => `- ${h.title} (${h.course}) - ${h.due}`))
+    if (day.groups?.length) lines.push('', 'מהקבוצות:', ...day.groups.map((g) => `- ${g}`))
 
     // What was already delivered as an interrupt is not repeated here.
     const held = s.watches.flatMap((w) => w.pending_batch).filter((item) => !s.delivered.includes(item.event_id))

@@ -4,6 +4,7 @@ import { state } from './store.js'
 import { calendarOn, listEvents } from './calendar.js'
 import { googleEnabled, googleAccounts, tasksList } from './google.js'
 import { timetableText } from './lessons.js'
+import { briefLines } from './groups.js'
 
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const time = (d) => new Date(d).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
@@ -23,5 +24,13 @@ export async function getDay(now = new Date()) {
         .map((t) => ({ title: t.title, overdue: t.due < today }))
     : []
   const lessons = await timetableText(now.getDay()).then(lessonsOnly).catch(() => '')
-  return { events, reminders, homework: state.homework.open, tasks, lessons }
+  // What came up in the WhatsApp groups since yesterday morning (src/groups.js); empty while that is off.
+  const groups = (() => {
+    try {
+      return briefLines(now.getTime())
+    } catch {
+      return []
+    }
+  })()
+  return { events, reminders, homework: state.homework.open, tasks, lessons, groups }
 }
