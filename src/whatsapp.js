@@ -24,7 +24,9 @@ const logger = pino({ level: 'silent' })
 
 // onMessage({ jids, fromMe, selfChat, key, lateSeconds, text, getMedia, reaction?, location? })
 // onReady({ jid, lid }): the linked account's own ids, each time the connection opens.
-export async function startWhatsApp(onMessage, onReady = () => {}) {
+// onGroup({ group, id, sender, senderName, at, text, fromMe }): a text message in a group, for src/groups.js. Read only.
+// groupName(jid) / setGroupName(jid, name): the group's subject, looked up once and kept there.
+export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = null) {
   const bootedAt = Math.floor(Date.now() / 1000)
   // Handled message ids survive a restart, so nothing is answered twice. Messages sent while the assistant was
   // off are still picked up, as long as they are newer than the last one handled and not older than CATCH_UP.
@@ -155,9 +157,30 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
       }
     })
 
+    // Group names change now and then; the new one is kept.
+    sock.ev.on('groups.update', (list) => {
+      for (const g of list || []) if (g.id && g.subject) groupHooks?.setGroupName(g.id, g.subject)
+    })
+
     sock.ev.on('messages.upsert', ({ messages }) => {
       for (const msg of messages) {
         const jid = msg.key?.remoteJid
+        // A group message never reaches the assistant's chat. It is handed to the groups reader, text only, when that
+        // is on; nothing is sent back, reacted to or marked as read.
+        if (jid?.endsWith('@g.us') && msg.message && groupHooks?.on()) {
+          const content = normalizeMessageContent(msg.message)
+          const text = content?.conversation || content?.extendedTextMessage?.text || content?.imageMessage?.caption || content?.documentMessage?.caption || content?.pollCreationMessage?.name || ''
+          const sentAt = Number(msg.messageTimestamp)
+          if (text && !text.startsWith(BOT_MARK) && sentAt >= since) {
+            if (!groupHooks.knows(jid)) sock.groupMetadata(jid).then((m) => groupHooks.setGroupName(jid, m.subject)).catch(() => {})
+            try {
+              groupHooks.capture({ group: jid, id: msg.key.id, sender: msg.key.participant || msg.participant || '', senderName: msg.pushName || '', at: sentAt, text, fromMe: Boolean(msg.key.fromMe) })
+            } catch (e) {
+              console.log(`[groups] ${e.message}`)
+            }
+          }
+          continue
+        }
         if (!jid || !msg.message || jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) continue
         if (!msg.key.fromMe && msg.pushName) learn([{ id: msg.key.senderPn || jid, notify: msg.pushName }], false)
         const sentAt = Number(msg.messageTimestamp)

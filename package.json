@@ -38,7 +38,8 @@
     "check:spark": "node src/gemini-spark-selftest.js",
     "check:tv-agent": "node src/tv-agent-selftest.js",
     "check:docs": "node src/google-docs-selftest.js",
-    "check:webtop-file": "node src/webtop-file-selftest.js"
+    "check:webtop-file": "node src/webtop-file-selftest.js",
+    "check:groups": "node src/groups-selftest.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "~6.7.24",

@@ -14,6 +14,7 @@ import { sessionEnabled } from './session.js'
 import { parseTimetableDay, timetableText } from './lessons.js'
 import * as services from './services.js'
 import * as googleHome from './google-home.js'
+import { groupTools } from './group-tools.js'
 import { useComputer, runErrand, runOnPhone } from './computer-use.js'
 import { phoneAppConnected } from './phone-app.js'
 import { errandBrowserEnabled } from './errand-browser.js'
@@ -647,6 +648,8 @@ export { firstYouTubeVideo }
 const isOn = (t) => !t.enabled || t.enabled()
 
 tools.push(...googleTools)
+// WhatsApp groups: "מה פספסתי?", calendar and tasks from them, what matters to him (src/groups.js).
+tools.push(...groupTools)
 tools.push(...pcTools)
 tools.push(...memoryTools, ...skillTools, ...builderTools, ...auditTools)
 setCoreNameCheck(() => tools.map((t) => t.name))
