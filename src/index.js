@@ -30,6 +30,8 @@ import { backupTick } from './backup.js'
 import { humanError } from './style.js'
 import { takeProactiveSlot } from './metrics.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
+import * as groups from './groups.js'
+import { groupAdders } from './group-tools.js'
 
 let reconciled = false
 import { exec } from 'node:child_process'
@@ -286,7 +288,7 @@ const wa = await startWhatsApp(async (m) => {
     if (activeTurn?.ac === ac) activeTurn = null
     finish()
   })
-}, pairWithSelf)
+}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m) })
 
 // Default pairing: the moment the QR is scanned, the assistant lives in the account's "message yourself" chat.
 // Skipped after /unpair, where the user picks a chat with the pairing code instead.
@@ -418,6 +420,10 @@ function notify(text, urgent = false, key) {
   return Promise.resolve()
 }
 startScheduler(notify, scheduledTask, monitoring)
+// WhatsApp groups (src/groups.js): once a minute it checks whether a round of reading is due (every
+// GROUPS_EVERY_MINUTES). Only a test, cancellation or change for today or tomorrow is sent now, through notify, so
+// quiet hours and the daily budget apply; the rest waits for the morning brief and "מה פספסתי?".
+setInterval(() => groups.tick({ notify, adders: groupAdders() }).catch((e) => console.log(`[groups] ${e.message}`)), 60000).unref()
 startVoice()
 setInterval(outbox.flush, 30000)
 
