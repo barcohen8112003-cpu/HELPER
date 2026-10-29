@@ -171,6 +171,13 @@ const build = () => ({
   // Self-teaching (lessons, tools it writes for itself, the night study). Off unless SELF_LEARNING=on: while it is off
   // none of its tools exist for the model, nothing is added to the prompt, and nothing runs at night.
   learning: ['on', '1', 'true', 'yes'].includes(env('SELF_LEARNING').toLowerCase()),
+  // Agent mode (src/planner.js): a goal of several stages gets a plan, steps and a check against "done" before the
+  // answer. AGENT_SHOW_PLAN=off keeps the plan to itself instead of sending it once in the chat.
+  // AGENT_MAX_STEPS: how many model steps a turn with a plan may take (one without a plan keeps the short limit).
+  agent: {
+    showPlan: !['off', '0', 'false', 'no'].includes(env('AGENT_SHOW_PLAN').toLowerCase()),
+    maxSteps: Number(env('AGENT_MAX_STEPS')) > 0 ? Math.max(6, Math.min(40, Number(env('AGENT_MAX_STEPS')))) : 0,
+  },
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
   // GEMINI_CLOUD: Gemini as one more Chromium on the cloud desktop (signed in there once). On by default when the
