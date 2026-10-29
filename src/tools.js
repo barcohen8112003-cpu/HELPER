@@ -32,6 +32,7 @@ import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
 import { tvTools } from './tv-tools.js'
+import { planTool } from './planner.js'
 
 // The Discord bot counts as linked once it has called the bridge within the last day.
 const discordLinked = () => Date.now() - (state.bridgeSeenAt || 0) < 24 * 3600000
@@ -655,6 +656,8 @@ tools.push(...memoryTools, ...skillTools, ...builderTools, ...auditTools)
 setCoreNameCheck(() => tools.map((t) => t.name))
 tools.push(...phoneTools)
 tools.push(...tvTools)
+// The agent's plan for a goal of several stages (src/planner.js). Always there, in every mode.
+tools.push(planTool)
 
 // The extended toolkit is not sent to the model on every request: that would cost thousands of tokens and make the
 // model choose worse. It sees one tool, tool_search, and unlocks the few tools it needs for the turn.
@@ -686,6 +689,7 @@ export const allTools = () => [...tools.filter(isOn), ...extendedTools.filter(is
 // and Hebrew costs two to three times the tokens of English, so on a small per-minute budget this is what makes
 // a second and third model call fit in the same minute.
 const BRIEF = {
+  update_plan: 'Plan for a goal of several stages: goal, steps with status (pending/doing/done/skipped/blocked), done_when. Call before acting and again as steps change, with the whole list. Not for a simple question.',
   remember: 'Save a lasting fact about the user.',
   forget: 'Delete a remembered fact by id.',
   add_reminder: 'Send the user a fixed text at a set time.',

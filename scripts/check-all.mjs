@@ -30,6 +30,7 @@ const TESTS = [
   'src/jobs-selftest.js',
   'src/study-selftest.js',
   'src/approval-selftest.js',
+  'src/agent-selftest.js',
   'src/logs-selftest.js',
   'src/claude-code-selftest.js',
   'src/gemini-spark-selftest.js',
