@@ -31,6 +31,8 @@ const TESTS = [
   'src/study-selftest.js',
   'src/approval-selftest.js',
   'src/agent-selftest.js',
+  'src/routing-selftest.js',
+  'src/flights-selftest.js',
   'src/proactive-selftest.js',
   'src/logs-selftest.js',
   'src/claude-code-selftest.js',

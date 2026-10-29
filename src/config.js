@@ -104,6 +104,16 @@ const build = () => ({
   },
   newsFeeds: env('NEWS_FEEDS', DEFAULT_FEEDS).split(',').map((s) => s.trim()).filter(Boolean),
   tavilyKey: env('TAVILY_API_KEY'),
+  // Real flight data (src/flights.js). Travelpayouts: cheapest dates across a month or two, free token from
+  // travelpayouts.com. Duffel: live offers with times, stops and layovers for exact dates, token from duffel.com.
+  flights: {
+    travelpayoutsToken: env('TRAVELPAYOUTS_TOKEN'),
+    duffelToken: env('DUFFEL_TOKEN'),
+    currency: env('FLIGHTS_CURRENCY', 'usd').toLowerCase(),
+    home: env('FLIGHTS_HOME', 'TLV').toUpperCase(),
+  },
+  // Each message gets only the tools and instructions of the areas it is about (src/domains.js). off = every tool, always.
+  routing: env('TOOL_ROUTING', 'on') !== 'off',
   // Speech can live on a different provider than the chat model; it defaults to the same one.
   voice: {
     baseUrl: (env('VOICE_BASE_URL') || env('LLM_BASE_URL', 'https://api.openai.com/v1')).replace(/\/+$/, ''),

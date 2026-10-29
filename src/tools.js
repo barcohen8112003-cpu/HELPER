@@ -32,6 +32,8 @@ import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
 import { tvTools } from './tv-tools.js'
+import { routed, searchDomains, DOMAINS, domainLabel } from './domains.js'
+import { flightTools } from './flights.js'
 import { planTool } from './planner.js'
 import { loopTool } from './proactive.js'
 
@@ -652,6 +654,8 @@ const isOn = (t) => !t.enabled || t.enabled()
 tools.push(...googleTools)
 // WhatsApp groups: "מה פספסתי?", calendar and tasks from them, what matters to him (src/groups.js).
 tools.push(...groupTools)
+// Real flight search: cheapest dates in a range, live offers, a picture of the results (src/flights.js).
+tools.push(...flightTools)
 tools.push(...pcTools)
 tools.push(...memoryTools, ...skillTools, ...builderTools, ...auditTools)
 setCoreNameCheck(() => tools.map((t) => t.name))
@@ -671,27 +675,37 @@ tools.push({
   },
   parameters: obj({ query: str('מה צריך לעשות, או שם תחום') }),
   run({ query }, ctx) {
+    // Helper's own areas first (the computer, the TV, travel...): a whole domain opens with its playbook.
+    const ids = searchDomains(query).filter((id) => tools.some((t) => isOn(t) && DOMAINS.find((d) => d.id === id).has(t.name)))
+    const opened = ids.length ? tools.filter((t) => isOn(t) && ids.some((id) => DOMAINS.find((d) => d.id === id).has(t.name))) : []
     const found = searchTools(query, extendedTools.filter(isOn))
-    if (!found.length) return 'לא נמצא כלי מתאים'
+    if (!found.length && !opened.length) return 'לא נמצא כלי מתאים'
     if (ctx) {
       ctx.unlocked ??= new Set()
-      for (const t of found) ctx.unlocked.add(t.name)
+      ctx.domains ??= new Set()
+      for (const t of [...opened, ...found]) ctx.unlocked.add(t.name)
+      for (const id of ids) ctx.domains.add(id)
     }
-    return `נפתחו ${found.length} כלים, אפשר להשתמש בהם עכשיו:\n${found.map((t) => `- ${t.name}: ${t.description}`).join('\n')}`
+    const lines = [...opened, ...found].map((t) => `- ${t.name}: ${String(t.description).slice(0, 200)}`)
+    return `${ids.length ? `נפתח: ${ids.map(domainLabel).join(', ')}. ` : ''}נפתחו ${lines.length} כלים, אפשר להשתמש בהם עכשיו:\n${lines.join('\n')}`
   },
 })
 
-// `unlocked` is the set of extended tool names opened by tool_search in the current turn.
-export const activeTools = (unlocked) => [
-  ...tools.filter(isOn),
+// `unlocked` is the set of tool names opened by tool_search in the current turn. `domains`, when given, is what
+// this message is about (src/domains.js): core tools outside those domains are left out. Without it, every core tool.
+export const activeTools = (unlocked, domains) => [
+  ...tools.filter((t) => isOn(t) && routed(t.name, domains, unlocked)),
   ...(unlocked ? extendedTools.filter((t) => unlocked.has(t.name) && isOn(t)) : []),
 ]
 export const allTools = () => [...tools.filter(isOn), ...extendedTools.filter(isOn)]
+// Is a domain's tool switched on here (the PC bridge set, the TV paired...)? For the menu of domains not loaded.
+export const domainIsOn = (domain) => tools.some((t) => isOn(t) && domain.has(t.name))
 
 // Light mode: the same tools described in a few English words. Every request carries all the tool definitions,
 // and Hebrew costs two to three times the tokens of English, so on a small per-minute budget this is what makes
 // a second and third model call fit in the same minute.
 const BRIEF = {
+  find_flights: 'Real flight prices: cheapest dates in a range (a month or two), live offers with times, stops and layover length, or the cheapest destinations when "to" is empty. Sends him a picture of the options. Missing destination or trip length: ask ONE question first. After: one line, which option and why.',
   whatsapp_groups: 'WhatsApp groups he is in. read = the actual text written in a group; use for questions about what someone wrote, e.g. was there a quiz/test in X. Pass group, hours (default 48) and query. Do not say you cannot read group messages. missed = important items only. status = every group name. on/off only when he asks.',
   open_loop: 'Notebook of what he left open. add (no need to ask) when he will deal with it later, waits for someone, or a task stays half done, with follow_up_when; close once settled; list.',
   update_plan: 'Plan for a goal of several stages: goal, steps with status (pending/doing/done/skipped/blocked), done_when. Call before acting and again as steps change, with the whole list. Not for a simple question.',

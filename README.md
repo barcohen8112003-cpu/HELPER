@@ -559,6 +559,9 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `APP_PUBLIC_URL` | כתובת מלאה לאפליקציה, למשל `http://37.60.240.231:3210`. ריק: `http://UI_PUBLIC_HOST`, ואם גם הוא ריק אז כתובת הרשת המקומית |
 | `MAIL_HOST` / `MAIL_USER` / `MAIL_PASS` / `MAIL_POLL_MINUTES` | IMAP |
 | `TAVILY_API_KEY` | חיפוש טוב יותר מ-DuckDuckGo (לא חובה) |
+| `TRAVELPAYOUTS_TOKEN` | טיסות: התאריכים והיעדים הזולים בטווח (חינם, travelpayouts.com) |
+| `DUFFEL_TOKEN` | טיסות: הצעות חיות עם שעות, עצירות וקונקשן (duffel.com) |
+| `TOOL_ROUTING` | `off` = כל הכלים בכל הודעה (ברירת מחדל: רק התחומים שההודעה עוסקת בהם) |
 | `GITHUB_TOKEN` | קריאה בלבד מ-GitHub |
 | `COMPUTER_MODE` | `off` / `ask` / `auto` |
 | `PC_BRIDGE_SECRET` / `PC_BRIDGE_PORT` | סוד ופורט של גשר המחשב הביתי, כשהעוזר בענן |
