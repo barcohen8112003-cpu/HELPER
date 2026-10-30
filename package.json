@@ -17,6 +17,7 @@
     "check:all": "node scripts/check-all.mjs",
     "check:backup": "node src/backup-selftest.js",
     "check:style": "node src/style-selftest.js",
+    "check:answers": "node src/answers-selftest.js",
     "check:toolkit": "node src/toolkit/_selftest.js",
     "check:memory": "node src/memory-selftest.js",
     "check:learning": "node src/learning-selftest.js",

@@ -14,6 +14,8 @@ const { runTurn, runBackground, resetHistory } = await import('./agent.js')
 const { tools } = await import('./tools.js')
 const { config } = await import('./config.js')
 const { state } = await import('./store.js')
+// The card is off by default (one message per answer); these checks cover it with AGENT_SHOW_PLAN=on.
+config.agent.showPlan = true
 
 let passed = 0
 let failed = 0

@@ -19,6 +19,7 @@ const defaults = {
   discordOutbox: [], // { text, speak, at }: messages waiting for the Discord bot to collect and deliver
   bridgeSeenAt: 0, // when the Discord bot last called the bridge
   sentKeys: [], // event keys already announced, so nothing is announced twice
+  inbox: [], // { id, text, at, answered, how, alerted }: his last chat messages and whether each got an answer (src/inbox.js)
   lessons: { fetchedAt: 0, week: [] }, // the Webtop timetable: [{ day, lesson, subject, teacher, room, cancelled }]
   webtopLoginOpen: false, // a re-login notice was already sent for the current signed-out stretch
   webtopLoginNotifiedAt: 0, // last WhatsApp notice, so a flapping session cannot send another inside the gap
