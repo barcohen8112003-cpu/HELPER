@@ -411,7 +411,7 @@ async function checkIn(notify, runTask) {
   s.count++
   markReachedOut()
   save()
-  await notify(reply)
+  await notify(reply, false, undefined, 'checkin')
 }
 
 // Coming back to something he left open (src/proactive.js), once its time has come. One per round, a few a day.
