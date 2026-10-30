@@ -7,7 +7,14 @@
 #   docker compose logs -f
 services:
   helper:
-    build: .
+    build:
+      context: .
+      args:
+        # Optional. The notes stage prefers `git rev-parse` from the build context.
+        # Set this only when the context has no .git: GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build
+        GIT_SHA: ${GIT_SHA:-}
+        # true installs Scrapling for fetch_page in the image (py/README.md). Off: the image is as before.
+        INSTALL_SCRAPLING: ${INSTALL_SCRAPLING:-false}
     container_name: helper
     restart: unless-stopped
     env_file: .env

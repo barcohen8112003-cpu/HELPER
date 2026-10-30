@@ -44,8 +44,9 @@ export function parseFacts(reply) {
 }
 
 // `askFn(system, user) => string` is injectable so tests never call a model. Returns the candidates it queued.
+// Light mode still proposes facts. They stay pending until the owner approves, and `ask` uses the cheap model.
 export async function learnFrom(userText, { askFn, now = Date.now(), force = false } = {}) {
-  if (!force && (config.llm?.light || config.memoryLearn === false)) return []
+  if (!force && config.memoryLearn === false) return []
   if (!worthLearningFrom(userText)) return []
   if (!force && now - lastRun < MIN_GAP_MS) return []
   lastRun = now

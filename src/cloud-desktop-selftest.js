@@ -58,6 +58,27 @@ config.webtop.proxy = ''
 ok(browser.browserLaunchArgs('webtop').includes('--headless=new'), 'turning the desktop off returns Webtop to headless')
 
 ok(desktop.xvfbArgs().includes(':99') && desktop.xvfbArgs().includes('1280x800x24') && desktop.xvfbArgs().includes('-nolisten'), 'Xvfb is :99 at 1280x800 and does not listen on TCP')
+ok(desktop.pidFromXLock('      4242\n') === 4242 && desktop.pidFromXLock('12\n') === 12 && desktop.pidFromXLock('nope') === 0, 'an X lock file holds a space-padded PID')
+ok(desktop.isXvfbCmdline(Buffer.from('/usr/bin/Xvfb\0:99\0-screen\0')) && !desktop.isXvfbCmdline(Buffer.from('fluxbox\0')), 'only an Xvfb command line owns the display')
+const xroot = path.join(tmp, 'x')
+const lock99 = path.join(xroot, '.X99-lock')
+const sock99 = path.join(xroot, '.X11-unix', 'X99')
+const plant = (pid) => {
+  fs.mkdirSync(path.dirname(sock99), { recursive: true })
+  if (pid) fs.writeFileSync(lock99, String(pid).padStart(10) + '\n')
+  fs.writeFileSync(sock99, '')
+}
+plant(4242)
+ok(desktop.staleDisplayLock(':99', { root: xroot, ownsDisplay: () => true }) === false && fs.existsSync(lock99) && fs.existsSync(sock99), 'a live Xvfb keeps the display, the lock and the socket')
+ok(desktop.staleDisplayLock(':99', { root: xroot, ownsDisplay: (pid) => pid === 1 }) === true && !fs.existsSync(lock99) && !fs.existsSync(sock99), 'a live process that is not Xvfb loses the lock and the socket')
+plant(1111)
+ok(desktop.staleDisplayLock(':99', { root: xroot, ownsDisplay: () => false }) === true && !fs.existsSync(lock99) && !fs.existsSync(sock99), 'a dead PID is a stale display lock')
+fs.mkdirSync(path.dirname(sock99), { recursive: true })
+fs.writeFileSync(sock99, '')
+ok(desktop.staleDisplayLock(':99', { root: xroot, ownsDisplay: () => true }) === true && !fs.existsSync(sock99), 'a socket with no lock is not a live Xvfb')
+ok(desktop.staleDisplayLock(':99', { root: xroot }) === true, 'a clean display needs Xvfb')
+const desktopSrc = fs.readFileSync(new URL('./cloud-desktop.js', import.meta.url), 'utf8')
+ok(desktopSrc.includes('staleDisplayLock(display)') && !/if\s*\(\s*!fs\.existsSync\(sock\)\s*\)/.test(desktopSrc), 'Xvfb starts unless a live Xvfb owns the display')
 const vnc = desktop.x11vncArgs()
 ok(vnc.includes('-localhost') && vnc.includes('-nopw') && !vnc.some((a) => String(a).includes('0.0.0.0')), 'x11vnc is localhost only and has no password unless one is set')
 config.desktop.vncPassword = 'secret'

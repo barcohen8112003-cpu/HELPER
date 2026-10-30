@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Personal WhatsApp assistant: memory, reminders, watchers, mail, calendar, computer control",
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "helper": "scripts/helper.mjs"
   },
@@ -15,8 +18,11 @@
     "google": "node src/google-connect.js",
     "check": "node src/selftest.js",
     "check:all": "node scripts/check-all.mjs",
+    "accept:real": "node scripts/accept-real.mjs",
+    "check:accept": "node scripts/accept-selftest.mjs",
     "check:backup": "node src/backup-selftest.js",
     "check:style": "node src/style-selftest.js",
+    "check:answers": "node src/answers-selftest.js",
     "check:toolkit": "node src/toolkit/_selftest.js",
     "check:memory": "node src/memory-selftest.js",
     "check:learning": "node src/learning-selftest.js",
@@ -32,14 +38,22 @@
     "check:phone-app": "node src/phone-app-selftest.js",
     "check:study": "node src/study-selftest.js",
     "check:approval": "node src/approval-selftest.js",
+    "check:agent": "node src/agent-selftest.js",
+    "check:routing": "node src/routing-selftest.js",
+    "check:flights": "node src/flights-selftest.js",
+    "check:proactive": "node src/proactive-selftest.js",
     "check:logs": "node src/logs-selftest.js",
     "check:claude-code": "node src/claude-code-selftest.js",
     "check:tv": "node src/tv-app-selftest.js",
     "check:spark": "node src/gemini-spark-selftest.js",
     "check:tv-agent": "node src/tv-agent-selftest.js",
     "check:docs": "node src/google-docs-selftest.js",
-    "check:bird": "node src/bird-selftest.js",
-    "check:webtop-file": "node src/webtop-file-selftest.js"
+    "check:webtop-file": "node src/webtop-file-selftest.js",
+    "check:groups": "node src/groups-selftest.js",
+    "check:release": "node src/release-notes-selftest.js",
+    "check:scrapling": "node src/scrapling-selftest.js",
+    "check:scrapling-py": "node scripts/scrapling-py-test.mjs",
+    "check:bird": "node src/bird-selftest.js"
   },
   "dependencies": {
     "@messagebird/sdk": "^0.107.0",

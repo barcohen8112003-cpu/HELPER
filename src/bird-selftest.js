@@ -1,15 +1,29 @@
 // Offline checks for the Bird WhatsApp channel: number format, template values, the exact request sent to Bird,
 // errors in Hebrew, and that the tool asks before sending. No network: Bird's client gets a stand-in fetch.
+// The personal WhatsApp transport stays on Baileys, and a key alone does not turn Bird on.
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 process.env.HELPER_ENV_FILE = '/nonexistent/.env'
 process.env.BIRD_API_KEY = 'bk_eu1_selftest'
 process.env.BIRD_WHATSAPP_FROM = '0731234567'
 process.env.BIRD_OWNER_NUMBER = '0512909911'
 process.env.BIRD_WEBHOOK_SECRET = 'whsec_' + Buffer.from('selftest-secret-selftest-secret').toString('base64')
-const { toE164, templateParams, sendWhatsAppTemplate, sendWhatsAppText, handleBirdWebhook } = await import('./bird.js')
+delete process.env.BIRD_ENABLED
+const { toE164, templateParams, sendWhatsAppTemplate, sendWhatsAppText, handleBirdWebhook, birdEnabled, birdOptedIn } = await import('./bird.js')
 const { Webhook } = await import('standardwebhooks')
 const { tools } = await import('./tools.js')
 let passed = 0
+
+const waSrc = fs.readFileSync(new URL('./whatsapp.js', import.meta.url), 'utf8')
+assert.match(waSrc, /@whiskeysockets\/baileys/); passed++
+assert.doesNotMatch(waSrc, /bird\.js|BirdClient|BIRD_/); passed++
+assert.equal(birdOptedIn(), false); passed++
+assert.equal(birdEnabled(), false); passed++
+const toolOff = tools.find((t) => t.name === 'bird_whatsapp')
+assert.equal(toolOff.enabled(), false); passed++
+assert.equal((await handleBirdWebhook('{}', {}, { wait: true })).status, 404); passed++
+process.env.BIRD_ENABLED = 'true'
+assert.equal(birdEnabled(), true); passed++
 
 assert.equal(toE164('050-123 4567'), '+972501234567'); passed++
 assert.equal(toE164('972501234567'), '+972501234567'); passed++

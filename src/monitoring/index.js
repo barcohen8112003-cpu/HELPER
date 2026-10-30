@@ -32,7 +32,7 @@ from ו-keywords הם רשימות "אחד מאלה מספיק". השאר רשי
 export function createMonitoring(deps) {
   const now = deps.now || (() => new Date())
   const model = deps.model || callModel
-  const delivery = createDelivery({ send: deps.send, now, getDay: deps.getDay })
+  const delivery = createDelivery({ send: deps.send, now, getDay: deps.getDay, news: deps.news })
   registry.seedDefaults(now())
 
   const log = (line) => console.log(`[watch] ${line}`)

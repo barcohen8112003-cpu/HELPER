@@ -1,15 +1,19 @@
-// WhatsApp through Bird (bird.com, formerly MessageBird): sends from a WhatsApp Business number over Bird's
-// official API, next to the personal WhatsApp link (Baileys). The key lives in .env as BIRD_API_KEY (settings
-// site, "Bird" card), never in code or in a chat. Every send waits for the user's approval (tool bird_whatsapp).
+// WhatsApp through Bird (bird.com, formerly MessageBird): an extra send path from a business number.
+// The personal WhatsApp link stays on Baileys (src/whatsapp.js) and is never switched over.
+// Off unless BIRD_ENABLED=true. A key alone (BIRD_API_KEY) does nothing, so a server that already
+// has the key in .env keeps behaving exactly as before. The key is never logged or sent to the page.
 import { BirdClient, BirdAPIError } from '@messagebird/sdk'
 import { config } from './config.js'
 
-export const birdEnabled = () => Boolean(config.bird.key)
+// Read live: the settings page writes BIRD_ENABLED into the environment without a restart.
+export const birdOptedIn = () => String(process.env.BIRD_ENABLED || '').trim() === 'true'
+export const birdEnabled = () => birdOptedIn() && Boolean(config.bird.key)
 
 // One client per key, so a key changed on the settings site is picked up without a restart.
 let cached = null
 function client(fetchFn) {
-  if (!birdEnabled()) throw new Error('Bird לא מחובר. צריך להדביק מפתח באתר ההגדרות, בכרטיס Bird (או BIRD_API_KEY ב-.env)')
+  if (!birdOptedIn()) throw new Error('Bird כבוי. כדי להפעיל צריך BIRD_ENABLED=true באתר ההגדרות (ברירת המחדל כבויה). הוואטסאפ האישי לא משתנה')
+  if (!config.bird.key) throw new Error('Bird לא מחובר. צריך להדביק מפתח באתר ההגדרות, בכרטיס Bird (או BIRD_API_KEY ב-.env)')
   if (fetchFn) return new BirdClient({ apiKey: config.bird.key, fetch: fetchFn, maxRetries: 0 })
   if (cached?.key !== config.bird.key) cached = { key: config.bird.key, bird: new BirdClient({ apiKey: config.bird.key }) }
   return cached.bird
@@ -92,7 +96,7 @@ const alreadySeen = (id) => {
   return false
 }
 
-export const birdChatEnabled = () => Boolean(config.bird.key && config.bird.webhookSecret && config.bird.owner)
+export const birdChatEnabled = () => birdEnabled() && Boolean(config.bird.webhookSecret && config.bird.owner)
 
 function chunks(text, size = 3800) {
   const out = []

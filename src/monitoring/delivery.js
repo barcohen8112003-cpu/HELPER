@@ -37,6 +37,7 @@ export function todayText(day, today) {
   const todo = [...(day.tasks || []).map((t) => `- ${t.title}${t.overdue ? ' (באיחור)' : ''}`), ...(day.reminders || []).map((r) => `- ${r.time} ${r.text}`)]
   if (todo.length) lines.push('', 'משימות להיום:', ...todo)
   if (day.lessons) lines.push('', 'שיעורים:', day.lessons)
+  if (day.groups?.length) lines.push('', 'מהקבוצות:', ...day.groups.map((g) => `- ${g}`))
   if (!lines.length) return config.briefAlways ? 'בוקר טוב. אין היום יומן, משימות או שיעורים.' : ''
   return [`בוקר טוב. היום ${today.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' })}:`, ...lines].join('\n')
 }
@@ -50,7 +51,8 @@ export function nightText(s) {
   return lines.length ? ['נצבר בלילה:', ...lines].join('\n') : ''
 }
 
-// deps: { send(text) => Promise<messageId>, now() => Date, getDay() => Promise<{ reminders, events, homework }> }
+// deps: { send(text) => Promise<messageId>, now() => Date, getDay() => Promise<{ reminders, events, homework }>,
+//   news?() => Promise<string> (the morning news lines, '' for none) }
 export function createDelivery(deps) {
   const now = () => deps.now()
 
@@ -150,6 +152,7 @@ export function createDelivery(deps) {
     const agenda = [...day.events.map((e) => `- ${e.when} ${e.title}`), ...day.reminders.map((r) => `- ${r.time} ${r.text}`)]
     if (agenda.length) lines.push(`היום (${today.toLocaleDateString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric' })}):`, ...agenda)
     if (day.homework?.length) lines.push('', 'מטלות שאין לי אישור שהוגשו:', ...day.homework.map((h) => `- ${h.title} (${h.course}) - ${h.due}`))
+    if (day.groups?.length) lines.push('', 'מהקבוצות:', ...day.groups.map((g) => `- ${g}`))
 
     // What was already delivered as an interrupt is not repeated here.
     const held = s.watches.flatMap((w) => w.pending_batch).filter((item) => !s.delivered.includes(item.event_id))
@@ -183,8 +186,11 @@ export function createDelivery(deps) {
     const t = now()
     const today = t.toDateString()
     if (s.brief.lastDate === today || t.getHours() * 60 + t.getMinutes() < at) return false
-    const text = await buildBrief()
+    const day = await buildBrief()
     s.brief.lastDate = today
+    // The morning news, when it is set for about the same time, rides in the same message (deps.news, src/scheduler.js).
+    const news = deps.news ? await Promise.resolve(deps.news()).catch((e) => (console.log(`[news] ${e.message}`), '')) : ''
+    const text = news ? `${day || 'בוקר טוב.'}\n\n📰 *מה קרה מאז אתמול בערב*\n${news}` : day
     if (text) await sendNow(text, { event_id: `brief:${today}` })
     // In the only-today mode the night's alerts are not part of that message; they leave on their own, if there are any.
     const night = config.briefOnlyToday ? nightText(s) : ''
