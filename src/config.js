@@ -156,6 +156,19 @@ const build = () => ({
     // Optional proxy for that Chromium only (http:// or socks5://). A server outside Israel is blocked by Webtop's CloudFront.
     proxy: env('WEBTOP_PROXY'),
   },
+  // fetch_page through Scrapling (Python, py/scrapling_worker.py): public HTTPS pages only, with DNS and redirect
+  // checks. Off unless SCRAPLING_ENABLED=true. SCRAPLING_PYTHON is the interpreter inside its own venv.
+  scrapling: {
+    enabled: env('SCRAPLING_ENABLED') === 'true',
+    python: env('SCRAPLING_PYTHON', path.join(ROOT, '.venv-scrapling', process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python')),
+    timeoutMs: Math.min(60000, Math.max(5000, Number(env('SCRAPLING_TIMEOUT_MS', '30000')) || 30000)),
+    maxBytes: Math.min(10 * 1024 * 1024, Math.max(64 * 1024, Number(env('SCRAPLING_MAX_BYTES', String(2 * 1024 * 1024))) || 2 * 1024 * 1024)),
+    maxChars: Math.min(100000, Math.max(1000, Number(env('SCRAPLING_MAX_CHARS', '30000')) || 30000)),
+    concurrency: Math.min(4, Math.max(1, Number(env('SCRAPLING_CONCURRENCY', '2')) || 2)),
+    // A controlled egress proxy (http://host:port). Only then may a name that has no local DNS answer be read,
+    // because the proxy resolves it. Leave empty on a normal server.
+    proxy: env('SCRAPLING_EGRESS_PROXY'),
+  },
   // A second Chromium in the container, signed in to the personal Google account, for Google Home tiles.
   // Separate from Webtop so a school login and a home login do not share a profile.
   googleHome: {

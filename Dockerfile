@@ -40,6 +40,19 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
+# Optional: Scrapling for fetch_page (py/README.md). Off by default, so a normal build and the auto-update on the
+# server do not change. Build with --build-arg INSTALL_SCRAPLING=true, then set SCRAPLING_ENABLED=true in .env.
+# Debian's python3 in its own venv; no browsers (scrapling install is not run).
+COPY py ./py
+ARG INSTALL_SCRAPLING=false
+RUN if [ "$INSTALL_SCRAPLING" = "true" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
+   && rm -rf /var/lib/apt/lists/* \
+   && python3 -m venv /opt/scrapling-venv \
+   && /opt/scrapling-venv/bin/pip install --no-cache-dir -r py/requirements-scrapling.txt \
+   && /opt/scrapling-venv/bin/python -I -c 'from scrapling.fetchers import Fetcher; print("fetcher import OK")' ; \
+    fi
+ENV SCRAPLING_PYTHON=/opt/scrapling-venv/bin/python
 COPY persona.md persona.short.md persona.voice.md ./
 COPY --from=notes /out/build-info.json ./build-info.json
 ARG GIT_SHA=

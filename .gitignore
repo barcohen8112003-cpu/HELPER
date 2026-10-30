@@ -24,3 +24,8 @@ tv/theme-now/*.mp4
 desktop/vendor/
 desktop/node_modules/
 desktop/out/
+
+# Scrapling (fetch_page backend): the Python venv and caches stay local. Recreate with py/README.md.
+.venv-scrapling/
+py/__pycache__/
+__pycache__/

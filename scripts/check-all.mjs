@@ -38,6 +38,7 @@ const TESTS = [
   'src/tv-agent-selftest.js',
   'src/google-docs-selftest.js',
   'src/webtop-file-selftest.js',
+  'src/scrapling-selftest.js',
   'src/groups-selftest.js',
   'src/release-notes-selftest.js',
   'scripts/setup-selftest.mjs',

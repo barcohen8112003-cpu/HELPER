@@ -36,6 +36,7 @@ import * as groups from './groups.js'
 import { groupAdders } from './group-tools.js'
 
 let reconciled = false
+import { scraplingEnabled, scraplingStatus } from './scrapling.js'
 import { exec } from 'node:child_process'
 
 if (!config.llm.apiKey || !config.llm.model) {
@@ -45,6 +46,10 @@ if (!config.llm.apiKey || !config.llm.model) {
 }
 // Open the bridge port before WhatsApp connects, so a platform health check is not waiting on the login.
 startPcBridgeServer()
+// fetch_page through Scrapling: say once at start whether it can run, so a missing venv shows in the log.
+if (scraplingEnabled()) {
+  scraplingStatus().then((s) => console.log(s.ok ? `[scrapling] זמין: Scrapling ${s.scrapling}, Python ${s.python}` : `[scrapling] לא זמין (${s.kind}): ${s.error}. fetch_page משתמש בקורא הרגיל רק כשהוא לא מותקן`))
+}
 function startCloudBrowsers() {
   if (cloudWebtopOn()) ensureCloudWebtop().catch((e) => console.log(`[webtop] ${e.message}`))
   if (cloudGoogleHomeOn()) ensureCloudBrowser('google-home').catch((e) => console.log(`[google-home] ${e.message}`))

@@ -558,6 +558,7 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `UI_PUBLIC_HOST` | כתובת אתר ההגדרות מחוץ לשרת, למשל `37.60.240.231:3210`. ריק: רק המחשב עצמו. גם הכתובת בקוד ה-QR של האפליקציה, כשאין `APP_PUBLIC_URL` |
 | `APP_PUBLIC_URL` | כתובת מלאה לאפליקציה, למשל `http://37.60.240.231:3210`. ריק: `http://UI_PUBLIC_HOST`, ואם גם הוא ריק אז כתובת הרשת המקומית |
 | `MAIL_HOST` / `MAIL_USER` / `MAIL_PASS` / `MAIL_POLL_MINUTES` | IMAP |
+| `SCRAPLING_ENABLED` | `true`: `fetch_page` קורא דפים ציבוריים ב-https דרך Scrapling. כבוי כברירת מחדל. התקנה וכיבוי: `py/README.md` |
 | `TAVILY_API_KEY` | חיפוש טוב יותר מ-DuckDuckGo (לא חובה) |
 | `GITHUB_TOKEN` | קריאה בלבד מ-GitHub |
 | `COMPUTER_MODE` | `off` / `ask` / `auto` |
@@ -592,6 +593,8 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `node src/morning-selftest.js` | הודעת הבוקר. `--live` בונה את ההודעה של היום מעותק של הנתונים שלך |
 | `node src/dashboard/_selftest.js` | הדשבורד, כולל ניסיונות הזרקת קוד |
 | `npm run check:pc-bridge` | גשר המחשב הביתי: חתימה, שידור חוזר, מחשב מנותק, וסירוב אישור |
+| `npm run check:scrapling` | fetch_page עם Scrapling: Node -> Python -> JSON, timeout, עצירה, מקביליות, חסימת כתובות פרטיות ומסלול הבוט מול מודל מזויף |
+| `npm run check:scrapling-py` | ה-worker של Scrapling עצמו (צריך `.venv-scrapling`, ראה `py/README.md`): DNS, הפניות, robots.txt, 401/403, מגבלת גודל |
 
 ### רשימת בדיקות להרצה ראשונה
 יכולת שלא נבדקה לא נחשבת עובדת. לפי הסדר:
