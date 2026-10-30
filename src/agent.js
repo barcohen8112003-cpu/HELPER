@@ -23,6 +23,7 @@ import { memoryBlock } from './memory.js'
 import { learningBlock } from './learning-tools.js'
 import { record as recordAudit } from './audit.js'
 import { learnFrom } from './memory-learn.js'
+import { tryOrchestrateAgentTeam } from './agent-team/orchestrator.js'
 
 const MAX_HISTORY = 60
 // In light mode the whole request has to fit a few thousand tokens, so history is folded much sooner.
@@ -183,7 +184,7 @@ function shortenOldResults(messages) {
 // Tools on the CONFIRM_ALWAYS list ask unless the user chose COMPUTER_MODE=auto for the computer tools. Tools marked
 // risk: 'write' (memory_confirm, and anything in the toolkit that changes something outside Helper) always ask:
 // "auto" is a choice about the computer, not about letting a web page or mail decide what Helper remembers or sends.
-const needsApproval = (tool) => tool.risk === 'write' || (config.computerMode !== 'auto' && config.confirmAlways.includes(tool.name))
+export const needsApproval = (tool) => tool.risk === 'write' || (config.computerMode !== 'auto' && config.confirmAlways.includes(tool.name))
 
 // What the user is shown. Anything that looks like a secret is hidden, so a PIN never appears in the chat or the log.
 // A tool can describe its own request when the plain argument list would not say what is being approved.
@@ -222,7 +223,7 @@ const lastUserText = (messages) => {
 }
 
 // Runs one requested call and returns the tool message for it.
-async function runCall(call, tools, ctx) {
+export async function runCall(call, tools, ctx) {
   const tool = tools.find((t) => t.name === call.function.name)
   let result
   const started = Date.now()
@@ -342,7 +343,15 @@ export async function runTurn(userText, ctx, image) {
   const userMsg = { role: 'user', content: image ? [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: image } }] : userText }
   state.history.push(userMsg)
   try {
-    const reply = await converse(state.history, ctx)
+    let reply
+    if (config.agentTeam?.enabled) {
+      reply = await tryOrchestrateAgentTeam(userText, { ...ctx, history: state.history.slice(0, -1), summary: state.summary })
+    }
+    if (!reply) {
+      reply = await converse(state.history, ctx)
+    } else {
+      state.history.push({ role: 'assistant', content: reply })
+    }
     if (image) userMsg.content = `${userText} [צורפה תמונה]`
     for (const m of state.history) {
       if (m.role === 'tool' && Array.isArray(m.content)) m.content = m.content.find((p) => p.type === 'text')?.text || 'צילום מסך'

@@ -230,6 +230,21 @@ const build = () => ({
     port: Number(env('PC_BRIDGE_PORT', '0')) || 0,
     url: env('PC_BRIDGE_URL'),
   },
+  // Subagent runtime orchestration team (src/agent-team). Disabled by default.
+  agentTeam: {
+    enabled: ['on', '1', 'true', 'yes'].includes(env('AGENT_TEAM_ENABLED', 'false').toLowerCase()),
+    maxWorkers: Math.min(2, Math.max(1, Number(env('AGENT_TEAM_MAX_WORKERS', '2')) || 2)),
+    maxSubtasks: Math.min(2, Math.max(1, Number(env('AGENT_TEAM_MAX_SUBTASKS', '2')) || 2)),
+    maxCalls: Math.min(4, Math.max(1, Number(env('AGENT_TEAM_MAX_CALLS', '4')) || 4)),
+    provider: env('AGENT_TEAM_PROVIDER', 'openrouter'),
+    model: env('AGENT_TEAM_MODEL', 'google/gemini-2.5-flash'),
+    maxOutputTokensPerCall: Number(env('AGENT_TEAM_MAX_OUTPUT_PER_CALL', '1000')) || 1000,
+    maxAttemptsPerCall: Number(env('AGENT_TEAM_MAX_ATTEMPTS', '1')) || 1,
+    maxCostPerRequestUsd: Number(env('AGENT_TEAM_MAX_COST_PER_REQ', '0.03')) || 0.03,
+    timeoutMs: Number(env('AGENT_TEAM_TIMEOUT_MS', '90000')) || 90000,
+    maxInputTokens: Number(env('AGENT_TEAM_MAX_INPUT_TOKENS', '12000')) || 12000,
+    maxOutputTokens: Number(env('AGENT_TEAM_MAX_OUTPUT_TOKENS', '4000')) || 4000,
+  },
 })
 
 export const config = build()

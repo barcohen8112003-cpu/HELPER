@@ -262,7 +262,7 @@ const wa = await startWhatsApp(async (m) => {
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
       // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      const reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
+      const reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background, messageId: m.key?.id || m.id }, input.image)
       // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
       // The text follows only when it has links, or when speech failed.
       const wantsVoice = input.voice || state.voiceMode === 'always'

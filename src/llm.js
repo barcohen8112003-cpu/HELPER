@@ -48,9 +48,9 @@ function lineup(preferred) {
 // Which endpoint and key a model is reached through.
 const providerOf = (model) => (config.llm.backup.apiKey && model === config.llm.backup.model ? config.llm.backup : config.llm)
 
-async function request(body, signal) {
+async function request(body, signal, fetchFn = fetch) {
   const provider = providerOf(body.model)
-  const res = await fetch(provider.baseUrl + '/chat/completions', {
+  const res = await fetchFn(provider.baseUrl + '/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
     body: JSON.stringify(body),
@@ -62,7 +62,7 @@ async function request(body, signal) {
     // Rate limits and server errors pass; a bad key or bad request will not get better.
     error.retry = res.status === 429 || res.status >= 500
     // The provider says how long until this model's budget frees up: seconds for the per-minute one, hours for a daily cap.
-    const wait = Number(res.headers.get('retry-after')) * 1000
+    const wait = Number(res.headers?.get?.('retry-after')) * 1000
     if (wait > 0) error.wait = wait + 500
     if (res.status === 413) error.message = 'הבקשה גדולה מהמכסה לדקה של המודל הזה. נסה /new כדי לקצר את השיחה, או הודעה קצרה יותר.'
     throw error
@@ -71,6 +71,77 @@ async function request(body, signal) {
   recordUsage(body.model, data.usage)
   const msg = data.choices?.[0]?.message
   if (!msg) throw new Error('תשובה ריקה מהמודל')
+  msg.usage = data.usage
+  health.okAt = Date.now()
+  return msg
+}
+
+export const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
+
+// Calls an explicit model via OpenRouter with strictly 1 attempt, no lineup, and no fallback.
+// Enforces OpenRouter endpoint URL verification and rejects non-OpenRouter addresses before dispatch.
+// Uses OpenRouter authorization (LLM_API_KEY or OPENROUTER_API_KEY).
+export async function callExplicitModel({
+  model = 'google/gemini-2.5-flash',
+  messages,
+  tools,
+  maxOutputTokens = 1000,
+  signal,
+  fetchFn = fetch,
+  endpointUrl = OPENROUTER_ENDPOINT,
+  apiKey = process.env.OPENROUTER_API_KEY || config.llm?.apiKey || process.env.LLM_API_KEY,
+}) {
+  const normalizedModel = model.startsWith('google/') ? model : `google/${model}`
+
+  // 1. Strict model check
+  if (normalizedModel !== 'google/gemini-2.5-flash') {
+    throw new Error(`מודל לא מורשה למסלול הניסוי: ${model}. המודל המורשה ב-OpenRouter הוא google/gemini-2.5-flash בלבד.`)
+  }
+
+  // 2. Strict endpoint URL check: rejects any other provider URL before sending
+  if (endpointUrl !== OPENROUTER_ENDPOINT) {
+    throw new Error(`כתובת ספק לא מורשית למסלול OpenRouter: ${endpointUrl}. הכתובת המורשית היא ${OPENROUTER_ENDPOINT} בלבד.`)
+  }
+
+  // 3. Strict authorization check: requires API key without making any network call
+  if (!apiKey) {
+    throw new Error('OpenRouter לא מחובר. חסר מפתח LLM_API_KEY / OPENROUTER_API_KEY (יש להגדיר ב-.env)')
+  }
+
+  const body = {
+    model: normalizedModel,
+    messages,
+    max_completion_tokens: maxOutputTokens,
+  }
+  if (tools?.length) {
+    body.tools = tools
+    body.tool_choice = 'auto'
+  }
+
+  const res = await fetchFn(endpointUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+      'HTTP-Referer': 'https://helper.local',
+      'X-Title': 'Helper Agent Team',
+    },
+    body: JSON.stringify(body),
+    signal: signal ? AbortSignal.any([AbortSignal.timeout(120000), signal]) : AbortSignal.timeout(120000),
+  })
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => '')
+    const error = new Error(`LLM HTTP ${res.status}: ${errorText.slice(0, 300)}`)
+    error.status = res.status
+    throw error
+  }
+
+  const data = await res.json()
+  recordUsage(normalizedModel, data.usage)
+  const msg = data.choices?.[0]?.message
+  if (!msg) throw new Error('תשובה ריקה מהמודל')
+  msg.usage = data.usage
   health.okAt = Date.now()
   return msg
 }
