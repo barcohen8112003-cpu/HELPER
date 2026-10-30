@@ -560,6 +560,9 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `MAIL_HOST` / `MAIL_USER` / `MAIL_PASS` / `MAIL_POLL_MINUTES` | IMAP |
 | `SCRAPLING_ENABLED` | `true`: `fetch_page` קורא דפים ציבוריים ב-https דרך Scrapling. כבוי כברירת מחדל. התקנה וכיבוי: `py/README.md` |
 | `TAVILY_API_KEY` | חיפוש טוב יותר מ-DuckDuckGo (לא חובה) |
+| `TRAVELPAYOUTS_TOKEN` | טיסות: התאריכים והיעדים הזולים בטווח (חינם, travelpayouts.com) |
+| `DUFFEL_TOKEN` | טיסות: הצעות חיות עם שעות, עצירות וקונקשן (duffel.com) |
+| `TOOL_ROUTING` | `off` = כל הכלים בכל הודעה (ברירת מחדל: רק התחומים שההודעה עוסקת בהם) |
 | `GITHUB_TOKEN` | קריאה בלבד מ-GitHub |
 | `COMPUTER_MODE` | `off` / `ask` / `auto` |
 | `PC_BRIDGE_SECRET` / `PC_BRIDGE_PORT` | סוד ופורט של גשר המחשב הביתי, כשהעוזר בענן |

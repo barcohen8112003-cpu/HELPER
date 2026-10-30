@@ -257,7 +257,8 @@ function render(S) {
       S.settings.BACKUP_PASSPHRASE.set && h('div', { style: 'margin:12px 0' }, h('button', { class: 'btn', onclick: () => post('backup/now', {}).then((r) => toast(r.message || r.error || 'נשמר')).catch((e) => toast(e.message)) }, 'גבה עכשיו')))),
     connector('Claude Code', '"תבקש מ-Claude לבנות לי אתר" בוואטסאפ, על חשבון המנוי שלך ב-Claude, בלי מפתח API. במחשב: npm i -g @anthropic-ai/claude-code, ואז claude setup-token, ואת הטוקן שמתקבל מדביקים כאן.', S.settings.CLAUDE_CODE_OAUTH_TOKEN.set, form(S, [['CLAUDE_CODE_OAUTH_TOKEN', 'טוקן', { secret: true, hint: 'מתחיל ב-sk-ant-oat. תקף לשנה.' }]], { clear: 'CLAUDE_CODE_OAUTH_TOKEN' })),
     connector('Gemini', '"תשאל את ג\'מיני" בוואטסאפ. מפתח חינמי מ-aistudio.google.com/apikey', S.settings.GEMINI_API_KEY.set, form(S, [['GEMINI_API_KEY', 'מפתח API', { secret: true }], ['GEMINI_MODEL', 'מודל', { hint: 'ריק = gemini-2.5-flash' }]], { clear: 'GEMINI_API_KEY' })),
-    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })))
+    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })),
+    connector('טיסות', '"תמצא לי טיסה זולה ביולי" עם מחירים אמיתיים. Travelpayouts (חינם, travelpayouts.com) מוצא את התאריכים הזולים בטווח; Duffel (duffel.com) נותן הצעות חיות עם שעות, עצירות וקונקשן.', S.settings.TRAVELPAYOUTS_TOKEN.set || S.settings.DUFFEL_TOKEN.set, form(S, [['TRAVELPAYOUTS_TOKEN', 'טוקן Travelpayouts', { secret: true, hint: 'בפרופיל באתר, תחת API token' }], ['DUFFEL_TOKEN', 'טוקן Duffel', { secret: true, hint: 'מתחיל ב-duffel_live_ (או duffel_test_ לניסוי)' }]], { clear: 'TRAVELPAYOUTS_TOKEN' })))
 
   fill($('activeRows'),
     head('מקורות'),

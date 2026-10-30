@@ -48,7 +48,8 @@ const BROWSER = [
   .filter(Boolean)
   .find((p) => fs.existsSync(p))
 // Inside a container the browser runs as root, where its sandbox cannot start.
-const SERVER_FLAGS = process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []
+export const browserPath = () => BROWSER
+export const SERVER_FLAGS = process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []
 
 // Below this much text a page is assumed to be a JavaScript shell or a bot wall.
 const THIN_PAGE = 500
