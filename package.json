@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Personal WhatsApp assistant: memory, reminders, watchers, mail, calendar, computer control",
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "helper": "scripts/helper.mjs"
   },
@@ -15,6 +18,8 @@
     "google": "node src/google-connect.js",
     "check": "node src/selftest.js",
     "check:all": "node scripts/check-all.mjs",
+    "accept:real": "node scripts/accept-real.mjs",
+    "check:accept": "node scripts/accept-selftest.mjs",
     "check:backup": "node src/backup-selftest.js",
     "check:style": "node src/style-selftest.js",
     "check:answers": "node src/answers-selftest.js",
