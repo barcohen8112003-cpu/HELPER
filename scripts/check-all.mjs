@@ -55,6 +55,7 @@ const TESTS = [
   'src/groups-selftest.js',
   'src/wa-link-selftest.js',
   'src/release-notes-selftest.js',
+  'src/bird-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

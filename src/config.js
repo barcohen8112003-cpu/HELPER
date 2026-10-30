@@ -231,6 +231,10 @@ const build = () => ({
   // Daily encrypted backup to the owner's Google Drive (src/backup.js).
   backup: { passphrase: process.env.BACKUP_PASSPHRASE || '', account: env('BACKUP_GOOGLE_ACCOUNT').toLowerCase() },
   geminiApi: { key: env('GEMINI_API_KEY'), model: env('GEMINI_MODEL', 'gemini-2.5-flash') },
+  // Bird (bird.com): an extra WhatsApp Business send path (src/bird.js). Off unless BIRD_ENABLED=true.
+  // The personal WhatsApp link stays on Baileys. A key without the flag does not turn this on.
+  // BIRD_WHATSAPP_FROM is the connected business number; it may stay empty for a Bird-managed template.
+  bird: { enabled: env('BIRD_ENABLED') === 'true', key: env('BIRD_API_KEY'), from: env('BIRD_WHATSAPP_FROM'), webhookSecret: env('BIRD_WEBHOOK_SECRET'), owner: env('BIRD_OWNER_NUMBER') },
   classroomWork: {
     mode: ['auto', 'ask', 'off'].includes(env('CLASSROOM_AUTOWORK', 'auto')) ? env('CLASSROOM_AUTOWORK', 'auto') : 'auto',
     maxMb: Math.max(1, Number(env('CLASSROOM_MAX_MB', '50')) || 50),

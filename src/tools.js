@@ -37,6 +37,7 @@ import { routed, searchDomains, DOMAINS, domainLabel } from './domains.js'
 import { flightTools } from './flights.js'
 import { planTool } from './planner.js'
 import { loopTool } from './proactive.js'
+import { birdEnabled, sendWhatsAppTemplate, sendWhatsAppText, toE164, templateParams } from './bird.js'
 
 // The Discord bot counts as linked once it has called the bridge within the last day.
 const discordLinked = () => Date.now() - (state.bridgeSeenAt || 0) < 24 * 3600000
@@ -234,6 +235,32 @@ export const tools = [
       if (!ok) return 'המשתמש לא אישר, לא נשלח כלום'
       await ctx.sendAs(found.jid, text)
       return `נשלח ל-${found.name}`
+    },
+  },
+  {
+    name: 'bird_whatsapp',
+    enabled: birdEnabled,
+    risk: 'write',
+    description:
+      'שולח הודעת וואטסאפ מהמספר העסקי שמחובר ב-Bird (לא מהוואטסאפ האישי). רק כשהמשתמש ביקש במפורש לשלוח דרך Bird או מהמספר העסקי. template = שם התבנית המאושרת (slug) עם params, וזה עובד תמיד. text = טקסט חופשי, שמגיע רק אם הנמען כתב למספר העסקי ב-24 השעות האחרונות. המשתמש רואה ומאשר לפני כל שליחה.',
+    parameters: obj(
+      {
+        to: str('מספר הטלפון של הנמען, למשל 0501234567 או +972501234567'),
+        template: str('ה-slug של התבנית ב-Bird, למשל bird_delivery_update. ריק כששולחים טקסט חופשי'),
+        params: str('ערכי התבנית בפורמט name=value מופרדים בפסיק, למשל ref=A1B2C3D4, date=10 Jul 2026. ריק אם אין'),
+        text: str('טקסט חופשי, רק כשאין תבנית'),
+      },
+      ['to'],
+    ),
+    describe({ to, template, params, text }) {
+      const what = template
+        ? `תבנית *${template}*${templateParams(params).map((p) => `\n${p.name}: ${p.text}`).join('')}`
+        : String(text || '').slice(0, 600)
+      return `לשלוח וואטסאפ דרך Bird ל-${toE164(to) || to}?\n\n${what}`
+    },
+    async run({ to, template, params, text }) {
+      const sent = template ? await sendWhatsAppTemplate({ to, slug: template, params }) : await sendWhatsAppText({ to, text })
+      return `נשלח דרך Bird ל-${sent.to} (סטטוס: ${sent.status || 'accepted'}, מזהה ${sent.id})`
     },
   },
   {
@@ -731,6 +758,7 @@ const BRIEF = {
   week_ahead: 'Next week (Sun-Sat): saved exams, Classroom deadlines, calendar. Also sent on its own Saturday evening.',
   get_timetable: 'The user\'s school timetable for a day from Webtop: time, lesson, subject, room, teacher, cancellations. day = today, tomorrow, Hebrew/English weekday or YYYY-MM-DD (this week only). A reminder before each lesson is already sent automatically.',
   send_whatsapp_to: 'Send a WhatsApp message in the user\'s name to someone else (a contact name or a number). Only when he explicitly asked to send it; "draft" means draft only. He approves the exact recipient and text first.',
+  bird_whatsapp: 'Send a WhatsApp message from the Bird business number (not his personal WhatsApp): an approved template by slug with params, or free text inside the 24h window. Only when he asked; he approves first.',
   send_discord: 'Send the user a private Discord message through his Discord bot; speak=true also says it aloud in the voice room. For when he is on WhatsApp and wants something on Discord.',
   voice_mode: 'always = reply as voice notes to everything ("talk to me"); match = voice only when the user sends voice.',
   react: 'Put one emoji on the user\'s last message; can replace a text reply.',

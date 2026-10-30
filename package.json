@@ -54,9 +54,11 @@
     "check:wa-link": "node src/wa-link-selftest.js",
     "check:release": "node src/release-notes-selftest.js",
     "check:scrapling": "node src/scrapling-selftest.js",
-    "check:scrapling-py": "node scripts/scrapling-py-test.mjs"
+    "check:scrapling-py": "node scripts/scrapling-py-test.mjs",
+    "check:bird": "node src/bird-selftest.js"
   },
   "dependencies": {
+    "@messagebird/sdk": "^0.107.0",
     "@whiskeysockets/baileys": "~6.7.24",
     "imapflow": "^1.0.180",
     "mailparser": "^3.7.2",
