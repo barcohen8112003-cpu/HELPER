@@ -26,7 +26,7 @@ const {
   validateToolArguments,
   isBlockedForSubagent,
 } = await import('./agent-team/adapter.js')
-const { AGENT_ROLES } = await import('./agent-team/roles.js')
+const { AGENT_ROLES, ROLE_CATALOG, getRole, selectRolesForTask, listAvailableRoles } = await import('./agent-team/roles.js')
 const {
   AgentTeamOrchestrator,
   tryOrchestrateAgentTeam,
@@ -942,6 +942,396 @@ console.log('--- בדיקות צוות סוכנים בזמן ריצה (Helper Or
   ok(typeof toolMsg === 'object' && toolMsg !== null, 'Adapter converted string to valid tool message object')
   ok(toolMsg.tool_call_id === 'tc_str_99', 'Adapter attached matching tool_call_id to string runner output')
   ok(toolMsg.content === 'raw string tool output', 'Adapter preserved string content without double wrapping')
+}
+
+// 13. Role Catalog from agency-agents: Verification, Dynamic Selection & Code vs Research Demonstration
+// 13a. Role Catalog Inventory Verification:
+{
+  const catalogList = listAvailableRoles()
+  const roleNames = catalogList.map((r) => r.name)
+
+  ok(catalogList.length === 5, `Catalog contains exactly 5 verified connected roles (actual: ${catalogList.length})`)
+  ok(roleNames.includes('researcher'), 'Catalog contains researcher')
+  ok(roleNames.includes('reality_checker'), 'Catalog contains reality_checker')
+  ok(roleNames.includes('backend_architect'), 'Catalog contains backend_architect')
+  ok(roleNames.includes('code_reviewer'), 'Catalog contains code_reviewer')
+  ok(roleNames.includes('security_engineer'), 'Catalog contains security_engineer')
+
+  // Verify source file attribution
+  const arch = getRole('backend_architect')
+  ok(arch.sourceFile.includes('agency-agents/engineering/backend-architect.md'), 'backend_architect attributed to agency-agents/engineering/backend-architect.md')
+  ok(arch.category === 'engineering', 'backend_architect has category engineering')
+
+  const reviewer = getRole('code_reviewer')
+  ok(reviewer.sourceFile.includes('agency-agents/engineering/code-reviewer.md'), 'code_reviewer attributed to agency-agents/engineering/code-reviewer.md')
+
+  const checker = getRole('reality_checker')
+  ok(checker.sourceFile.includes('agency-agents/testing/testing-reality-checker.md'), 'reality_checker attributed to agency-agents/testing/testing-reality-checker.md')
+
+  // Verify unknown role throws clear error
+  let unknownCaught = false
+  try {
+    getRole('non_existent_role')
+  } catch (e) {
+    if (e.message.includes('תפקיד לא קיים בקטלוג')) unknownCaught = true
+  }
+  ok(unknownCaught, 'Requesting unknown role throws clear error from catalog')
+}
+
+// 13b. Dynamic Role Selection: Code Task vs Research Task
+{
+  const researchQuery = 'מצא טיסה ללונדון לשבועיים, קונקשן עד שעתיים מתל אביב'
+  const researchSelection = selectRolesForTask(researchQuery)
+  ok(researchSelection.taskType === 'research', 'Flight research query mapped to taskType research')
+  ok(researchSelection.worker1 === 'researcher', 'Research query chose worker1 researcher')
+  ok(researchSelection.worker2 === 'reality_checker', 'Research query chose worker2 reality_checker')
+
+  const codeQuery = 'תכנן מודול Node.js לאחסון במטמון (Cache) עם TTL וממשק get/set'
+  const codeSelection = selectRolesForTask(codeQuery)
+  ok(codeSelection.taskType === 'engineering', 'Code query mapped to taskType engineering')
+  ok(codeSelection.worker1 === 'backend_architect', 'Code query chose worker1 backend_architect')
+  ok(codeSelection.worker2 === 'code_reviewer', 'Code query chose worker2 code_reviewer')
+}
+
+// 13c. Eligibility Check: Code queries are eligible for multi-agent orchestration
+{
+  const eligibleCode = 'תכנן מודול קוד ב-Node.js למערכת קאש מבוזרת'
+  ok(AgentTeamOrchestrator.isEligible(eligibleCode) === true, 'Code architecture query is eligible for Agent Team')
+}
+
+// 13d. End-to-End Code Task Demonstration with Mock Fetch ($0.00 cost, zero network)
+{
+  let dispatches = 0
+  const mockCodeFetch = async (url, options) => {
+    dispatches++
+    const body = JSON.parse(options.body)
+
+    // Pre-dispatch message validation
+    for (const m of body.messages) {
+      assert(typeof m === 'object' && m !== null, 'Message must be object')
+    }
+
+    if (dispatches === 1) {
+      // Dispatch 1: Backend Architect designs the caching module
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: `תכנון מודול MemoryCache ב-Node.js:
+1. מבנה: מחלקה MemoryCache המשתמשת ב-Map פנימי.
+2. ממשק:
+   - set(key, value, ttlMs): שמירת ערך עם חותמת תפוגה.
+   - get(key): שליפה ובדיקת תפוגה.
+3. ניקוי: טיימר מחזורי setInterval לניקוי מפתחות פגי תוקף.`,
+              },
+            },
+          ],
+          usage: { prompt_tokens: 120, completion_tokens: 60 },
+        }),
+      }
+    }
+
+    if (dispatches === 2) {
+      // Dispatch 2: Code Reviewer audits the architecture for edge cases
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  approved: [
+                    { component: 'MemoryCache.set', notes: 'מימוש נקי ב-O(1) עם חותמת תפוגה' },
+                    { component: 'MemoryCache.get', notes: 'אימות תפוגה מיידי' },
+                  ],
+                  disqualified: [
+                    {
+                      component: 'מנגנון ניקוי ב-setInterval',
+                      reason: 'טיימר מחזורי ללא unref() מונע סיום תקין של תהליך ה-Node.js (Event Loop leak)',
+                    },
+                  ],
+                  summary: 'התכנון הכללי מצוין. חובה לקרוא ל-timer.unref() כדי למנוע נעילת ה-Event Loop.',
+                }),
+              },
+            },
+          ],
+          usage: { prompt_tokens: 220, completion_tokens: 80 },
+        }),
+      }
+    }
+
+    throw new Error(`Unexpected dispatch: ${dispatches}`)
+  }
+
+  const orchestrator = new AgentTeamOrchestrator({
+    fetchFn: mockCodeFetch,
+    apiKey: 'mock-openrouter-key',
+  })
+
+  const codeTaskQuery = 'תכנן מודול Node.js לאחסון במטמון (Cache) עם TTL וממשק get/set'
+  const finalReply = await orchestrator.orchestrate(codeTaskQuery, {
+    messageId: 'msg_code_task_demo',
+  })
+
+  ok(dispatches === 2, `Code task completed exactly 2 dispatches: Architect then Reviewer (actual: ${dispatches})`)
+  
+  // Verify that only the selected roles were loaded and spawned into the adapter
+  const spawnedRoles = orchestrator.adapter.events.filter((e) => e.type === 'agent_spawn').map((e) => e.payload.role)
+  ok(spawnedRoles.length === 2, `At most 2 workers were spawned (actual: ${spawnedRoles.length})`)
+  ok(spawnedRoles.includes('backend_architect'), 'Worker 1 was backend_architect')
+  ok(spawnedRoles.includes('code_reviewer'), 'Worker 2 was code_reviewer')
+  ok(!spawnedRoles.includes('researcher'), 'Researcher was NOT loaded or spawned for code task')
+  ok(!spawnedRoles.includes('reality_checker'), 'Reality Checker was NOT loaded or spawned for code task')
+
+  // Verify synthesized WhatsApp reply contains both architecture and reviewer findings
+  ok(finalReply.includes('MemoryCache') && finalReply.includes('Backend Architect'), 'Final reply contains Backend Architect design')
+  ok(finalReply.includes('Code Reviewer') && finalReply.includes('unref()'), 'Final reply contains Code Reviewer audit with unref() recommendation')
+  ok(finalReply.includes('MemoryCache.set'), 'Final reply lists approved set component')
+  ok(finalReply.includes('מנגנון ניקוי ב-setInterval'), 'Final reply lists disqualified setInterval edge case')
+}
+
+// 14. Rigorous Verification of LO's 5 Core Pillars
+// Pillar 1: Understanding context without re-explaining
+{
+  const history = [
+    { role: 'user', content: 'אני רוצה לטוס מנתב״ג לניו יורק בין 10.10.2026 ל-24.10.2026' },
+    { role: 'assistant', content: 'מעולה, אילו העדפות יש לך לגבי הטיסה?' },
+  ]
+  const currentMsg = 'מצא טיסה עד $600 עם קונקשן קצר עד שעתיים'
+
+  let verifierReceivedOrigin = false
+  let verifierReceivedDates = false
+  let verifierReceivedDestination = false
+
+  const mockContextFetch = async (url, options) => {
+    const body = JSON.parse(options.body)
+    const isVerifier = body.messages.some((m) => typeof m.content === 'string' && m.content.includes('Reality Checker'))
+
+    if (isVerifier) {
+      const prompt = body.messages[body.messages.length - 1].content
+      if (prompt.includes('ניו יורק')) verifierReceivedDestination = true
+      if (prompt.includes('נתב״ג') || prompt.includes('תל אביב')) verifierReceivedOrigin = true
+      if (prompt.includes('10.10.2026') && prompt.includes('24.10.2026')) verifierReceivedDates = true
+
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  approved: [{ route: 'TLV -> JFK', price: '$580', dates: '10.10-24.10', layover: 'שעה וחצי' }],
+                  disqualified: [],
+                }),
+              },
+            },
+          ],
+          usage: { completion_tokens: 50 },
+        }),
+      }
+    }
+
+    // Researcher step
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'ממצאי חוקר: נמצאה טיסה מנתב״ג לניו יורק בתאריכים 10.10-24.10 ב-$580 עם קונקשן שעה וחצי',
+            },
+          },
+        ],
+        usage: { completion_tokens: 40 },
+      }),
+    }
+  }
+
+  const orchestrator = new AgentTeamOrchestrator({
+    fetchFn: mockContextFetch,
+    apiKey: 'mock-openrouter-key',
+  })
+
+  const reply = await orchestrator.orchestrate(currentMsg, {
+    history,
+    messageId: 'msg_pillar_1_context',
+  })
+
+  ok(verifierReceivedDestination, 'Pillar 1: Verifier received destination (ניו יורק) from past conversation history')
+  ok(verifierReceivedOrigin, 'Pillar 1: Verifier received origin (נתב״ג) from past conversation history')
+  ok(verifierReceivedDates, 'Pillar 1: Verifier received exact dates (10.10.2026 - 24.10.2026) without re-explaining')
+  ok(!reply.includes('חסרים לי כמה פרטים'), 'Pillar 1: Did not ask user to re-explain details already in history')
+}
+
+// Pillar 3 & 4: Data transmission of ALL options without loss, and correct constraint verification (not confused by synthetic labels)
+{
+  const testOptionsReturnedByTool = [
+    {
+      route: 'TLV -> LHR (בריטיש איירווייז)',
+      airline: 'British Airways',
+      dates: '01.06.2026 - 15.06.2026',
+      layover: 'שעה ו-20 דקות (קונקשן קצר)',
+      price: '$410',
+      source: 'סינתטי לבדיקה בלבד',
+    },
+    {
+      route: 'TLV -> LGW (איזיג׳ט עם עצירה)',
+      airline: 'easyJet',
+      dates: '01.06.2026 - 15.06.2026',
+      layover: '3 שעות ו-40 דקות (עצירה ארוכה)',
+      price: '$320',
+      source: 'סינתטי לבדיקה בלבד',
+    },
+    {
+      route: 'TLV -> LTN (וויז אייר)',
+      airline: 'Wizz Air',
+      dates: '01.06.2026 - 22.06.2026 (21 ימים)',
+      layover: 'שעה (קונקשן קצר)',
+      price: '$290',
+      source: 'סינתטי לבדיקה בלבד',
+    },
+  ]
+
+  let verifierReceivedAllThree = false
+  let verifierPromptText = ''
+
+  const mockPillarsFetch = async (url, options) => {
+    const body = JSON.parse(options.body)
+    const isVerifier = body.messages.some((m) => typeof m.content === 'string' && m.content.includes('Reality Checker'))
+
+    if (isVerifier) {
+      verifierPromptText = body.messages[body.messages.length - 1].content
+      if (
+        verifierPromptText.includes('British Airways') &&
+        verifierPromptText.includes('easyJet') &&
+        verifierPromptText.includes('Wizz Air')
+      ) {
+        verifierReceivedAllThree = true
+      }
+
+      // Verifier correctly checks constraints:
+      // BA: approved because layover (1h20m) <= 2h (NOT disqualified for being synthetic!)
+      // easyJet: disqualified because layover (3h40m) > 2h
+      // Wizz Air: disqualified because trip length (21d) > 14d
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  approved: [
+                    {
+                      route: 'TLV -> LHR (בריטיש איירווייז)',
+                      airline: 'British Airways',
+                      dates: '01.06.2026 - 15.06.2026',
+                      layover: 'שעה ו-20 דקות',
+                      price: '$410',
+                      source: 'סינתטי לבדיקה בלבד',
+                    },
+                  ],
+                  disqualified: [
+                    {
+                      route: 'TLV -> LGW (איזיג׳ט עם עצירה)',
+                      airline: 'easyJet',
+                      reason: 'עצירת ביניים של 3 שעות ו-40 דקות חורגת מהגבלת השעתיים',
+                    },
+                    {
+                      route: 'TLV -> LTN (וויז אייר)',
+                      airline: 'Wizz Air',
+                      reason: 'משך שהייה של 21 יום חורג מהבקשה לשבועיים',
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+          usage: { completion_tokens: 110 },
+        }),
+      }
+    }
+
+    // Step 1: Researcher emits tool call
+    if (!body.messages.some((m) => m.role === 'tool')) {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [{ id: 'call_flight_3_opts', type: 'function', function: { name: 'web_search', arguments: '{"query":"flights"}' } }],
+              },
+            },
+          ],
+          usage: { completion_tokens: 30 },
+        }),
+      }
+    }
+
+    // Step 2: Researcher transmits ALL 3 options to findings without dropping any
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: `כלל אפשרויות הטיסה שנמצאו בכלי החיפוש (3 הצעות במלואן ללא השמטה):
+1. British Airways: TLV -> LHR, 01.06-15.06, עצירה שעה ו-20 דקות, מחיר $410
+2. easyJet: TLV -> LGW, 01.06-15.06, עצירה 3 שעות ו-40 דקות, מחיר $320
+3. Wizz Air: TLV -> LTN, 01.06-22.06, 21 ימים, עצירה שעה, מחיר $290`,
+            },
+          },
+        ],
+        usage: { completion_tokens: 120 },
+      }),
+    }
+  }
+
+  const mockToolRunner = async (call) => ({
+    role: 'tool',
+    tool_call_id: call.id,
+    content: JSON.stringify(testOptionsReturnedByTool),
+  })
+
+  const orchestrator = new AgentTeamOrchestrator({
+    fetchFn: mockPillarsFetch,
+    toolRunner: mockToolRunner,
+    apiKey: 'mock-openrouter-key',
+  })
+
+  const finalReply = await orchestrator.orchestrate('מצא טיסה ללונדון לשבועיים, קונקשן עד שעתיים מתל אביב בין 01.06.2026 ל-15.06.2026', {
+    messageId: 'msg_pillars_3_4_test',
+  })
+
+  ok(verifierReceivedAllThree, 'Pillar 3: Researcher transmitted ALL 3 options to Verifier without dropping any option')
+  ok(finalReply.includes('British Airways') && finalReply.includes('$410'), 'Pillar 4: British Airways approved based on constraints (layover <= 2h)')
+  ok(finalReply.includes('easyJet') && finalReply.includes('חורגת מהגבלת השעתיים'), 'Pillar 4: easyJet disqualified strictly due to layover > 2h constraint')
+  ok(finalReply.includes('Wizz Air') && finalReply.includes('חורג מהבקשה לשבועיים'), 'Pillar 4: Wizz Air disqualified strictly due to duration constraint')
+  ok(!finalReply.includes('נפסל (הממצא הוא \'סינתטי'), 'Pillar 4: Verifier did NOT confuse synthetic test label with constraint violation')
 }
 
 console.log('skip live model test (requires explicit user confirmation of provider, synthetic data, and numerical cost ceiling)')

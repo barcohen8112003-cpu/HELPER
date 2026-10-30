@@ -166,9 +166,10 @@ async function runSingleTrial() {
     console.log(`• משך כולל: ${durationSec} שניות`)
     console.log(`• ניסיונות HTTP שבוצעו: ${httpAttempts}`)
     console.log(`• קריאות מודל שהצליחו (200 OK): ${successfulModelCalls}`)
-    console.log(`• כלי בדיקה שהופעלו: ${adapter.totalToolCallsExecuted}`)
+    const toolCount = adapter.events.filter((e) => e.type === 'tool_execute_end').length
+    console.log(`• כלי בדיקה שהופעלו: ${toolCount}`)
 
-    if (adapter.totalToolCallsExecuted === 0) {
+    if (toolCount === 0) {
       console.log('⚠️ שים לב: הכלי לא הופעל על ידי החוקר! דיווח על כשל ביצוע ללא ניסיון נוסף.')
     }
 
