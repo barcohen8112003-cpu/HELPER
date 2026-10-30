@@ -3,13 +3,36 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-process.env.HELPER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-proactive-'))
-const { kindOf, noticeLevel, noticeSent, noticeEngaged, noticeStatus, parseNoticeCommand, runNoticeCommand, ENGAGED_WITHIN, DEMOTE_AFTER, DROP_AFTER } = await import('./proactive.js')
+process.env.HELPER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-notices-'))
+delete process.env.NOTICE_LEARNING
+const { state } = await import('./store.js')
+const { kindOf, noticeLevel, noticeSent, noticeEngaged, noticeStatus, parseNoticeCommand, runNoticeCommand, learningOn, ENGAGED_WITHIN, DEMOTE_AFTER, DROP_AFTER } = await import('./notice-learning.js')
 let passed = 0
 const ok = (cond) => (assert.ok(cond), passed++)
 const MIN = 60000
 const DAY = 24 * 3600000
 let t = Date.UTC(2026, 9, 27, 10)
+
+// Follow-up pacing (src/proactive.js) keeps its own object. Learning must not replace it.
+const pace = { lastUserAt: 1, unanswered: 2, lastOutAt: 3, followDay: 'x', followCount: 1 }
+state.proactive = { ...pace }
+ok(learningOn() === false)
+ok(noticeLevel('news', false, t) === 'interrupt')
+noticeSent('news', t)
+noticeEngaged(t)
+ok(!state.notices && JSON.stringify(state.proactive) === JSON.stringify(pace), 'off: nothing is recorded and follow-ups are untouched')
+runNoticeCommand(parseNoticeCommand('תפסיק לשלוח לי הודעות על חדשות'))
+ok(noticeLevel('news', false, t) === 'drop', 'an explicit mute is honored while learning is off')
+ok(noticeLevel('news', true, t) === 'interrupt')
+runNoticeCommand(parseNoticeCommand('תחזור לשלוח חדשות'))
+ok(noticeLevel('news', false, t) === 'interrupt')
+ok(JSON.stringify(state.proactive) === JSON.stringify(pace))
+
+process.env.NOTICE_LEARNING = 'true'
+ok(learningOn() === true)
+for (let i = 0; i < DROP_AFTER; i++) noticeSent('loop', t + i)
+ok(noticeLevel('loop', false, t) === 'interrupt', 'follow-ups are never quieted by notice learning')
+ok(JSON.stringify(state.proactive) === JSON.stringify(pace))
 
 ok(kindOf('homework-new:a,b') === 'homework-new')
 ok(kindOf(undefined, 'checkin') === 'checkin')

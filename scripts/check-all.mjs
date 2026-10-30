@@ -26,7 +26,7 @@ const TESTS = [
   'src/backup-selftest.js',
   'src/style-selftest.js',
   'src/metrics-selftest.js',
-  'src/proactive-selftest.js',
+  'src/notice-learning-selftest.js',
   'src/jobs-selftest.js',
   'src/study-selftest.js',
   'src/approval-selftest.js',

@@ -1,8 +1,11 @@
-// Which of Helper's own messages deserve to buzz the phone. Each kind of notice (news, a new assignment, a check-in)
-// is scored by how the owner treated the last ones: a reply soon after counts as interest, silence as a vote to be
-// quieter. A kind that keeps being ignored moves down one step (send now -> next brief -> dropped) and gets one
-// probe a week, so it can come back. "תפסיק לשלוח לי X" mutes a kind outright. Urgent messages and the protected
-// kinds below are never touched.
+// Which of Helper's own notices deserve to buzz the phone. This is separate from follow-ups (src/proactive.js):
+// that module's state.proactive pacing is never read or written here. Scores live in state.notices.
+//
+// Off by default (NOTICE_LEARNING is not "true"): every notice is sent exactly as before. The only change then
+// is an explicit request, "תפסיק לשלוח לי חדשות" / "תחזור לשלוח", which mutes or restores that kind.
+// With NOTICE_LEARNING=true, a kind the owner keeps ignoring moves down one step (send now -> next brief ->
+// dropped) and gets one probe a week, so it can come back. Urgent messages and the protected kinds below are
+// never touched, including loop follow-ups.
 import { state, save } from './store.js'
 
 const MIN = 60000
@@ -11,7 +14,10 @@ export const ENGAGED_WITHIN = 60 * MIN // a message of the owner within this lon
 export const DEMOTE_AFTER = 3 // ignored in a row -> one step quieter
 export const DROP_AFTER = 6 // ignored in a row -> dropped
 const DECAY_EVERY = 7 * DAY // every week without a live send forgives three ignores, so the kind gets a probe
-const PROTECTED = new Set(['cost-month', 'reminder'])
+// loop: a follow-up from src/proactive.js. Its own pacing decides whether it goes out.
+const PROTECTED = new Set(['cost-month', 'reminder', 'loop'])
+
+export const learningOn = () => String(process.env.NOTICE_LEARNING || '').trim() === 'true'
 
 export const KIND_LABELS = {
   news: 'חדשות הבוקר',
@@ -30,7 +36,7 @@ const WORDS = [
   [/(בדיקות|הודעות יזומות|מיוזמתך|מיוזמתי)/, ['checkin']],
 ]
 
-const store = () => (state.proactive ??= { kinds: {}, pending: [], muted: [] })
+const store = () => (state.notices ??= { kinds: {}, pending: [], muted: [] })
 const row = (kind) => (store().kinds[kind] ??= { sent: 0, answered: 0, streak: 0, lastAt: 0 })
 
 // 'homework-new:abc' -> 'homework-new'; no key and no name -> 'general'.
@@ -47,6 +53,7 @@ function settle(now) {
 
 // The owner wrote something: every notice sent inside the window gets credit, and its ignore count starts over.
 export function noticeEngaged(now = Date.now()) {
+  if (!state.notices && !learningOn()) return
   const p = store()
   settle(now)
   if (!p.pending.length) return
@@ -57,7 +64,7 @@ export function noticeEngaged(now = Date.now()) {
 
 // A non-urgent notice went out to the phone right now.
 export function noticeSent(kind, now = Date.now()) {
-  if (PROTECTED.has(kind)) return
+  if (!learningOn() || PROTECTED.has(kind)) return
   settle(now)
   const r = row(kind)
   r.sent++
@@ -72,8 +79,10 @@ const effectiveStreak = (r, now) => Math.max(0, r.streak - DEMOTE_AFTER * Math.f
 // 'interrupt' = send now, 'batch' = wait for the next brief, 'drop' = say nothing.
 export function noticeLevel(kind, urgent = false, now = Date.now()) {
   if (urgent || PROTECTED.has(kind)) return 'interrupt'
+  if ((state.notices?.muted || []).includes(kind)) return 'drop'
+  // Automatic quieting is opt-in. Until then a notice is sent the way it always was.
+  if (!learningOn()) return 'interrupt'
   const p = store()
-  if (p.muted.includes(kind)) return 'drop'
   settle(now)
   const r = p.kinds[kind]
   if (!r || !r.lastAt) return 'interrupt'

@@ -388,7 +388,7 @@ async function checkIn(notify, runTask) {
   if (!reply) return
   s.count++
   save()
-  await notify(reply, false, undefined, 'checkin')
+  await notify(reply)
 }
 
 // Saturday evening: the coming week in one message (assignments, exams, calendar).

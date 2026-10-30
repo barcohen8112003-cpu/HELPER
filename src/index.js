@@ -29,7 +29,6 @@ import { getDay } from './day.js'
 import { backupTick } from './backup.js'
 import { humanError } from './style.js'
 import { takeProactiveSlot } from './metrics.js'
-import { kindOf, noticeLevel, noticeSent, noticeEngaged, parseNoticeCommand, runNoticeCommand } from './proactive.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 
 let reconciled = false
@@ -153,11 +152,6 @@ const wa = await startWhatsApp(async (m) => {
     }
     return
   }
-  // Any message of the owner counts as a reaction to the notices sent in the last hour.
-  noticeEngaged()
-  // "תפסיק לשלוח לי חדשות" / "תחזור לשלוח..." / "מה אתה שולח לי": answered at once, no model.
-  const noticeCmd = parseNoticeCommand(text)
-  if (noticeCmd) return wa.send(state.owner.jid, runNoticeCommand(noticeCmd))
   // A shared location is saved, no model involved. A bare 📍 gets a 📍 back; updates of a live location get nothing.
   // With a comment ("תזמין לכאן פיצה") the message goes on to the model, which now sees the new location.
   if (m.location) {
@@ -413,23 +407,10 @@ const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, t
 // on its own at 08:00: it joins the night's batch and arrives inside the one morning brief.
 // Outside quiet hours, non-urgent notices are also capped per day (MESSAGE_BUDGET, default 6): past the cap they
 // join the next brief instead of buzzing his phone again.
-function notify(text, urgent = false, key, kindName) {
-  const kind = kindOf(key, kindName)
-  const level = noticeLevel(kind, urgent)
-  if (key && state.sentKeys.includes(key)) return Promise.resolve()
-  // A kind the owner keeps ignoring (or muted) is quieter: it joins the next brief, or is dropped.
-  if (level === 'drop') {
-    if (key) {
-      state.sentKeys = [...state.sentKeys, key].slice(-500)
-      save()
-    }
-    return Promise.resolve()
-  }
-  if (urgent || (level === 'interrupt' && !inQuietHours() && takeProactiveSlot())) {
-    if (!urgent) noticeSent(kind)
-    return outbox.notify(text, urgent, key)
-  }
+function notify(text, urgent = false, key) {
+  if (urgent || (!inQuietHours() && (key && state.sentKeys.includes(key) ? true : takeProactiveSlot()))) return outbox.notify(text, urgent, key)
   if (key) {
+    if (state.sentKeys.includes(key)) return Promise.resolve()
     state.sentKeys = [...state.sentKeys, key].slice(-500)
     save()
   }
