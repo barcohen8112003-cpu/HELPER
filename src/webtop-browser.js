@@ -47,6 +47,16 @@ const SITES = {
     // on .google.com. With browser sign-in off, account consistency is disabled and the cookies are left alone.
     extraArgs: ['--allow-browser-signin=false'],
   },
+  // Gemini (and its Spark agent), signed in once on the shared desktop. Same DICE sign-out guard as Google Home.
+  gemini: {
+    label: 'Gemini',
+    headed: true,
+    profile: () => path.join(DATA_DIR, 'gemini-profile'),
+    port: () => config.gemini.port,
+    url: () => config.gemini.url,
+    enabled: () => config.gemini.cloud,
+    extraArgs: ['--allow-browser-signin=false'],
+  },
   errand: {
     label: 'קניות',
     headed: true,
@@ -388,3 +398,4 @@ export function webtopInput(action) {
     throw new Error('פעולה לא מוכרת')
   })
 }
+

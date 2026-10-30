@@ -59,6 +59,9 @@ object Updater {
 
     fun isNewer(release: Release, installedCode: Long) = release.versionCode > installedCode
 
+    /** Debug builds are the ones Android Studio installs; GitHub publishes release builds only. */
+    val fromAndroidStudio get() = BuildConfig.DEBUG
+
     fun sha256(file: File): String {
         val md = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
@@ -93,6 +96,9 @@ object Updater {
      * [busy]: a phone task is running; the update waits for the next check rather than restart the app under it.
      */
     suspend fun check(context: Context, busy: Boolean = false): String = lock.withLock {
+        // A build from Android Studio is signed with that computer's debug key: GitHub's builds could never install
+        // over it, and Android Studio's own Run already updates it in place.
+        if (fromAndroidStudio) return@withLock "הותקן מ-Android Studio: מתעדכן בלחיצה על Run".also { state.value = it }
         withContext(Dispatchers.IO) {
             val text = runCatching { checkNow(context.applicationContext, busy) }.getOrElse { "בדיקת עדכון נכשלה: ${it.message}" }
             state.value = text

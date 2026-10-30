@@ -33,8 +33,12 @@ async function section(name, fn) {
 
 const api = await import('./api.js')
 const { state } = await import('../store.js')
+const audit = await import('../audit.js')
 
 const EVIL = '<img src=x onerror=alert(1)>'
+// The activity log page shows what tools were given, so it gets the hostile string too.
+audit.record({ tool: `send_${EVIL}`, args: { text: EVIL }, source: 'whatsapp', approval: 'approved', ok: true, result: EVIL })
+audit.record({ tool: 'gmail_read', args: { id: '1' }, source: 'task', ok: false, error: EVIL, result: 'x' })
 const today = api.localDate()
 const month = today.slice(0, 7)
 const day = (n) => api.addDays(today, n)
@@ -346,7 +350,7 @@ await section('page static rules', () => {
   ok(!/method:\s*['"](POST|PUT|DELETE|PATCH)/i.test(script), 'dashboard only reads')
   const fetches = script.match(/fetch\(([^)]*)\)/g) || []
   ok(fetches.length === 1 && /\/dash\/api\//.test(fetches[0]), 'single same-origin fetch to /dash/api/')
-  for (const p of ['overview', 'habits', 'expenses', 'notes', 'shopping', 'goals', 'tools']) ok(new RegExp(`pages\\.${p} = `).test(script), `page ${p} defined`)
+  for (const p of ['overview', 'habits', 'expenses', 'notes', 'shopping', 'goals', 'tools', 'audit']) ok(new RegExp(`pages\\.${p} = `).test(script), `page ${p} defined`)
   ok(/<svg|sv\('svg'/.test(script) && /createElementNS/.test(script), 'inline SVG chart code')
   ok(!/<style[^>]*>[\s\S]*url\(/.test(html), 'no css url() loads')
 })
@@ -455,7 +459,7 @@ function makeBrowser(failFetch = false) {
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms))
 
 await section('page renders every tab with hostile data', async () => {
-  for (const tab of ['overview', 'habits', 'expenses', 'notes', 'shopping', 'goals', 'tools']) {
+  for (const tab of ['overview', 'habits', 'expenses', 'notes', 'shopping', 'goals', 'tools', 'audit']) {
     const b = makeBrowser()
     b.location.hash = `#${tab}`
     new vm.Script(script).runInContext(b.sandbox)
@@ -470,7 +474,7 @@ await section('page renders every tab with hostile data', async () => {
     })
     ok(!injected, `${tab}: no injected elements or handlers`)
     ok(b.calls.every((u) => u.startsWith('/dash/api/')), `${tab}: only /dash/api/ requests`)
-    ok(b.els.tabs.children.length === 7, `${tab}: seven tabs`)
+    ok(b.els.tabs.children.length === 8, `${tab}: eight tabs`)
     const current = b.els.tabs.children.filter((a) => a.attrs['aria-current'] === 'page')
     ok(current.length === 1 && current[0].attrs.href === `#${tab}`, `${tab}: current tab marked`)
     ok(b.els.stamp.children.length > 0, `${tab}: update stamp set`)

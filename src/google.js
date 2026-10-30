@@ -24,6 +24,8 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/tasks',
   'https://www.googleapis.com/auth/drive.readonly',
+  // Only the files Helper itself creates: the daily encrypted backup (src/backup.js).
+  'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/classroom.courses.readonly',
   'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
   'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly',
@@ -49,6 +51,7 @@ export async function removeAccount(email) {
   delete accounts[email]
   fs.writeFileSync(FILE, JSON.stringify(accounts, null, 2))
   tokens.delete(email)
+  status.delete(email)
   if (token) await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', body: new URLSearchParams({ token }), signal: AbortSignal.timeout(15000) }).catch(() => {})
 }
 
@@ -72,6 +75,8 @@ export async function connectWithCode(code, redirectUri) {
   const info = await (await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${data.access_token}` }, signal: AbortSignal.timeout(30000) })).json()
   if (!info.email) throw new Error('לא התקבלה כתובת מייל')
   saveAccount(info.email, data.refresh_token)
+  tokens.delete(info.email)
+  status.set(info.email, { ok: true, at: Date.now() })
   return info.email
 }
 
@@ -87,21 +92,51 @@ export function resolveAccounts(account) {
 }
 
 const tokens = new Map()
+// { [email]: { ok, error, at } }: the result of the last real token exchange with Google, per account.
+// A stored key is not proof the account works: Google can expire or revoke it at any time.
+const status = new Map()
 
-export async function accessToken(email) {
+export const googleAccountStatus = (email) => status.get(email) || null
+
+// `fresh` skips the cached access token, so the stored key itself is tested against Google.
+export async function accessToken(email, { fresh = false } = {}) {
   const cached = tokens.get(email)
-  if (cached && cached.expires > Date.now() + 60000) return cached.token
+  if (!fresh && cached && cached.expires > Date.now() + 60000) return cached.token
   const refresh = load()[email]?.refresh_token
   if (!refresh) throw new Error(`החשבון ${email} לא מחובר`)
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    body: new URLSearchParams({ client_id: config.google.clientId, client_secret: config.google.clientSecret, refresh_token: refresh, grant_type: 'refresh_token' }),
-    signal: AbortSignal.timeout(30000),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(`החיבור לגוגל של ${email} נכשל (${data.error}). צריך לחבר מחדש עם npm run google`)
+  let res, data
+  try {
+    res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      body: new URLSearchParams({ client_id: config.google.clientId, client_secret: config.google.clientSecret, refresh_token: refresh, grant_type: 'refresh_token' }),
+      signal: AbortSignal.timeout(30000),
+    })
+    data = await res.json()
+  } catch (e) {
+    // No answer from Google (offline, timeout) says nothing about the key, so the last known state is kept.
+    throw new Error(`אין תשובה מגוגל עבור ${email}: ${e.message}`)
+  }
+  if (!res.ok) {
+    tokens.delete(email)
+    status.set(email, { ok: false, error: data.error || `HTTP ${res.status}`, at: Date.now() })
+    const why = data.error === 'invalid_grant' ? 'המפתח פג או בוטל' : data.error
+    throw Object.assign(new Error(`החיבור לגוגל של ${email} נכשל (${why}). צריך לחבר מחדש עם npm run google`), {
+      hint: `צריך לחבר מחדש את ${email}: באתר ההגדרות, Google Workspace, "הוסף חשבון".`,
+    })
+  }
+  status.set(email, { ok: true, at: Date.now() })
   tokens.set(email, { token: data.access_token, expires: Date.now() + data.expires_in * 1000 })
   return data.access_token
+}
+
+// Tests every connected account against Google, at most once per `maxAgeMs` each. Never throws.
+export async function checkGoogleAccounts({ maxAgeMs = 10 * 60000 } = {}) {
+  await Promise.all(googleAccounts().map(async (email) => {
+    const last = status.get(email)
+    if (last && Date.now() - last.at < maxAgeMs) return
+    await accessToken(email, { fresh: true }).catch(() => {})
+  }))
+  return Object.fromEntries(googleAccounts().map((email) => [email, status.get(email) || null]))
 }
 
 async function api(email, url, { body, text } = {}) {
@@ -206,6 +241,13 @@ export async function calendarChanges(email, sinceIso) {
 }
 
 export async function calendarAdd(email, { title, start, end, description }) {
+  // A date alone (YYYY-MM-DD) is an all-day event.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    const next = new Date(`${start}T12:00:00Z`)
+    next.setUTCDate(next.getUTCDate() + 1)
+    const ev = await api(email, EVENTS, { body: { summary: title, description, start: { date: start }, end: { date: next.toISOString().slice(0, 10) } } })
+    return ev.htmlLink
+  }
   const from = new Date(start)
   if (isNaN(from)) throw new Error('זמן התחלה לא תקין, נדרש YYYY-MM-DDTHH:MM')
   const to = end ? new Date(end) : new Date(from.getTime() + 3600000)
@@ -333,4 +375,54 @@ export async function driveRead(email, id) {
   else if (meta.mimeType.startsWith('text/') || meta.mimeType === 'application/json') url = `${file}?alt=media`
   else throw new Error(`אי אפשר לקרוא קובץ מסוג ${meta.mimeType}`)
   return `${meta.name}\n\n${(await api(email, url, { text: true })).slice(0, 12000)}`
+}
+
+// ---- writing to Drive (drive.file: only files Helper itself creates) ----
+
+const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** Simple Markdown (headings, bullets, numbered lists, bold, paragraphs) as HTML that Docs imports, right to left. */
+export function markdownToHtml(md) {
+  const inline = (t) => escapeHtml(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|\s)\*(.+?)\*(?=\s|$)/g, '$1<i>$2</i>')
+  const out = []
+  let list = null
+  const close = () => { if (list) out.push(`</${list}>`); list = null }
+  for (const raw of String(md || '').replace(/\r/g, '').split('\n')) {
+    const line = raw.trimEnd()
+    let m
+    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { close(); out.push(`<h${m[1].length} dir="rtl">${inline(m[2])}</h${m[1].length}>`); continue }
+    if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) { if (list !== 'ul') { close(); list = 'ul'; out.push('<ul dir="rtl">') } out.push(`<li>${inline(m[1])}</li>`); continue }
+    if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) { if (list !== 'ol') { close(); list = 'ol'; out.push('<ol dir="rtl">') } out.push(`<li>${inline(m[1])}</li>`); continue }
+    close()
+    if (line.trim()) out.push(`<p dir="rtl">${inline(line)}</p>`)
+  }
+  close()
+  return `<html><body dir="rtl">${out.join('\n')}</body></html>`
+}
+
+const KINDS = {
+  doc: { mime: 'application/vnd.google-apps.document', source: 'text/html' },
+  sheet: { mime: 'application/vnd.google-apps.spreadsheet', source: 'text/csv' },
+}
+
+/** A new Google Docs (from Markdown) or Sheets (from CSV) file. Returns { id, name, link }. */
+export async function driveCreate(email, { name, kind = 'doc', content = '' }) {
+  const spec = KINDS[kind] || KINDS.doc
+  const body = kind === 'sheet' ? String(content) : markdownToHtml(content)
+  const boundary = `helper${Date.now().toString(36)}`
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: String(name || 'מסמך').slice(0, 200), mimeType: spec.mime })}\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Type: ${spec.source}; charset=UTF-8\r\n\r\n`),
+    Buffer.from(body, 'utf8'),
+    Buffer.from(`\r\n--${boundary}--`),
+  ])
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${await accessToken(email)}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body: payload,
+    signal: AbortSignal.timeout(60000),
+  })
+  if (!res.ok) throw new Error(`Google HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  const f = await res.json()
+  return { id: f.id, name: f.name, link: f.webViewLink }
 }

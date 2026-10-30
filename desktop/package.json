@@ -1,0 +1,22 @@
+{
+  "name": "helper-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HELPER for Windows: hold a key and talk in Hebrew; it opens apps, arranges windows, types anywhere, reads the screen and points",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "check": "node test/selftest.js"
+  },
+  "dependencies": {
+    "electron": "^33.4.11",
+    "koffi": "^3.3.3",
+    "uiohook-napi": "^1.5.5"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "koffi@3.3.3": true,
+    "uiohook-napi@1.5.5": true
+  }
+}

@@ -59,3 +59,35 @@ export function searchTools(query, active = extendedTools, limit = 8) {
     .slice(0, limit)
     .map((x) => x.t)
 }
+
+// ── tools added while Helper runs (the ones it wrote for itself, src/tool-builder.js) ──────────────────────────────
+
+let coreNames = () => []
+// tools.js tells the registry how to see the core tool names, so a new tool can never take one.
+export const setCoreNameCheck = (fn) => {
+  coreNames = fn
+}
+export const hasToolNamed = (name) => extendedTools.some((t) => t.name === name) || coreNames().includes(name)
+
+function refreshCategory(category, blurb) {
+  const count = extendedTools.filter((t) => t.category === category).length
+  const entry = categories.find((c) => c.category === category)
+  if (entry) entry.count = count
+  else if (count) categories.push({ category, blurb: blurb || '', count })
+  if (!count && entry) categories.splice(categories.indexOf(entry), 1)
+}
+
+export function registerTool(tool, category, blurb = '') {
+  if (hasToolNamed(tool.name)) throw new Error(`שם כלי כבר תפוס: ${tool.name}`)
+  extendedTools.push({ ...tool, category })
+  refreshCategory(category, blurb)
+}
+
+export function unregisterTool(name) {
+  const i = extendedTools.findIndex((t) => t.name === name)
+  if (i < 0) return false
+  const { category } = extendedTools[i]
+  extendedTools.splice(i, 1)
+  refreshCategory(category)
+  return true
+}

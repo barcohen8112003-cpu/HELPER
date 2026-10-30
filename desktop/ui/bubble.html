@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' data: blob:; img-src 'self' data:">
+<title>HELPER</title>
+<style>
+  :root {
+    --bg: rgba(14, 16, 25, 0.90);
+    --edge: rgba(255, 255, 255, 0.13);
+    --edge-glow: rgba(139, 124, 255, 0.35);
+    --ink: #F5F6FA;
+    --dim: rgba(245, 246, 250, 0.70);
+    --faint: rgba(245, 246, 250, 0.42);
+    --accent: #8B7CFF;
+    --accent-gradient: linear-gradient(135deg, #8B7CFF 0%, #6351FF 100%);
+    --accent2: #4FD1FF;
+    --danger: #FF6B6B;
+    --ok: #51CF66;
+    --code-bg: rgba(0, 0, 0, 0.45);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    color: var(--ink); -webkit-font-smoothing: antialiased; user-select: none;
+    display: flex; justify-content: center; align-items: flex-start; padding: 6px 20px 30px;
+  }
+  .card {
+    position: relative;
+    width: 100%; max-width: 660px;
+    background: var(--bg);
+    backdrop-filter: blur(28px) saturate(200%);
+    -webkit-backdrop-filter: blur(28px) saturate(200%);
+    border: 1px solid var(--edge);
+    border-radius: 24px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 35px rgba(139, 124, 255, 0.12);
+    padding: 14px 18px 14px 16px;
+    opacity: 0;
+    transform: translateY(-12px) scale(0.98);
+    transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .card.on {
+    opacity: 1;
+    transform: none;
+    border-color: rgba(139, 124, 255, 0.3);
+  }
+
+  /* Top status bar */
+  .top-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px; padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .brand {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11.5px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--dim);
+  }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 8px var(--ok);
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  .dot.listening {
+    background: var(--accent2);
+    box-shadow: 0 0 10px var(--accent2);
+    animation: pulse 1.2s infinite;
+  }
+  .dot.thinking {
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+    animation: pulse 0.9s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.3); opacity: 0.6; }
+  }
+  .pill-badge {
+    font-size: 11px; color: var(--faint);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 8px; border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .row { display: flex; align-items: center; gap: 14px; }
+  canvas.waves { width: 68px; height: 42px; flex: none; }
+  .main { flex: 1; min-width: 0; }
+  .heard { display: flex; align-items: baseline; gap: 8px; color: var(--ink); font-size: 16px; line-height: 1.45; font-weight: 600; margin-bottom: 6px; padding: 6px 12px; border-radius: 12px; background: rgba(139, 124, 255, 0.14); }
+  .heard::before { content: 'שמעתי'; flex: none; font-size: 11.5px; font-weight: 500; letter-spacing: 0.02em; color: var(--accent); }
+  .heard span { min-width: 0; overflow-wrap: anywhere; }
+  .heard:empty { display: none; }
+  .text {
+    font-size: 16.5px; line-height: 1.55; font-weight: 500;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 320px; overflow-y: auto; cursor: default;
+  }
+  .text.copyable { cursor: pointer; }
+  .text.error { color: var(--danger); }
+  .text::-webkit-scrollbar { width: 6px; }
+  .text::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 3px; }
+
+  /* Code blocks & markdown */
+  .text code {
+    font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+    background: var(--code-bg); padding: 2px 6px; border-radius: 6px;
+    font-size: 14px; color: var(--accent2); direction: ltr; display: inline-block;
+  }
+  .text pre {
+    background: var(--code-bg); padding: 10px 12px; border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08); overflow-x: auto;
+    direction: ltr; text-align: left; margin: 8px 0;
+  }
+  .text pre code { background: transparent; padding: 0; color: #E0E2EC; display: block; }
+
+  .status { font-size: 15px; color: var(--dim); }
+  .live { margin-top: 6px; font-size: 17px; line-height: 1.45; color: var(--ink); min-height: 1em; }
+  .live:empty { display: none; }
+  .steps { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+  .steps div { font-size: 12.5px; color: var(--faint); display: flex; align-items: center; gap: 6px; }
+  .steps div::before { content: "•"; color: var(--accent); font-weight: bold; }
+  .note { margin-top: 8px; font-size: 12px; color: var(--faint); }
+  .note:empty { display: none; }
+  input.ask {
+    width: 100%; border: none; outline: none; background: transparent; color: var(--ink);
+    font: 500 17px "Segoe UI Variable Text", "Segoe UI", sans-serif; padding: 6px 0; direction: rtl;
+  }
+  input.ask::placeholder { color: var(--faint); }
+  .buttons { display: flex; gap: 10px; margin-top: 12px; }
+  button {
+    font: 600 14px "Segoe UI", sans-serif; border-radius: 14px; padding: 8px 20px; border: 1px solid var(--edge);
+    background: rgba(255,255,255,0.06); color: var(--ink); cursor: pointer; transition: all 0.15s ease;
+  }
+  button:hover, button:focus-visible { background: rgba(255,255,255,0.14); outline: none; transform: translateY(-1px); }
+  button.primary { background: var(--accent-gradient); border-color: transparent; box-shadow: 0 4px 14px rgba(99, 81, 255, 0.35); }
+  button.primary:hover, button.primary:focus-visible { filter: brightness(1.15); box-shadow: 0 6px 18px rgba(99, 81, 255, 0.45); }
+  .mark { display: inline-block; font-size: 12px; color: var(--accent2); margin-bottom: 4px; font-weight: 600; }
+  .hidden { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { .card { transition: none; } }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="top-bar">
+      <div class="brand">
+        <div class="dot" id="status-dot"></div>
+        <span>HELPER ⚡</span>
+      </div>
+      <div class="pill-badge" id="hotkey-hint">PD / Ctrl+Alt+Q</div>
+    </div>
+    <div class="row">
+      <div class="main">
+        <div class="mark hidden" id="mark">🎯 עם מה שסימנת</div>
+        <div class="heard" id="heard"><span id="heardText"></span></div>
+        <div class="text" id="text"></div>
+        <input class="ask hidden" id="ask" placeholder="מה לעשות? (Enter לשליחה, Esc לסגירה)" autocomplete="off" spellcheck="false">
+        <div class="steps" id="steps"></div>
+        <div class="buttons hidden" id="buttons">
+          <button class="primary" id="yes">כן</button>
+          <button id="no">לא</button>
+        </div>
+        <div class="note" id="note"></div>
+      </div>
+      <canvas class="waves" id="waves" width="136" height="84"></canvas>
+    </div>
+  </div>
+  <audio id="voice"></audio>
+<script src="recorder.js"></script>
+<script src="bubble.js"></script>
+</body>
+</html>

@@ -26,6 +26,19 @@ export const SELECTORS = {
     'button[aria-label*="עצירה"]',
     'button[aria-label*="הפסק"]',
   ],
+  // The model/mode picker (where Spark may be offered) and the tools menu next to the prompt box.
+  modePicker: [
+    'bard-mode-switcher button',
+    'button[data-test-id*="mode" i]',
+    'button[aria-label*="mode" i]',
+    'button[aria-label*="מצב"]',
+    'button[aria-label*="model" i]',
+  ],
+  toolsMenu: [
+    'toolbox-drawer button',
+    'button[aria-label*="Tools" i]',
+    'button[aria-label*="כלים"]',
+  ],
   // The menu that offers file upload, and the item in it that opens the file chooser.
   uploadMenu: [
     'button[aria-label*="upload" i]',
@@ -67,6 +80,12 @@ export const BLOCKERS = {
   login: [/accounts\.google\.com/i, /\bSign in\b/, /התחבר(ות)?\b/],
   captcha: [/captcha/i, /unusual traffic/i, /not a robot/i, /אינני רובוט/, /תעבורה חריגה/],
 }
+
+// The name of Spark, Gemini's agent, on a button, chip or menu item.
+export const SPARK_WORDS = /\bspark\b|ספארק|ספרק/i
+
+// A Google Docs, Sheets or Slides link.
+export const DOC_LINK = /https:\/\/docs\.google\.com\/(?:document|spreadsheets|presentation)\/d\/[A-Za-z0-9_-]+[^\s"'<>)\]]*/
 
 // Words on a button or link that offers a Word file. Used when none of the `download` selectors matched.
 export const DOWNLOAD_WORDS = /(download|הורד|docx|word|\.docx)/i

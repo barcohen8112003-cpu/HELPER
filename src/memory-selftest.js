@@ -9,7 +9,7 @@ process.env.HELPER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-memo
 
 const { state } = await import('./store.js')
 const { config } = await import('./config.js')
-config.llm.light = false // the real .env may switch light mode on, which turns learning off
+config.llm.light = false // learning runs in light mode too; this file starts from the full setting
 const mem = await import('./memory.js')
 const { learnFrom, parseFacts, worthLearningFrom, _resetLearnClock } = await import('./memory-learn.js')
 const { memoryTools } = await import('./memory-tools.js')
@@ -159,6 +159,22 @@ _resetLearnClock()
 await learnFrom('אני גר בחיפה ואני עובד בבנק', { askFn: fake, now: t1 })
 await learnFrom('אני אוהב לרוץ ואני לומד באוניברסיטה', { askFn: fake, now: t1 + 1000 })
 ok(asked === 2, 'extraction is rate-limited')
+config.llm.light = true
+_resetLearnClock()
+let lightCalls = 0
+const lightAsk = async () => {
+  lightCalls++
+  return JSON.stringify([{ fact: 'מעדיף ללמוד בלילה אחרי חצות', category: 'routine', importance: 3 }])
+}
+const light = await learnFrom('אני לומד מדעי המחשב ואוהב קפה שחור בבוקר', { askFn: lightAsk, now: t1 + 30_000 })
+ok(lightCalls === 1 && light.length === 1, 'light mode still proposes facts for the owner to approve')
+ok(state.memory.length === 0 && mem.pending().some((c) => c.fact.includes('בלילה')), 'light mode queues the fact and does not save it')
+config.memoryLearn = false
+_resetLearnClock()
+const skipped = await learnFrom('אני גר בחיפה ואני לומד כימיה בבית הספר', { askFn: lightAsk, now: t1 + 90_000 })
+ok(skipped.length === 0 && lightCalls === 1, 'memoryLearn off still proposes nothing')
+config.memoryLearn = undefined
+config.llm.light = false
 mem.rejectCandidates()
 
 // ── the tools the model sees ─────────────────────────────────────────────────

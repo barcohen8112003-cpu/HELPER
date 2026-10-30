@@ -95,9 +95,25 @@ const build = () => ({
   liveMail: env('LIVE_MAIL', 'true') !== 'false',
   newsTime: env('NEWS_BRIEF_TIME'),
   // Self-initiated messages: how many a day at most (0 = never), and the least time between two.
-  proactive: { maxPerDay: Math.max(0, Number(env('CHECK_IN_PER_DAY', '0')) || 0), everyMinutes: Math.max(30, Number(env('CHECK_IN_EVERY_MINUTES', '180')) || 180) },
+  // Helper writing first (src/proactive.js): check-ins a few times a day, and coming back to what he left open.
+  // Both skip quiet hours, wait while he is mid-conversation, and stop after MAX_UNANSWERED unanswered messages.
+  proactive: {
+    maxPerDay: Math.max(0, Number(env('CHECK_IN_PER_DAY', '2')) || 0),
+    everyMinutes: Math.max(30, Number(env('CHECK_IN_EVERY_MINUTES', '180')) || 180),
+    followUpsPerDay: Math.max(0, Number(env('FOLLOW_UPS_PER_DAY', '3')) || 0),
+  },
   newsFeeds: env('NEWS_FEEDS', DEFAULT_FEEDS).split(',').map((s) => s.trim()).filter(Boolean),
   tavilyKey: env('TAVILY_API_KEY'),
+  // Real flight data (src/flights.js). Travelpayouts: cheapest dates across a month or two, free token from
+  // travelpayouts.com. Duffel: live offers with times, stops and layovers for exact dates, token from duffel.com.
+  flights: {
+    travelpayoutsToken: env('TRAVELPAYOUTS_TOKEN'),
+    duffelToken: env('DUFFEL_TOKEN'),
+    currency: env('FLIGHTS_CURRENCY', 'usd').toLowerCase(),
+    home: env('FLIGHTS_HOME', 'TLV').toUpperCase(),
+  },
+  // Each message gets only the tools and instructions of the areas it is about (src/domains.js). off = every tool, always.
+  routing: env('TOOL_ROUTING', 'on') !== 'off',
   // Speech can live on a different provider than the chat model; it defaults to the same one.
   voice: {
     baseUrl: (env('VOICE_BASE_URL') || env('LLM_BASE_URL', 'https://api.openai.com/v1')).replace(/\/+$/, ''),
@@ -150,6 +166,19 @@ const build = () => ({
     // Optional proxy for that Chromium only (http:// or socks5://). A server outside Israel is blocked by Webtop's CloudFront.
     proxy: env('WEBTOP_PROXY'),
   },
+  // fetch_page through Scrapling (Python, py/scrapling_worker.py): public HTTPS pages only, with DNS and redirect
+  // checks. Off unless SCRAPLING_ENABLED=true. SCRAPLING_PYTHON is the interpreter inside its own venv.
+  scrapling: {
+    enabled: env('SCRAPLING_ENABLED') === 'true',
+    python: env('SCRAPLING_PYTHON', path.join(ROOT, '.venv-scrapling', process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python')),
+    timeoutMs: Math.min(60000, Math.max(5000, Number(env('SCRAPLING_TIMEOUT_MS', '30000')) || 30000)),
+    maxBytes: Math.min(10 * 1024 * 1024, Math.max(64 * 1024, Number(env('SCRAPLING_MAX_BYTES', String(2 * 1024 * 1024))) || 2 * 1024 * 1024)),
+    maxChars: Math.min(100000, Math.max(1000, Number(env('SCRAPLING_MAX_CHARS', '30000')) || 30000)),
+    concurrency: Math.min(4, Math.max(1, Number(env('SCRAPLING_CONCURRENCY', '2')) || 2)),
+    // A controlled egress proxy (http://host:port). Only then may a name that has no local DNS answer be read,
+    // because the proxy resolves it. Leave empty on a normal server.
+    proxy: env('SCRAPLING_EGRESS_PROXY'),
+  },
   // A second Chromium in the container, signed in to the personal Google account, for Google Home tiles.
   // Separate from Webtop so a school login and a home login do not share a profile.
   googleHome: {
@@ -168,10 +197,26 @@ const build = () => ({
     upstream: env('CLOUD_DESKTOP_UPSTREAM', 'http://127.0.0.1:6080') || 'http://127.0.0.1:6080',
     vncPassword: env('CLOUD_DESKTOP_VNC_PASSWORD'),
   },
+  // Self-teaching (lessons, tools it writes for itself, the night study). Off unless SELF_LEARNING=on: while it is off
+  // none of its tools exist for the model, nothing is added to the prompt, and nothing runs at night.
+  learning: ['on', '1', 'true', 'yes'].includes(env('SELF_LEARNING').toLowerCase()),
+  // One Hebrew WhatsApp note after a deploy. UPDATE_NOTES=off skips it; anything else (including unset) sends.
+  updateNotes: !['off', '0', 'false', 'no'].includes(env('UPDATE_NOTES', 'on').toLowerCase()),
+  // Agent mode (src/planner.js): a goal of several stages gets a plan, steps and a check against "done" before the
+  // answer. The plan stays to itself by default: a card before the answer splits one reply into two messages.
+  // AGENT_SHOW_PLAN=on sends it once in the chat.
+  // AGENT_MAX_STEPS: how many model steps a turn with a plan may take (one without a plan keeps the short limit).
+  agent: {
+    showPlan: ['on', '1', 'true', 'yes'].includes(env('AGENT_SHOW_PLAN').toLowerCase()),
+    maxSteps: Number(env('AGENT_MAX_STEPS')) > 0 ? Math.max(6, Math.min(40, Number(env('AGENT_MAX_STEPS')))) : 0,
+  },
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
+  // GEMINI_CLOUD: Gemini as one more Chromium on the cloud desktop (signed in there once). On by default when the
+  // cloud desktop is on; GEMINI_CLOUD=off turns it off.
   gemini: {
-    url: env('GEMINI_URL'),
+    url: env('GEMINI_URL') || 'https://gemini.google.com/app',
+    cloud: env('GEMINI_CLOUD').toLowerCase() !== 'off' && (['1', 'true', 'yes', 'on'].includes(env('GEMINI_CLOUD').toLowerCase()) || ['1', 'true', 'yes', 'on'].includes(env('CLOUD_DESKTOP').toLowerCase())),
     port: Number(env('GEMINI_DEBUG_PORT', '9224')) || 9224,
     timeoutMinutes: Math.max(2, Number(env('GEMINI_TIMEOUT_MINUTES', '15')) || 15),
   },
@@ -183,6 +228,8 @@ const build = () => ({
     proxy: env('ERRAND_PROXY'),
   },
   // "תשאל את ג'מיני": Google's Gemini through its official API (key from aistudio.google.com/apikey).
+  // Daily encrypted backup to the owner's Google Drive (src/backup.js).
+  backup: { passphrase: process.env.BACKUP_PASSPHRASE || '', account: env('BACKUP_GOOGLE_ACCOUNT').toLowerCase() },
   geminiApi: { key: env('GEMINI_API_KEY'), model: env('GEMINI_MODEL', 'gemini-2.5-flash') },
   classroomWork: {
     mode: ['auto', 'ask', 'off'].includes(env('CLASSROOM_AUTOWORK', 'auto')) ? env('CLASSROOM_AUTOWORK', 'auto') : 'auto',

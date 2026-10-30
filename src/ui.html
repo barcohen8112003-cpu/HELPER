@@ -78,7 +78,7 @@
     <section id="active"><h2>מה פעיל</h2><p class="sub">מקורות, תזכורות, משימות ומעקבים</p><div class="rows" id="activeRows"></div></section>
     <section id="memory"><h2>זיכרון</h2><p class="sub">מה שהעוזר זוכר עליך. אפשר למחוק כל פריט בנפרד</p><div class="rows" id="memoryRows"></div></section>
     <section id="prefs"><h2>העדפות</h2><p class="sub">שם, שעות ותזמונים</p><div class="rows" id="prefRows"></div></section>
-    <section id="log"><h2>מה נשלח</h2><p class="sub">ההודעות האחרונות שהעוזר שלח מיוזמתו</p><div class="rows"><div class="log" id="sent"></div></div></section>
+    <section id="log"><h2>מה נשלח</h2><p class="sub">ההודעות האחרונות שהעוזר שלח מיוזמתו</p><div class="rows"><div class="row" id="metrics"></div><div class="log" id="sent"></div></div></section>
   </main>
 </div>
 <div id="toast"></div>
@@ -172,7 +172,11 @@ function render(S) {
   const G = S.google
   const googleBody = h('div', {},
     G.accounts.map((a) => h('div', { class: 'row', style: 'padding:10px 0' },
-      h('div', { class: 'grow', style: 'direction:ltr;text-align:right' }, a.email),
+      h('div', { class: 'grow' },
+        h('div', { style: 'direction:ltr;text-align:right' }, a.email),
+        a.live && !a.live.ok && h('div', { class: 'small', style: 'color:var(--bad)' }, a.live.error === 'invalid_grant' ? 'המפתח פג או בוטל. לחץ "חבר מחדש" ואשר את כל ההרשאות.' : 'Google דחה את המפתח (' + a.live.error + '). כדאי לחבר מחדש.')),
+      h('span', { class: 'pill ' + (a.live ? (a.live.ok ? 'ok' : 'bad') : ''), title: a.live ? 'נבדק מול Google ' + a.live.checked : 'לא הייתה תשובה מ-Google' }, a.live ? (a.live.ok ? 'עובד' : 'מנותק') : 'לא ידוע'),
+      a.live && !a.live.ok && h('a', { class: 'btn primary', href: '/google/connect' }, 'חבר מחדש'),
       h('label', { class: 'small', title: 'העוזר קורא מהחשבון, אבל לא שולח ממנו מייל ולא מוסיף בו אירועים או משימות' }, h('input', { type: 'checkbox', checked: a.readOnly, onchange: (e) => act('google/readonly', { email: a.email, readOnly: e.target.checked }) }), ' קריאה בלבד'),
       h('button', { class: 'link', onclick: () => confirm('לנתק את ' + a.email + '?') && act('google/remove', { email: a.email }, 'נותק') }, 'נתק'))),
     G.configured && h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/google/connect' }, G.accounts.length ? 'הוסף חשבון' : 'חבר חשבון Google')),
@@ -236,7 +240,8 @@ function render(S) {
     connector('Google Home', 'אורות, רמקולים ושאר מכשירי הבית', GH.cloud, googleHomeBody),
     connector('טלפון', 'מסך, לחיצות ואפליקציות בטלפון Android', Boolean(P.enabled), phoneBody),
     D.enabled && connector('שולחן עבודה בענן', 'מסך השרת: עכבר ומקלדת לדפדפנים', true, desktopBody),
-    connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.length > 0, googleBody),
+    connector('Google Workspace', 'Gmail, יומן, Tasks, Drive, Docs, Sheets, Slides ו-Classroom', G.accounts.some((a) => !a.live || a.live.ok), googleBody,
+      G.accounts.some((a) => a.live && !a.live.ok) && h('p', { class: 'small', style: 'margin:10px 0 0;color:var(--bad)' }, 'חשבון מנותק: ' + G.accounts.filter((a) => a.live && !a.live.ok).map((a) => a.email).join(', '))),
     connector('מודל AI', S.model, S.settings.LLM_API_KEY.set, form(S, [
       ['LLM_BASE_URL', 'כתובת הספק', { hint: 'כל ספק תואם OpenAI. Groq: https://api.groq.com/openai/v1' }],
       ['LLM_API_KEY', 'מפתח API', { secret: true }],
@@ -263,11 +268,17 @@ function render(S) {
       ['MAIL_PASS', 'סיסמת אפליקציה', { secret: true }],
     ], { clear: 'MAIL_PASS' })),
     connector('יומן (iCal)', 'קריאה בלבד מכתובת iCal סודית', Boolean(S.settings.CALENDAR_ICS_URL), form(S, [['CALENDAR_ICS_URL', 'כתובת iCal']])),
-    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })))
+    connector('גיבוי', 'גיבוי מוצפן יומי ל-Google Drive: זיכרון, תזכורות, חשבונות, וואטסאפ והגדרות', S.settings.BACKUP_PASSPHRASE.set, h('div', {},
+      form(S, [['BACKUP_PASSPHRASE', 'סיסמת הגיבוי', { secret: true, hint: 'בלעדיה אי אפשר לשחזר. שמור אותה מחוץ ל-Helper (למשל במנהל סיסמאות).' }], ['BACKUP_GOOGLE_ACCOUNT', 'חשבון Google לגיבוי', { hint: 'ריק = החשבון הראשון שלא מסומן "קריאה בלבד"' }]], { clear: 'BACKUP_PASSPHRASE' }),
+      S.settings.BACKUP_PASSPHRASE.set && h('div', { style: 'margin:12px 0' }, h('button', { class: 'btn', onclick: () => post('backup/now', {}).then((r) => toast(r.message || r.error || 'נשמר')).catch((e) => toast(e.message)) }, 'גבה עכשיו')))),
+    connector('Claude Code', '"תבקש מ-Claude לבנות לי אתר" בוואטסאפ, על חשבון המנוי שלך ב-Claude, בלי מפתח API. במחשב: npm i -g @anthropic-ai/claude-code, ואז claude setup-token, ואת הטוקן שמתקבל מדביקים כאן.', S.settings.CLAUDE_CODE_OAUTH_TOKEN.set, form(S, [['CLAUDE_CODE_OAUTH_TOKEN', 'טוקן', { secret: true, hint: 'מתחיל ב-sk-ant-oat. תקף לשנה.' }]], { clear: 'CLAUDE_CODE_OAUTH_TOKEN' })),
+    connector('Gemini', '"תשאל את ג\'מיני" בוואטסאפ. מפתח חינמי מ-aistudio.google.com/apikey', S.settings.GEMINI_API_KEY.set, form(S, [['GEMINI_API_KEY', 'מפתח API', { secret: true }], ['GEMINI_MODEL', 'מודל', { hint: 'ריק = gemini-2.5-flash' }]], { clear: 'GEMINI_API_KEY' })),
+    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })),
+    connector('טיסות', '"תמצא לי טיסה זולה ביולי" עם מחירים אמיתיים. Travelpayouts (חינם, travelpayouts.com) מוצא את התאריכים הזולים בטווח; Duffel (duffel.com) נותן הצעות חיות עם שעות, עצירות וקונקשן.', S.settings.TRAVELPAYOUTS_TOKEN.set || S.settings.DUFFEL_TOKEN.set, form(S, [['TRAVELPAYOUTS_TOKEN', 'טוקן Travelpayouts', { secret: true, hint: 'בפרופיל באתר, תחת API token' }], ['DUFFEL_TOKEN', 'טוקן Duffel', { secret: true, hint: 'מתחיל ב-duffel_live_ (או duffel_test_ לניסוי)' }]], { clear: 'TRAVELPAYOUTS_TOKEN' })))
 
   fill($('activeRows'),
     head('מקורות'),
-    S.sources.length ? S.sources.map((s) => item(s.label, 'נבדק בהצלחה: ' + s.checked, null, h('span', { class: 'pill ' + (s.ok === null ? '' : s.ok ? 'ok' : 'bad') }, s.ok === null ? 'ממתין לבדיקה' : s.ok ? 'עובד' : 'לא עובד'))) : empty('אין מקור מחובר עדיין'),
+    S.sources.length ? S.sources.map((s) => item(s.label, (s.ok === false && s.note ? s.note + ' · ' : '') + 'נבדק בהצלחה: ' + s.checked, null, h('span', { class: 'pill ' + (s.ok === null ? '' : s.ok ? 'ok' : 'bad') }, s.ok === null ? 'ממתין לבדיקה' : s.ok ? 'עובד' : 'לא עובד'))) : empty('אין מקור מחובר עדיין'),
     head('תזכורות'),
     S.reminders.length ? S.reminders.map((r) => item(r.text, r.when + repeat[r.repeat], del('reminder', r.id))) : empty('אין תזכורות'),
     head('משימות מתוזמנות'),
@@ -284,11 +295,20 @@ function render(S) {
     ['QUIET_HOURS', 'שעות שקט', { placeholder: '22:00-08:00', hint: 'בשעות האלה נשלחות רק תזכורות והתראות אבטחה. ריק = כבוי' }],
     ['NEWS_BRIEF_TIME', 'תקציר חדשות', { placeholder: '08:00', hint: 'מה קרה מאז אתמול בערב. ריק = כבוי' }],
     ['DAILY_BRIEF_TIME', 'סיכום בוקר', { placeholder: '08:00', hint: 'תזכורות, יומן ומטלות של היום. ריק = כבוי' }],
+    ['WEEKLY_REVIEW_TIME', 'השבוע הקרוב', { placeholder: '20:00', hint: 'בשבת בשעה הזאת: מבחנים, הגשות ויומן של השבוע. off = כבוי' }],
+    ['MESSAGE_BUDGET', 'הודעות ביוזמתו ביום', { placeholder: '6', hint: 'מה שמעבר לזה מחכה לסיכום הבא. תזכורות ודחופים לא נספרים' }],
+    ['LLM_PRICES', 'מחירי מודלים', { placeholder: 'gpt-4.1-mini=0.4/1.6', hint: 'דולר למיליון טוקנים, קלט/פלט. מודל שלא מופיע נחשב חינמי' }],
+    ['MONTHLY_COST_LIMIT', 'תקרת עלות חודשית ($)', { hint: 'התראה ב-80% וב-100%. ריק = בלי תקרה' }],
     ['NEWS_FEEDS', 'מקורות חדשות', { hint: 'כתובות RSS מופרדות בפסיק. ריק = ynet, מעריב וישראל היום' }],
     ['TIMEZONE', 'אזור זמן', { placeholder: 'Asia/Jerusalem' }],
     ['COMPUTER_MODE', 'שליטה במחשב', { options: [['ask', 'מבקש אישור לכל פעולה'], ['off', 'כבוי'], ['auto', 'בלי אישור (מסוכן)']] }],
   ])))
 
+  const M = S.metrics
+  if (M) fill($('metrics'), h('div', { class: 'small' },
+    M.turns24h ? `זמן תגובה ב-24 השעות האחרונות: חציון ${M.p50} שניות, 90% מהתשובות תוך ${M.p90} שניות, ${M.turns24h} הודעות, בממוצע ${M.avgTools} כלים להודעה.` : 'עוד אין מדידות של זמן תגובה.',
+    h('br'), `הודעות שנשלחו היום מיוזמתו: ${M.proactiveToday} מתוך ${M.budget}. מה שמעבר לזה מחכה לסיכום הבא.`,
+    ...(M.cost ? [h('br'), M.cost + (M.costLimit ? ` התקרה: $${M.costLimit}.` : '')] : [])))
   fill($('sent'), (S.sent.length ? S.sent.map((line) => h('div', {}, line)) : [h('div', {}, 'עוד לא נשלח כלום')]))
 
   const maskToken = (token) => {

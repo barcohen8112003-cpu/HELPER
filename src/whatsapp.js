@@ -7,6 +7,7 @@ import QRCode from 'qrcode'
 import baileys, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, normalizeMessageContent, jidNormalizedUser, downloadMediaMessage } from '@whiskeysockets/baileys'
 import { DATA_DIR } from './config.js'
 import { state as store, save } from './store.js'
+import { ingestGroupMetadata, syncParticipatingGroups } from './groups.js'
 
 const CATCH_UP = 12 * 3600
 const MAX_SEEN = 500
@@ -27,6 +28,13 @@ const logger = pino({ level: 'silent' })
 const pairing = { qr: '', code: '', number: '' }
 let askCode = null
 export const pairingInfo = () => ({ ...pairing })
+// The settings page reads this. Nothing else should print it, and auth creds never go in here.
+export function publishPairing(next = {}) {
+  if ('qr' in next) pairing.qr = String(next.qr || '')
+  if ('code' in next) pairing.code = String(next.code || '')
+  if ('number' in next) pairing.number = String(next.number || '')
+  return pairingInfo()
+}
 export async function requestPairing(raw) {
   if (!askCode) throw new Error('וואטסאפ עוד עולה, נסה שוב בעוד כמה שניות')
   return askCode(raw)
@@ -44,7 +52,9 @@ export function pairingNumber(raw) {
 
 // onMessage({ jids, fromMe, selfChat, key, lateSeconds, text, getMedia, reaction?, location? })
 // onReady({ jid, lid }): the linked account's own ids, each time the connection opens.
-export async function startWhatsApp(onMessage, onReady = () => {}) {
+// onGroup({ group, id, sender, senderName, at, text, fromMe }): a text message in a group, for src/groups.js. Read only.
+// groupName(jid) / setGroupName(jid, name): the group's subject, looked up once and kept there.
+export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = null) {
   const bootedAt = Math.floor(Date.now() / 1000)
   // Handled message ids survive a restart, so nothing is answered twice. Messages sent while the assistant was
   // off are still picked up, as long as they are newer than the last one handled and not older than CATCH_UP.
@@ -107,7 +117,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
       store.wa.pairNumber = number
       save()
       fs.writeFileSync(CODE_FILE, code)
-      console.log(`קוד צימוד לוואטסאפ: ${code}`)
+      // The code is shown on the signed-in settings page. It is not written to the log: a cloud log is not the token.
       return { code, number }
     }
 
@@ -127,6 +137,20 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
     sock.ev.on('contacts.update', (list) => learn(list))
     sock.ev.on('messaging-history.set', ({ contacts }) => learn(contacts))
 
+    // Names of every group he is in, not only groups that happen to speak after we connect.
+    // Old messages are not fetched. A failure here must not take the socket down.
+    const syncGroups = () => syncParticipatingGroups(sock).catch((e) => console.log(`[groups] ${e.message}`))
+    groupHooks?.bindSync?.(syncGroups)
+    const keepNames = (list) => {
+      try {
+        ingestGroupMetadata(list)
+      } catch (e) {
+        console.log(`[groups] ${e.message}`)
+      }
+    }
+    sock.ev.on('groups.upsert', keepNames)
+    sock.ev.on('groups.update', keepNames)
+
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
       if (qr) {
         pairing.qr = qr
@@ -136,10 +160,14 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
           console.log('\nהקוד לא נסרק. כשתהיה מוכן לסרוק, הפעל שוב את start.bat.')
           process.exit(2)
         }
-        console.log('\nסרוק את הקוד: וואטסאפ בטלפון > מכשירים מקושרים > קישור מכשיר\n')
-        console.log(await QRCode.toString(qr, { type: 'terminal', small: true }))
         await QRCode.toFile(QR_FILE, qr, { width: 420 })
-        console.log(`(אם הקוד לא קריא כאן, פתח את התמונה: ${QR_FILE})\n`)
+        // The home window can show the QR, same as before. A server has no window: the QR and the pairing code
+        // stay on the signed-in settings page and are not written into the log. Auth creds are never printed.
+        if (process.stdout.isTTY) {
+          console.log('\nסרוק את הקוד: וואטסאפ בטלפון > מכשירים מקושרים > קישור מכשיר\n')
+          console.log(await QRCode.toString(qr, { type: 'terminal', small: true }))
+          console.log(`(אם הקוד לא קריא כאן, פתח את התמונה: ${QR_FILE})\n`)
+        }
         // A phone cannot scan a code shown on its own screen. When the number is already known from an earlier
         // link, a code to type in is offered as well: Linked devices > Link a device > Link with phone number.
         // On a server there is no screen to scan at all, so the number can also be given up front:
@@ -148,7 +176,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
         if (number && !codeAsked) {
           try {
             const { code } = await askCode(number)
-            console.log(`או בלי סריקה: מכשירים מקושרים > קישור מכשיר > קישור עם מספר טלפון, והקלד: ${code}\n`)
+            if (process.stdout.isTTY) console.log(`או בלי סריקה: מכשירים מקושרים > קישור מכשיר > קישור עם מספר טלפון, והקלד: ${code}\n`)
           } catch (e) {
             console.log(`[whatsapp] ${e.message}`)
           }
@@ -176,6 +204,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
         }
         // Deferred a tick so the caller already holds the returned handle when this runs.
         setTimeout(() => Promise.resolve(onReady({ jid: ownIds()[0], lid: ownIds()[1] || null })).catch((e) => console.log(`[whatsapp] ${e.message}`)))
+        syncGroups()
       }
       if (connection === 'close') {
         ready = false
@@ -195,6 +224,22 @@ export async function startWhatsApp(onMessage, onReady = () => {}) {
     sock.ev.on('messages.upsert', ({ messages }) => {
       for (const msg of messages) {
         const jid = msg.key?.remoteJid
+        // A group message never reaches the assistant's chat. It is handed to the groups reader, text only, when that
+        // is on; nothing is sent back, reacted to or marked as read.
+        if (jid?.endsWith('@g.us') && msg.message && groupHooks?.on()) {
+          const content = normalizeMessageContent(msg.message)
+          const text = content?.conversation || content?.extendedTextMessage?.text || content?.imageMessage?.caption || content?.documentMessage?.caption || content?.pollCreationMessage?.name || ''
+          const sentAt = Number(msg.messageTimestamp)
+          if (text && !text.startsWith(BOT_MARK) && sentAt >= since) {
+            if (!groupHooks.knows(jid)) sock.groupMetadata(jid).then((m) => groupHooks.setGroupName(jid, m.subject)).catch(() => {})
+            try {
+              groupHooks.capture({ group: jid, id: msg.key.id, sender: msg.key.participant || msg.participant || '', senderName: msg.pushName || '', at: sentAt, text, fromMe: Boolean(msg.key.fromMe) })
+            } catch (e) {
+              console.log(`[groups] ${e.message}`)
+            }
+          }
+          continue
+        }
         if (!jid || !msg.message || jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) continue
         if (!msg.key.fromMe && msg.pushName) learn([{ id: msg.key.senderPn || jid, notify: msg.pushName }], false)
         const sentAt = Number(msg.messageTimestamp)

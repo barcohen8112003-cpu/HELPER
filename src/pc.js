@@ -207,8 +207,11 @@ export async function wakeMonitors() {
 }
 
 // Wakes the monitor, wiggles mouse, dismisses lock screen wallpaper, and enters the password/PIN.
-export async function unlock(password = process.env.PC_UNLOCK_PASSWORD || 'naorkk132') {
-  if (remoteActive()) return remoteCall('unlock', [password])
+// With no password given, the one saved on the machine that types it is used (PC_UNLOCK_PASSWORD), so from the cloud
+// the password can live only on the home PC and never passes through the model or the bridge.
+export async function unlock(password) {
+  if (remoteActive()) return remoteCall('unlock', [password ?? null])
+  password ??= process.env.PC_UNLOCK_PASSWORD || ''
   await ps(`${INPUT}
 [U]::WakeMonitor()
 Start-Sleep -Milliseconds 250
@@ -222,6 +225,7 @@ Start-Sleep -Milliseconds 250
     await typeText(pass, true)
     return 'מסך הנעילה נפתח והוקלדה הסיסמה'
   }
+  if (password !== 'none' && password !== false) return 'מסך הנעילה נפתח, אבל לא שמורה סיסמה (PC_UNLOCK_PASSWORD בקובץ .env של המחשב), אז לא הקלדתי כלום'
   return 'מסך הנעילה נפתח (המסך הודלק ומסך הנעילה הועלה לחלון ההתחברות)'
 }
 
