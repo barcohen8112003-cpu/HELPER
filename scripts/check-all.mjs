@@ -5,9 +5,19 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+// The server runs Node 24 (Dockerfile) and CI checks on the version in .nvmrc. On an older Node some checks fail
+// for reasons that have nothing to do with the change, so the run stops here with the reason instead.
+const NEED = 24
+if (Number(process.versions.node.split('.')[0]) < NEED) {
+  console.log(`check:all needs Node.js ${NEED} or newer (this is ${process.versions.node}), the version the server runs. nvm use (reads .nvmrc), or https://nodejs.org`)
+  process.exit(1)
+}
+
 const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..')
 const TESTS = [
   'src/selftest.js',
+  'scripts/accept-selftest.mjs',
+  'src/instance-lock-selftest.js',
   'src/toolkit/_selftest.js',
   'src/memory-selftest.js',
   'src/learning-selftest.js',
@@ -25,17 +35,25 @@ const TESTS = [
   'src/dashboard/_selftest.js',
   'src/backup-selftest.js',
   'src/style-selftest.js',
+  'src/answers-selftest.js',
   'src/metrics-selftest.js',
   'src/notice-learning-selftest.js',
   'src/jobs-selftest.js',
   'src/study-selftest.js',
   'src/approval-selftest.js',
+  'src/agent-selftest.js',
+  'src/routing-selftest.js',
+  'src/flights-selftest.js',
+  'src/proactive-selftest.js',
   'src/logs-selftest.js',
   'src/claude-code-selftest.js',
   'src/gemini-spark-selftest.js',
   'src/tv-agent-selftest.js',
   'src/google-docs-selftest.js',
   'src/webtop-file-selftest.js',
+  'src/scrapling-selftest.js',
+  'src/groups-selftest.js',
+  'src/release-notes-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

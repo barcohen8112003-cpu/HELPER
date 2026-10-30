@@ -3,11 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomInt } from 'node:crypto'
 import { config, DATA_DIR } from './config.js'
+import { lockHeldByOther } from './instance-lock.js'
 import { state, save } from './store.js'
 import { startWhatsApp } from './whatsapp.js'
 import { runTurn, runTask, runBackground, resetHistory, compact, setSettingsUrl } from './agent.js'
 import { startJob, stopJobs, jobsText, listJobs, interruptedJobs } from './jobs.js'
-import { startScheduler } from './scheduler.js'
+import { startScheduler, newsDigest, newsInBrief } from './scheduler.js'
+import * as inbox from './inbox.js'
 import { prepare, speak } from './media.js'
 import { setLocation, isLiveUpdate } from './location.js'
 import { createOutbox } from './outbox.js'
@@ -30,8 +32,12 @@ import { backupTick } from './backup.js'
 import { humanError } from './style.js'
 import { takeProactiveSlot } from './metrics.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
+import { announceRelease } from './release-notes.js'
+import * as groups from './groups.js'
+import { groupAdders } from './group-tools.js'
 
 let reconciled = false
+import { scraplingEnabled, scraplingStatus } from './scrapling.js'
 import { exec } from 'node:child_process'
 
 if (!config.llm.apiKey || !config.llm.model) {
@@ -41,6 +47,10 @@ if (!config.llm.apiKey || !config.llm.model) {
 }
 // Open the bridge port before WhatsApp connects, so a platform health check is not waiting on the login.
 startPcBridgeServer()
+// fetch_page through Scrapling: say once at start whether it can run, so a missing venv shows in the log.
+if (scraplingEnabled()) {
+  scraplingStatus().then((s) => console.log(s.ok ? `[scrapling] זמין: Scrapling ${s.scrapling}, Python ${s.python}` : `[scrapling] לא זמין (${s.kind}): ${s.error}. fetch_page משתמש בקורא הרגיל רק כשהוא לא מותקן`))
+}
 function startCloudBrowsers() {
   if (cloudWebtopOn()) ensureCloudWebtop().catch((e) => console.log(`[webtop] ${e.message}`))
   if (cloudGoogleHomeOn()) ensureCloudBrowser('google-home').catch((e) => console.log(`[google-home] ${e.message}`))
@@ -54,19 +64,17 @@ if (config.desktop.enabled) {
 }
 
 // One assistant per data folder: two would share the WhatsApp session and answer every message twice.
+// The lock lives on the persistent disk, so a reboot can leave a PID that now belongs to tini or a browser.
+// Only a live node process running src/index.js, other than us, counts. Anything else is deleted.
 const LOCK = path.join(DATA_DIR, 'helper.lock')
 const HEALTHY = path.join(DATA_DIR, 'healthy')
-const running = (pid) => {
-  try {
-    return process.kill(pid, 0)
-  } catch (e) {
-    return e.code === 'EPERM'
+if (fs.existsSync(LOCK)) {
+  const lockedBy = Number(fs.readFileSync(LOCK, 'utf8'))
+  if (lockHeldByOther(lockedBy)) {
+    console.log(`העוזר כבר רץ (תהליך ${lockedBy}). סגור את החלון השני לפני שמפעילים שוב.`)
+    process.exit(2)
   }
-}
-const lockedBy = Number(fs.existsSync(LOCK) && fs.readFileSync(LOCK, 'utf8'))
-if (lockedBy && lockedBy !== process.pid && running(lockedBy)) {
-  console.log(`העוזר כבר רץ (תהליך ${lockedBy}). סגור את החלון השני לפני שמפעילים שוב.`)
-  process.exit(2)
+  fs.rmSync(LOCK, { force: true })
 }
 fs.writeFileSync(LOCK, String(process.pid))
 fs.rmSync(HEALTHY, { force: true })
@@ -137,6 +145,7 @@ const wa = await startWhatsApp(async (m) => {
     save()
     console.log(`צומד לצ'אט ${m.jids[0]}`)
     await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו אפשר לכתוב לי כאן.\n\n${HELP}`)
+    tellRelease()
     return
   }
   if (!isOwner(m)) return
@@ -244,11 +253,18 @@ const wa = await startWhatsApp(async (m) => {
   const quick = await fastCommand(text)
   if (quick) return wa.send(state.owner.jid, quick.reply)
   const epoch = stopEpoch
+  // From here the message waits for the model. It is logged, and a watchdog speaks up if no answer leaves.
+  const msgId = m.key?.id
+  state.inbox = inbox.received(state.inbox || [], msgId, text || (m.location ? '📍' : '[קובץ]'))
+  const settle = (how) => {
+    state.inbox = inbox.answered(state.inbox || [], msgId, how)
+    save()
+  }
   queue = queue.then(async () => {
-    if (epoch !== stopEpoch) return // stopped, or a new conversation began, while this was waiting its turn
+    if (epoch !== stopEpoch) return settle('stopped') // stopped, or a new conversation began, while this was waiting its turn
     const ac = new AbortController()
     let finish
-    activeTurn = { ac, done: new Promise((r) => (finish = r)) }
+    activeTurn = { ac, done: new Promise((r) => (finish = r)), msgId }
     wa.typing(state.owner.jid)
     // A long turn (search, several pages) outlasts one typing indicator.
     const typing = setInterval(() => wa.typing(state.owner.jid), 8000)
@@ -262,7 +278,12 @@ const wa = await startWhatsApp(async (m) => {
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
       // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      const reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
+      let reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
+      // Every message gets an answer. Nothing came back and no emoji was chosen as the answer: one short question.
+      if ((!reply?.trim() || /^SKIP\b/.test(reply.trim())) && !reacted) {
+        console.log('[agent] the model returned no answer; asking him instead of staying silent')
+        reply = inbox.NO_ANSWER
+      }
       // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
       // The text follows only when it has links, or when speech failed.
       const wantsVoice = input.voice || state.voiceMode === 'always'
@@ -270,12 +291,16 @@ const wa = await startWhatsApp(async (m) => {
       if (spoken) await wa.sendVoice(state.owner.jid, spoken)
       if (reply && (!spoken || /https?:\/\//.test(reply))) await wa.send(state.owner.jid, reply)
       answered = true
+      settle(reacted && !reply ? 'reaction' : 'reply')
     } catch (e) {
       // Stopping is the user's own doing: no warning, the "עצרתי" has already been sent.
-      if (e instanceof Aborted || ac.signal.aborted) console.log('[agent] הופסק על ידי המשתמש')
-      else {
+      if (e instanceof Aborted || ac.signal.aborted) {
+        console.log('[agent] הופסק על ידי המשתמש')
+        settle('stopped')
+      } else {
         console.log(`[agent] ${e.message}`)
-        await wa.send(state.owner.jid, humanError(e)).catch(() => {})
+        const told = await wa.send(state.owner.jid, humanError(e)).then(() => true, () => false)
+        if (told) settle('error')
       }
     } finally {
       clearInterval(typing)
@@ -286,7 +311,7 @@ const wa = await startWhatsApp(async (m) => {
     if (activeTurn?.ac === ac) activeTurn = null
     finish()
   })
-}, pairWithSelf)
+}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m), bindSync: groups.bindGroupSync })
 
 // Default pairing: the moment the QR is scanned, the assistant lives in the account's "message yourself" chat.
 // Skipped after /unpair, where the user picks a chat with the pairing code instead.
@@ -301,11 +326,17 @@ async function pairWithSelf(me) {
     reconciled = true
     monitoring.reconcile().catch((e) => console.log(`[watch] ${e.message}`))
   }
-  if (state.owner || state.manualPair) return
-  state.owner = { jid: me.jid, jids: [me.jid, me.lid].filter(Boolean), self: true, selfChat: true }
-  save()
-  console.log('מחובר לצ\'אט שלך עם עצמך. כתוב שם כדי לדבר עם העוזר.')
-  await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו כותבים לי כאן, בצ'אט שלך עם עצמך.\n\n${EXAMPLES}\n\n${HELP}`)
+  if (!state.owner && !state.manualPair) {
+    state.owner = { jid: me.jid, jids: [me.jid, me.lid].filter(Boolean), self: true, selfChat: true }
+    save()
+    console.log('מחובר לצ\'אט שלך עם עצמך. כתוב שם כדי לדבר עם העוזר.')
+    await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו כותבים לי כאן, בצ'אט שלך עם עצמך.\n\n${EXAMPLES}\n\n${HELP}`)
+  }
+  if (state.owner) tellRelease()
+}
+
+function tellRelease() {
+  announceRelease({ send: (text) => wa.send(state.owner.jid, text) }).catch((e) => console.log(`[release] ${e.message}`))
 }
 
 const sendMedia = (media) => wa.sendMedia(state.owner.jid, media)
@@ -401,7 +432,7 @@ const scheduledTask = (instruction, { noAsk = false } = {}) => {
 // The tools HELPER wrote for itself and Naor approved come back with it, each checked again before it loads.
 if (config.learning) loadUserTools().then((n) => n && console.log(`[tools] נטענו ${n} כלים שהעוזר כתב לעצמו`)).catch((e) => console.log(`[tools] ${e.message}`))
 
-const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, text), getDay })
+const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, text), getDay, news: () => (newsInBrief() ? newsDigest() : '') })
 
 // Proactive notices from the rest of the assistant. During quiet hours a non-urgent one is not held to be sent
 // on its own at 08:00: it joins the night's batch and arrives inside the one morning brief.
@@ -418,8 +449,24 @@ function notify(text, urgent = false, key) {
   return Promise.resolve()
 }
 startScheduler(notify, scheduledTask, monitoring)
+// WhatsApp groups (src/groups.js): once a minute it checks whether a round of reading is due (every
+// GROUPS_EVERY_MINUTES). Only a test, cancellation or change for today or tomorrow is sent now, through notify, so
+// quiet hours and the daily budget apply; the rest waits for the morning brief and "מה פספסתי?".
+setInterval(() => groups.tick({ notify, adders: groupAdders() }).catch((e) => console.log(`[groups] ${e.message}`)), 60000).unref()
 startVoice()
 setInterval(outbox.flush, 30000)
+// A message that waited UNANSWERED_ALERT_MIN minutes (default 5, 0 = off) with no answer gets one short note, never
+// silence: still in the queue behind a long task, or lost. The log has every message and how it was answered.
+const UNANSWERED_ALERT_MIN = process.env.UNANSWERED_ALERT_MIN === undefined || process.env.UNANSWERED_ALERT_MIN === '' ? 5 : Number(process.env.UNANSWERED_ALERT_MIN) || 0
+setInterval(() => {
+  if (!state.owner || !state.inbox?.length || !wa.connectedSince()) return
+  // Waiting on his 👍 is waiting on him, not a stuck message.
+  if (pendingConfirm) return
+  const late = inbox.overdue(state.inbox, { minutes: UNANSWERED_ALERT_MIN, busy: Boolean(activeTurn), active: activeTurn?.msgId })
+  if (!late.length) return
+  save()
+  for (const l of late) wa.send(state.owner.jid, l.text).catch((e) => console.log(`[inbox] ${e.message}`))
+}, 60000).unref()
 
 if (!state.owner) {
   if (state.manualPair) announcePairing()

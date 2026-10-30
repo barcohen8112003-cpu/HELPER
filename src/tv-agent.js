@@ -25,7 +25,11 @@ export function tvBody({ call = tvCall } = {}) {
   let wantImage = false
   const picture = async () => {
     const r = await call('capture', { width: 960 })
-    return r?.image ? { image: `data:image/jpeg;base64,${r.image}`, buffer: Buffer.from(r.image, 'base64'), mime: 'image/jpeg' } : null
+    if (!r?.image) return null
+    const buffer = Buffer.from(r.image, 'base64')
+    // The home screen sends JPEG; anything else (a PNG) is named for what it is, or the model refuses the picture.
+    const mime = buffer[0] === 0x89 && buffer[1] === 0x50 ? 'image/png' : 'image/jpeg'
+    return { image: `data:${mime};base64,${r.image}`, buffer, mime }
   }
   return {
     name: 'tv',
@@ -40,12 +44,16 @@ screen and which element has the focus, and sometimes a screenshot. Choose exact
 - {"type": "open_app", "name": "<app name>"}        e.g. Stremio, YouTube, Netflix, Disney+
 - {"type": "open_url", "url": "<link>", "app": "<app name, optional>"}   a link straight into an app
 - {"type": "restart_app", "name": "<app name>", "url": "<link, optional>"}   closes the app for real and opens it again (at the link)
+- {"type": "find", "title": "<English title>", "year": "<optional>", "kind": "movie|series"}   its IMDb id from Stremio's catalog, for a stremio:///detail link
 - {"type": "look"}                                  your next observation includes a screenshot (when the list is not enough: video, posters, a player)
 - {"type": "wait", "amount": <seconds 1-10>}`,
     tips: `Start with open_app or open_url when one fits, instead of walking menus from Home.
 Links that work: Stremio movie page stremio:///detail/movie/<imdb id>, series stremio:///detail/series/<imdb id>,
 Stremio search stremio:///search?search=<words>; YouTube https://www.youtube.com/results?search_query=<words>.
 Titles in apps are mostly in English: search "Napoleon", not "נפוליאון".
+A film or series in Stremio: first "find" it, then open_url its stremio:///detail link with app Stremio. That lands on
+its page with the sources, with no searching.
+If a select changed nothing on the screen, the element ignores clicks: move the focus to it with the arrows and press OK.
 Prefer "select" by index; when an element has no index, move the focus with the arrows and press OK.
 In Stremio, a movie page lists sources (streams); pick the first one that looks playable (higher quality is fine) and
 it starts. "Failed to connect to 127.0.0.1:11470" means Stremio's own streaming server on the TV is down: switching
@@ -55,8 +63,12 @@ Still failing, pick a source that does not need it (a debrid or HTTP one, not a 
 should unplug the TV for 10 seconds. A torrent can show only its poster for a minute or two while it buffers: wait and
 look again before deciding it failed. Playing a video, pausing, opening apps and searching never need a gate.
 Buying or renting in a store app, subscribing and deleting are commits: gate them.
-"done" once the screen shows the thing playing or open (look at a screenshot to be sure a video plays).
-Add "step": 2-4 Hebrew words of what you are doing now ("מחפש את הסרט", "בוחר מקור").`,
+A video is playing only when its time moves: look, wait 5 seconds, look again, and compare the times on the player.
+In a player, a "play" (triangle) button means it is paused and a "pause" (two bars) button means it plays; OK on that
+button switches between them, so press it only when it shows play. The media play key is often ignored: use the button.
+"done" for a video only after you saw its time move; anything else is "done" once the screen shows it.
+Write "thought", "found" and "step" in Hebrew, whatever language the screen is in (source names stay as they are).
+Add "step": 2-4 words in Hebrew (עברית, never Arabic or English) of what you are doing now ("מחפש את הסרט", "בוחר מקור").`,
     maxSteps: 35,
     commit: TV_COMMIT,
     finalShot: false,
@@ -75,6 +87,11 @@ Add "step": 2-4 Hebrew words of what you are doing now ("מחפש את הסרט"
     capture: () => picture(),
     async act(a) {
       if (a.type === 'look') return void (wantImage = true)
+      if (a.type === 'find') {
+        const { findTitle, stremioLink } = await import('./tv-tools.js')
+        const t = await findTitle(a.title, { type: a.kind === 'series' ? 'series' : 'movie', year: a.year })
+        return t ? `${t.name} (${t.year}): ${t.id}, link ${stremioLink(t)}` : `לא נמצא בקטלוג: ${a.title}`
+      }
       if (a.type === 'open_app' || a.type === 'restart_app' || (a.type === 'open_url' && a.app)) {
         const { apps = [] } = await call('apps')
         const app = matchApp(apps, a.name || a.app)
