@@ -52,6 +52,7 @@ const TESTS = [
   'src/webtop-file-selftest.js',
   'src/scrapling-selftest.js',
   'src/groups-selftest.js',
+  'src/wa-link-selftest.js',
   'src/release-notes-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
