@@ -31,6 +31,7 @@ import { getDay } from './day.js'
 import { backupTick } from './backup.js'
 import { humanError } from './style.js'
 import { takeProactiveSlot } from './metrics.js'
+import { kindOf, noticeLevel, noticeSent, noticeEngaged, parseNoticeCommand, runNoticeCommand } from './notice-learning.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 import { announceRelease } from './release-notes.js'
 import * as groups from './groups.js'
@@ -116,6 +117,7 @@ const HELP = `*פקודות*
 /model strong - עובר למודל החזק, /model default חוזר
 /unpair - מנתק את הצ'אט הזה
 /help - ההודעה הזאת
+מה אתה שולח לי - אילו הודעות יזומות נשלחות. "תפסיק לשלוח לי חדשות" משתיק, "תחזור לשלוח לי חדשות" מחזיר
 צמד טלפון <פורט> <קוד> - צימוד חד-פעמי לניפוי אלחוטי
 חבר טלפון <פורט> - חיבור לפורט של ניפוי אלחוטי. אחר כך העוזר עובר לפורט 5555 עד אתחול, גם בנתונים סלולריים
 
@@ -161,6 +163,11 @@ const wa = await startWhatsApp(async (m) => {
     }
     return
   }
+  // A message of his counts toward notices he was sent. This does not touch follow-up pacing (src/proactive.js).
+  noticeEngaged()
+  // "תפסיק לשלוח לי חדשות" / "תחזור לשלוח..." / "מה אתה שולח לי": one reply, no model.
+  const noticeCmd = parseNoticeCommand(text)
+  if (noticeCmd) return wa.send(state.owner.jid, runNoticeCommand(noticeCmd))
   // A shared location is saved, no model involved. A bare 📍 gets a 📍 back; updates of a live location get nothing.
   // With a comment ("תזמין לכאן פיצה") the message goes on to the model, which now sees the new location.
   if (m.location) {
@@ -438,8 +445,33 @@ const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, t
 // on its own at 08:00: it joins the night's batch and arrives inside the one morning brief.
 // Outside quiet hours, non-urgent notices are also capped per day (MESSAGE_BUDGET, default 6): past the cap they
 // join the next brief instead of buzzing his phone again.
-function notify(text, urgent = false, key) {
-  if (urgent || (!inQuietHours() && (key && state.sentKeys.includes(key) ? true : takeProactiveSlot()))) return outbox.notify(text, urgent, key)
+function notify(text, urgent = false, key, kindName) {
+  const kind = kindOf(key, kindName)
+  const level = noticeLevel(kind, urgent)
+  // Explicit mute, or (only with NOTICE_LEARNING=true) a kind he keeps ignoring: do not buzz him.
+  if (level === 'drop') {
+    if (key && !state.sentKeys.includes(key)) {
+      state.sentKeys = [...state.sentKeys, key].slice(-500)
+      save()
+    }
+    return Promise.resolve()
+  }
+  // Learned "quieter": same path as quiet hours, it waits for the next brief.
+  if (level === 'batch') {
+    if (key) {
+      if (state.sentKeys.includes(key)) return Promise.resolve()
+      state.sentKeys = [...state.sentKeys, key].slice(-500)
+      save()
+    }
+    monitoring.addNote(text)
+    return Promise.resolve()
+  }
+  // 'interrupt' is the previous rule: urgent always, otherwise quiet hours and the daily budget.
+  const already = Boolean(key && state.sentKeys.includes(key))
+  if (urgent || (!inQuietHours() && (already || takeProactiveSlot()))) {
+    if (!urgent && !already) noticeSent(kind)
+    return outbox.notify(text, urgent, key)
+  }
   if (key) {
     if (state.sentKeys.includes(key)) return Promise.resolve()
     state.sentKeys = [...state.sentKeys, key].slice(-500)

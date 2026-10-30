@@ -21,6 +21,7 @@
     "accept:real": "node scripts/accept-real.mjs",
     "check:accept": "node scripts/accept-selftest.mjs",
     "check:backup": "node src/backup-selftest.js",
+    "check:notices": "node src/notice-learning-selftest.js",
     "check:style": "node src/style-selftest.js",
     "check:answers": "node src/answers-selftest.js",
     "check:toolkit": "node src/toolkit/_selftest.js",
