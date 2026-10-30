@@ -566,6 +566,7 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `APP_PUBLIC_URL` | כתובת מלאה לאפליקציה, למשל `http://37.60.240.231:3210`. ריק: `http://UI_PUBLIC_HOST`, ואם גם הוא ריק אז כתובת הרשת המקומית |
 | `MAIL_HOST` / `MAIL_USER` / `MAIL_PASS` / `MAIL_POLL_MINUTES` | IMAP |
 | `SCRAPLING_ENABLED` | `true`: `fetch_page` קורא דפים ציבוריים ב-https דרך Scrapling. כבוי כברירת מחדל. התקנה וכיבוי: `py/README.md` |
+| `TEAM_MODE` | צוות חוקר ובודק לבקשת טיסה עם מגבלות. ריק = כבוי, המסלול הרגיל. `live` פועל רק עם `TEAM_MODEL` וכל ארבעת שדות העלות. ראה `src/team/README.md` |
 | `TAVILY_API_KEY` | חיפוש טוב יותר מ-DuckDuckGo (לא חובה) |
 | `TRAVELPAYOUTS_TOKEN` | טיסות: התאריכים והיעדים הזולים בטווח (חינם, travelpayouts.com) |
 | `DUFFEL_TOKEN` | טיסות: הצעות חיות עם שעות, עצירות וקונקשן (duffel.com) |
@@ -609,6 +610,8 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `node src/dashboard/_selftest.js` | הדשבורד, כולל ניסיונות הזרקת קוד |
 | `npm run check:pc-bridge` | גשר המחשב הביתי: חתימה, שידור חוזר, מחשב מנותק, וסירוב אישור |
 | `npm run check:scrapling` | fetch_page עם Scrapling: Node -> Python -> JSON, timeout, עצירה, מקביליות, חסימת כתובות פרטיות ומסלול הבוט מול מודל מזויף |
+| `npm run check:team` | הצוות (חוקר ובודק) עם מודל ומתאם טיסות מדומים: דגל כבוי, בקשה פשוטה, שאלת הבהרה אחת, נעילת הקונקשן, פסילה לפי הנתונים, כפילות, כלי אסור, timeout, עצירה, כשל, תקציב, אתחול מחדש |
+| `npm run demo:team` | ההדגמה עם תמליל האירועים: מי קיבל מה, איזו אפשרות נפסלה ולמה, ומה המשתמש קיבל (נתוני בדיקה) |
 | `npm run check:scrapling-py` | ה-worker של Scrapling עצמו (צריך `.venv-scrapling`, ראה `py/README.md`): DNS, הפניות, robots.txt, 401/403, מגבלת גודל |
 
 ### רשימת בדיקות להרצה ראשונה

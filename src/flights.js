@@ -382,6 +382,8 @@ export async function findFlights(args, ctx = {}) {
   }
 
   const text = options.map(optionText).join('\n\n')
+  // The team (src/team/conductor.js) checks the offers themselves, not a retelling of them, and sends no picture.
+  if (ctx.structured) return { text, options }
   let sent = false
   if (ctx.sendMedia) {
     const png = renderer && await renderer(cardHtml(options, title), 70 + options.reduce((h, o) => h + (o.legs ? 60 + o.legs.length * 82 : 120), 0))

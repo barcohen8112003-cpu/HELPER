@@ -72,7 +72,26 @@ async function request(body, signal) {
   const msg = data.choices?.[0]?.message
   if (!msg) throw new Error('תשובה ריקה מהמודל')
   health.okAt = Date.now()
+  if (body._usage) body._usage.value = data.usage
   return msg
+}
+
+// Exactly one request to exactly one model: no waiting, no retry, no other model. For the team (src/team/), whose
+// budget is reserved per call and must not grow behind its back. Returns { message, usage }.
+export async function llmOnce({ messages, tools, model, maxTokens, signal }) {
+  if (!config.llm.apiKey || !model) throw new Error('חסר LLM_API_KEY או מודל לצוות')
+  if (signal?.aborted) throw new Aborted()
+  const usage = {}
+  const body = { model, messages, max_completion_tokens: maxTokens }
+  if (tools?.length) Object.assign(body, { tools, tool_choice: 'auto' })
+  Object.defineProperty(body, '_usage', { value: usage, enumerable: false })
+  try {
+    const message = await request(body, signal)
+    return { message, usage: usage.value }
+  } catch (e) {
+    if (signal?.aborted) throw new Aborted()
+    throw e
+  }
 }
 
 // Any OpenAI-compatible chat completions endpoint. Returns the assistant message object.

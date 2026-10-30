@@ -28,6 +28,7 @@ import { learnFrom } from './memory-learn.js'
 import { agentRules, planBlock, looksLikeGoal, needsVerify, verifyPrompt, planText, savedPlan, keepPlan, clearPlan } from './planner.js'
 import { proactiveRules, loopsBlock, noteUserMessage } from './proactive.js'
 import { checkLinks } from './links.js'
+import { conduct } from './team/conductor.js'
 
 const MAX_HISTORY = 60
 // In light mode the whole request has to fit a few thousand tokens, so history is folded much sooner.
@@ -449,6 +450,16 @@ export async function runTurn(userText, ctx, image) {
   // He wrote: Helper's own messages are being answered, and he is in the conversation right now.
   noteUserMessage()
   try {
+    // The team (src/team/conductor.js, off unless TEAM_MODE is set): a request it takes is answered by it, once.
+    // null = not a team request, and the turn goes on exactly as before.
+    const team = await conduct(userText, { ...ctx, image: Boolean(image) })
+    if (team) {
+      state.history.push({ role: 'assistant', content: team.reply })
+      recordTurn({ ms: Date.now() - started, tools: 0, model: 'team' })
+      trimHistory()
+      save()
+      return team.reply
+    }
     let reply = await converse(state.history, ctx)
     // A link that no tool opened this turn is opened once before it goes out; a dead one is taken out (src/links.js).
     const checked = await checkLinks(reply, seenThisTurn(mark)).catch(() => reply)
@@ -510,6 +521,7 @@ export function resetHistory() {
   state.history = []
   state.summary = ''
   state.modelOverride = ''
+  if (state.team) state.team.pending = null
   clearPlan()
   save()
 }
