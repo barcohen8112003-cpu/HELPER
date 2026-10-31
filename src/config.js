@@ -108,7 +108,9 @@ const build = () => ({
   // travelpayouts.com. Duffel: live offers with times, stops and layovers for exact dates, token from duffel.com.
   flights: {
     travelpayoutsToken: env('TRAVELPAYOUTS_TOKEN'),
-    duffelToken: env('DUFFEL_TOKEN'),
+    // A duffel_test_ token answers with made-up flights ("Duffel Airways"), so it is ignored unless DUFFEL_ALLOW_TEST=true.
+    duffelToken: liveDuffelToken(env('DUFFEL_TOKEN'), env('DUFFEL_ALLOW_TEST') === 'true'),
+    duffelTestIgnored: env('DUFFEL_TOKEN').startsWith('duffel_test_') && env('DUFFEL_ALLOW_TEST') !== 'true',
     currency: env('FLIGHTS_CURRENCY', 'usd').toLowerCase(),
     home: env('FLIGHTS_HOME', 'TLV').toUpperCase(),
   },
@@ -274,6 +276,8 @@ const build = () => ({
     url: env('PC_BRIDGE_URL'),
   },
 })
+
+export const liveDuffelToken = (token, allowTest = false) => (String(token || '').startsWith('duffel_test_') && !allowTest ? '' : String(token || ''))
 
 export const config = build()
 

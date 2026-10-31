@@ -148,5 +148,14 @@ config.flights.duffelToken = 'duffel_test_x'
   } else console.log('skip: no Chrome/Chromium to render the card')
 }
 
+// ── a Duffel test token never answers as if it were real ──────────────────────
+{
+  const { liveDuffelToken } = await import('./config.js')
+  ok(liveDuffelToken('duffel_test_abc') === '', 'a duffel_test_ token is ignored')
+  ok(liveDuffelToken('duffel_test_abc', true) === 'duffel_test_abc', 'DUFFEL_ALLOW_TEST=true keeps it')
+  ok(liveDuffelToken('duffel_live_abc') === 'duffel_live_abc', 'a live token is used')
+  ok(liveDuffelToken(undefined) === '', 'no token stays empty')
+}
+
 console.log(`${failed ? 'FAILED' : 'OK'}: ${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
