@@ -112,6 +112,14 @@ const build = () => ({
     currency: env('FLIGHTS_CURRENCY', 'usd').toLowerCase(),
     home: env('FLIGHTS_HOME', 'TLV').toUpperCase(),
   },
+  // Places to stay (src/stays.js): SerpApi's Google Hotels API, hotels and vacation rentals. 250 free searches a
+  // month at serpapi.com.
+  stays: {
+    serpapiKey: env('SERPAPI_KEY'),
+    currency: env('STAYS_CURRENCY', 'ILS').toUpperCase(),
+  },
+  // YouTube search through the official Data API (src/youtube.js). Empty = read the results page as before.
+  youtubeKey: env('YOUTUBE_API_KEY'),
   // Each message gets only the tools and instructions of the areas it is about (src/domains.js). off = every tool, always.
   routing: env('TOOL_ROUTING', 'on') !== 'off',
   // Speech can live on a different provider than the chat model; it defaults to the same one.
