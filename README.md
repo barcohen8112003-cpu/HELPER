@@ -573,6 +573,9 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `JINA_API_KEY` | קריאת דפים מהירה יותר דרך Jina Reader (לא חובה, עובד גם בלי) |
 | `TRAVELPAYOUTS_TOKEN` | טיסות: התאריכים והיעדים הזולים בטווח (חינם, travelpayouts.com) |
 | `DUFFEL_TOKEN` | טיסות: הצעות חיות עם שעות, עצירות וקונקשן (duffel.com) |
+| `SERPAPI_KEY` | לינה: מלונות ודירות נופש עם מחירים, דירוג ותמונה (SerpApi Google Hotels, 250 חיפושים בחודש בחינם) |
+| `STAYS_CURRENCY` | מטבע המחירים בלינה (ברירת מחדל ILS) |
+| `YOUTUBE_API_KEY` | חיפוש ביוטיוב דרך ה-API הרשמי (חינם). ריק = קריאת דף התוצאות |
 | `TOOL_ROUTING` | `off` = כל הכלים בכל הודעה (ברירת מחדל: רק התחומים שההודעה עוסקת בהם) |
 | `GITHUB_TOKEN` | קריאה בלבד מ-GitHub |
 | `COMPUTER_MODE` | `off` / `ask` / `auto` |

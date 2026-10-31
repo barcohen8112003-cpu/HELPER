@@ -427,3 +427,4 @@ export const flightTools = [
 
 export const _render = (html, height) => renderPng(html, height)
 export const _test = { offerCard, fitsLimits, optionText, monthsIn, nightsBetween, PLACES }
+export { renderPng }

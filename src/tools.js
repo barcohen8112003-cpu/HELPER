@@ -36,6 +36,8 @@ import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claud
 import { tvTools } from './tv-tools.js'
 import { routed, searchDomains, DOMAINS, domainLabel } from './domains.js'
 import { flightTools } from './flights.js'
+import { stayTools } from './stays.js'
+import { youtubeTools } from './youtube.js'
 import { planTool } from './planner.js'
 import { loopTool } from './proactive.js'
 import { birdEnabled, sendWhatsAppTemplate, sendWhatsAppText, toE164, templateParams } from './bird.js'
@@ -704,6 +706,8 @@ tools.push(...googleTools)
 tools.push(...groupTools)
 // Real flight search: cheapest dates in a range, live offers, a picture of the results (src/flights.js).
 tools.push(...flightTools)
+// Hotels and vacation rentals with real prices and a picture (src/stays.js). YouTube search by API (src/youtube.js).
+tools.push(...stayTools, ...youtubeTools)
 tools.push(...pcTools)
 tools.push(...memoryTools, ...skillTools, ...builderTools, ...auditTools)
 setCoreNameCheck(() => tools.map((t) => t.name))
