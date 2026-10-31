@@ -59,6 +59,7 @@ const TESTS = [
   'src/bird-selftest.js',
   'src/opendata-selftest.js',
   'src/shopping-selftest.js',
+  'src/team-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

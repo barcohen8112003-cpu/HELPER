@@ -220,6 +220,22 @@ const build = () => ({
     showPlan: ['on', '1', 'true', 'yes'].includes(env('AGENT_SHOW_PLAN').toLowerCase()),
     maxSteps: Number(env('AGENT_MAX_STEPS')) > 0 ? Math.max(6, Math.min(40, Number(env('AGENT_MAX_STEPS')))) : 0,
   },
+  // The team (src/team/conductor.js): a researcher and a checker for a request that benefits from them. Off by
+  // default; TEAM_MODE=off (or unset) is the old path exactly. TEAM_MODE=mock runs the roles on a scripted model,
+  // for tests only. TEAM_MODE=live runs them on TEAM_MODEL, and only when every cost setting below is filled in:
+  // a model's price and a cap per request and per day that the owner approved. One missing = the team stays off.
+  team: {
+    mode: ['live', 'mock'].includes(env('TEAM_MODE').toLowerCase()) ? env('TEAM_MODE').toLowerCase() : 'off',
+    model: env('TEAM_MODEL'),
+    maxModelCalls: Math.max(1, Math.min(4, Number(env('TEAM_MAX_MODEL_CALLS', '4')) || 4)),
+    maxInTokens: Math.max(1000, Math.min(12000, Number(env('TEAM_MAX_IN_TOKENS', '12000')) || 12000)),
+    maxOutTokens: Math.max(256, Math.min(4000, Number(env('TEAM_MAX_OUT_TOKENS', '4000')) || 4000)),
+    deadlineMs: Math.max(5000, Math.min(90000, Number(env('TEAM_DEADLINE_SECONDS', '90')) * 1000 || 90000)),
+    priceInPerMTok: Number(env('TEAM_PRICE_IN_PER_MTOK')) || 0,
+    priceOutPerMTok: Number(env('TEAM_PRICE_OUT_PER_MTOK')) || 0,
+    maxUsdPerRequest: Number(env('TEAM_MAX_USD_PER_REQUEST')) || 0,
+    maxUsdPerDay: Number(env('TEAM_MAX_USD_PER_DAY')) || 0,
+  },
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
   // GEMINI_CLOUD: Gemini as one more Chromium on the cloud desktop (signed in there once). On by default when the

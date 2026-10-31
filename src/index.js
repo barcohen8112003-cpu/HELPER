@@ -40,6 +40,7 @@ import { groupAdders } from './group-tools.js'
 let reconciled = false
 import { scraplingEnabled, scraplingStatus } from './scrapling.js'
 import { exec } from 'node:child_process'
+import { recoverTeam, teamStatus } from './team/conductor.js'
 
 if (!config.llm.apiKey || !config.llm.model) {
   console.log('חסר LLM_API_KEY או LLM_MODEL. העתק את .env.example ל-.env ומלא אותם.')
@@ -48,6 +49,9 @@ if (!config.llm.apiKey || !config.llm.model) {
 }
 // Open the bridge port before WhatsApp connects, so a platform health check is not waiting on the login.
 startPcBridgeServer()
+// The team (src/team/): a run cut off by the last stop is marked unclear, never run again on its own.
+if (recoverTeam()) console.log('[team] a team run was cut off by the last stop; marked unclear, not repeated')
+if (config.team.mode !== 'off') console.log(`[team] ${teamStatus()}`)
 // fetch_page through Scrapling: say once at start whether it can run, so a missing venv shows in the log.
 if (scraplingEnabled()) {
   scraplingStatus().then((s) => console.log(s.ok ? `[scrapling] זמין: Scrapling ${s.scrapling}, Python ${s.python}` : `[scrapling] לא זמין (${s.kind}): ${s.error}. fetch_page משתמש בקורא הרגיל רק כשהוא לא מותקן`))
@@ -285,7 +289,7 @@ const wa = await startWhatsApp(async (m) => {
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
       // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      let reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background }, input.image)
+      let reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background, msgId }, input.image)
       // Every message gets an answer. Nothing came back and no emoji was chosen as the answer: one short question.
       if ((!reply?.trim() || /^SKIP\b/.test(reply.trim())) && !reacted) {
         console.log('[agent] the model returned no answer; asking him instead of staying silent')
