@@ -1,27 +1,31 @@
-// Price comparison through SerpApi's Google Shopping API: one call instead of a browser walking zap and shops.
-// Key: SERPAPI_KEY (the same key as places to stay; 250 free searches a month at serpapi.com).
-// Without a key, compare_prices falls back to the agent browser as before.
+// Price comparison through a Google Shopping API: one call instead of a browser walking zap and shops.
+// Either provider works, with the same answer shape:
+//   SEARCHAPI_KEY  searchapi.io (key sent in the Authorization header)
+//   SERPAPI_KEY    serpapi.com (the same key as places to stay; 250 free searches a month)
+// SearchApi is used when both are set. Without a key, compare_prices falls back to the agent browser as before.
 
 const T = 20000
 
-export const shoppingEnabled = () => Boolean(process.env.SERPAPI_KEY)
+export const shoppingProvider = () => (process.env.SEARCHAPI_KEY ? 'searchapi' : process.env.SERPAPI_KEY ? 'serpapi' : '')
+export const shoppingEnabled = () => Boolean(shoppingProvider())
 
 let http = (url, opts) => fetch(url, { ...opts, signal: AbortSignal.timeout(T) })
 export const _setHttpForTest = (fn) => {
   http = fn
 }
 
-export function shoppingUrl(query, { country = 'il', key = process.env.SERPAPI_KEY } = {}) {
+export function shoppingUrl(query, { country = 'il', key = process.env.SERPAPI_KEY, provider = 'serpapi' } = {}) {
   const q = String(query ?? '').trim()
   if (!q) throw new Error('חסר מה לחפש')
-  const p = new URLSearchParams({ engine: 'google_shopping', q, api_key: key || '', num: '40' })
+  const p = new URLSearchParams({ engine: 'google_shopping', q, num: '40' })
+  if (provider === 'serpapi') p.set('api_key', key || '')
   if (country === 'il') {
     p.set('gl', 'il')
     p.set('hl', 'iw')
     p.set('google_domain', 'google.co.il')
     p.set('location', 'Israel')
   }
-  return `https://serpapi.com/search.json?${p}`
+  return provider === 'searchapi' ? `https://www.searchapi.io/api/v1/search?${p}` : `https://serpapi.com/search.json?${p}`
 }
 
 const USED = /refurb|renewed|pre-?owned|\bused\b|second[- ]hand|open box|מחודש|משומש|יד שנייה/i
@@ -37,8 +41,8 @@ export function normalize(r) {
     title: String(r.title).slice(0, 120),
     price,
     priceText: String(r.price ?? price),
-    oldPrice: Number(r.extracted_old_price) || null,
-    shop: r.source || '',
+    oldPrice: Number(r.extracted_old_price ?? r.extracted_original_price) || null,
+    shop: r.source || r.seller || r.merchant?.name || '',
     delivery: r.delivery || '',
     rating: r.rating ?? null,
     reviews: r.reviews ?? null,
@@ -68,19 +72,22 @@ export function rank(results, { includeUsed = false, budget } = {}) {
 }
 
 export async function searchShopping(query, { includeUsed = false, budget, country = 'il' } = {}) {
-  const res = await http(shoppingUrl(query, { country }))
+  const provider = shoppingProvider() || 'serpapi'
+  const name = provider === 'searchapi' ? 'SearchApi' : 'SerpApi'
+  const headers = provider === 'searchapi' ? { authorization: `Bearer ${process.env.SEARCHAPI_KEY}` } : {}
+  const res = await http(shoppingUrl(query, { country, provider }), { headers })
   const body = await res.text()
   let d
   try {
     d = JSON.parse(body)
   } catch {
-    throw new Error(`SerpApi החזיר תשובה לא תקינה (${res.status})`)
+    throw new Error(`${name} החזיר תשובה לא תקינה (${res.status})`)
   }
   if (!res.ok || d.error) {
     const msg = String(d.error || res.status)
-    if (/run out|limit|quota/i.test(msg)) throw new Error('נגמרה המכסה החודשית של SerpApi')
-    if (/invalid api key/i.test(msg)) throw new Error('מפתח SerpApi לא תקין')
-    throw new Error(`SerpApi: ${msg.slice(0, 160)}`)
+    if (/run out|limit|quota|credits/i.test(msg) || res.status === 429) throw new Error(`נגמרה המכסה של ${name}`)
+    if (/invalid api key|unauthori[sz]ed|api key/i.test(msg) || res.status === 401) throw new Error(`מפתח ${name} לא תקין`)
+    throw new Error(`${name}: ${msg.slice(0, 160)}`)
   }
   return rank(d.shopping_results, { includeUsed, budget })
 }

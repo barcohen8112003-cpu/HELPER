@@ -12,6 +12,7 @@ const sh = await import('./shopping.js')
 
 // the request
 delete process.env.SERPAPI_KEY
+delete process.env.SEARCHAPI_KEY
 assert.equal(sh.shoppingEnabled(), false)
 const u = new URL(sh.shoppingUrl('אוזניות סוני', { key: 'k123' }))
 assert.equal(u.searchParams.get('engine'), 'google_shopping')
@@ -70,6 +71,24 @@ const out = await cp.run({ goal: 'iPhone 16', budget: '₪3,000' }, {})
 assert.match(asked, /engine=google_shopping/)
 assert.match(out, /Google Shopping, "iPhone 16"/)
 assert.match(out, /Do not say you ordered or paid/)
+
+// SearchApi.io: same answer shape, key in the Authorization header and never in the URL
+process.env.SEARCHAPI_KEY = 'sa-key'
+assert.equal(sh.shoppingProvider(), 'searchapi')
+let seen = {}
+sh._setHttpForTest(async (url, opts) => {
+  seen = { url: String(url), auth: opts?.headers?.authorization }
+  return new Response(JSON.stringify({ shopping_results: [{ title: 'Sony WH-1000XM6', price: '₪1,299', extracted_price: 1299, seller: 'KSP', extracted_original_price: 1499, product_link: 'https://example.com/p' }] }), { status: 200 })
+})
+const sa = await sh.searchShopping('אוזניות סוני')
+assert.match(seen.url, /^https:\/\/www\.searchapi\.io\/api\/v1\/search\?engine=google_shopping/)
+assert.ok(!seen.url.includes('sa-key'), 'the key is not in the URL')
+assert.equal(seen.auth, 'Bearer sa-key')
+assert.equal(sa.main[0].shop, 'KSP')
+assert.equal(sa.main[0].oldPrice, 1499)
+answer(401, { error: 'Unauthorized' })
+await assert.rejects(sh.searchShopping('x'), /מפתח SearchApi לא תקין/)
+delete process.env.SEARCHAPI_KEY
 
 delete process.env.SERPAPI_KEY
 console.log('shopping: הכול תקין')
