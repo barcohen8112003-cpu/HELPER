@@ -19,6 +19,7 @@ import { groupTools } from './group-tools.js'
 import { useComputer, runErrand, runOnPhone } from './computer-use.js'
 import { phoneAppConnected } from './phone-app.js'
 import { errandBrowserEnabled } from './errand-browser.js'
+import { shoppingEnabled, searchShopping, formatOffers } from './shopping.js'
 import { extendedTools, categories, searchTools, setCoreNameCheck } from './toolkit/registry.js'
 import { addFact, removeFact, CATEGORIES } from './memory.js'
 import { memoryTools } from './memory-tools.js'
@@ -666,17 +667,29 @@ ${await askGemini(question)}`
   },
   {
     name: 'compare_prices',
-    enabled: errandBrowserEnabled,
-    description: 'סקר שוק בלבד, בלי סל ובלי קופה: מוצא את האפשרות הזולה ביותר לאותו דגם. מתחיל באתר השוואת מחירים (זאפ לישראל, וגם Google Shopping), בודק 3-5 חנויות, ומשווה מחיר סופי כולל משלוח, אמינות מוכר וזמן אספקה. מחזיר רשימה מדורגת בעברית עם מחירים וקישורים. אם המשתמש ביקש גם להזמין, אחרי הרשימה קוראים ל-run_errand.',
+    enabled: () => shoppingEnabled() || errandBrowserEnabled(),
+    description: 'סקר שוק בלבד, בלי סל ובלי קופה: מוצא את האפשרות הזולה ביותר לאותו דגם. קודם Google Shopping דרך API (תשובה בשניות), ורק אם אין תוצאות - דפדפן הסוכן בזאפ ו-3-5 חנויות. מחזיר רשימה מדורגת בעברית עם מחירים, חנות, משלוח וקישורים. אם המשתמש ביקש גם להזמין, אחרי הרשימה קוראים ל-run_errand.',
     parameters: obj(
       {
         goal: str('מה להשוות, במילים של המשתמש, כולל הדגם אם נאמר'),
         budget: str('תקציב מקסימלי עם מטבע, אם נאמר'),
         location: str('עיר או כתובת למשלוח, אם רלוונטי'),
+        include_used: { type: 'boolean', description: 'true רק אם ביקש גם מחודש או משומש' },
       },
       ['goal']
     ),
-    async run({ goal, budget, location }, ctx) {
+    async run({ goal, budget, location, include_used }, ctx) {
+      if (shoppingEnabled()) {
+        try {
+          const max = Number(String(budget ?? '').replace(/[^\d.]/g, '')) || undefined
+          const found = await searchShopping(goal, { includeUsed: include_used === true, budget: max })
+          const text = formatOffers(found, goal)
+          if (found.main.length) return `${text}\n[Reply in Hebrew with the ranked list: shop, price, delivery, link. Prices are from Google Shopping; shipping may be extra and should be checked on the shop page. Do not say you ordered or paid.]`
+          if (!errandBrowserEnabled()) return text || `Google Shopping לא מצא הצעות ל-"${goal}". [Ask him for a more exact model name.]`
+        } catch (e) {
+          if (!errandBrowserEnabled()) return `השוואת המחירים נכשלה: ${e.message}`
+        }
+      }
       const constraints = [budget && `budget: ${budget}`, location && `location: ${location}`, 'survey only: compare prices, do not add to cart or check out'].filter(Boolean).join('; ')
       const result = await runErrand(goal, constraints, ctx, { survey: true })
       return `${result}\n[Reply in Hebrew with the ranked list: shop, total including shipping, delivery, link. Do not say you ordered or paid.]`
@@ -848,7 +861,7 @@ const BRIEF = {
   use_computer: 'Autonomous mouse and keyboard agent to operate the PC step by step (requires user approval).',
   run_on_phone: 'Do any task on the user\'s phone end to end through the HELPER app: order a ride, send a WhatsApp, set an alarm, navigate, read notifications. It picks every step itself. Setting an alarm, opening an app or reading the screen does not ask. It asks him with a screenshot only before paying, ordering, sending, calling or deleting; do not ask first. When the app is connected this is the only phone tool. Returns DONE, NEED_USER, DENIED, STOPPED or FAIL.',
   run_errand: 'Order, book or buy in your own browser. For the cheapest product, compare_prices first unless he already asked to order. Before paying or ordering it asks him with a screenshot. Prefer PayPal; he has a debit/prepaid card only, no credit card. Returns DONE, NEED_USER, DENIED or FAIL.',
-  compare_prices: 'Market survey only: cheapest exact model. Start at zap.co.il (Israel) and Google Shopping, then 3-5 shops. Compare total INCLUDING shipping, seller and delivery. Ranked Hebrew list with prices and links. Never a cart or checkout.',
+  compare_prices: 'Market survey only: cheapest exact model. Google Shopping API first (seconds); the browser on zap.co.il and 3-5 shops only when it finds nothing. Compare total INCLUDING shipping, seller and delivery. Ranked Hebrew list with prices and links. Never a cart or checkout.',
 }
 
 // Parameter notes are dropped too, except the ones that fix a format the model could not guess.
