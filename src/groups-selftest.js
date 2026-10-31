@@ -273,7 +273,9 @@ ok(lightDef.description.includes('read = the actual text written in a group'), '
 ok(lightDef.parameters.properties.action.enum.includes('read'), 'light mode still offers the read action')
 cfg.llm.light = wasLight
 const askedAt = groups.load().lastAsked
-ok((await tool.run({ action: 'read', group: 'י6', query: 'בוחן' }, {})).includes('בוחן פתע'), 'the tool action read returns the stored text')
+// The tool reads back from the real clock, and these messages are dated at the fixed NOW: widen the window to reach them.
+const sinceNowHours = Math.ceil((Date.now() - NOW) / 3600000) + 48
+ok((await tool.run({ action: 'read', group: 'י6', query: 'בוחן', hours: sinceNowHours }, {})).includes('בוחן פתע'), 'the tool action read returns the stored text')
 ok(groups.load().lastAsked === askedAt, 'read does not mark that he asked what he missed')
 
 fs.rmSync(tmp, { recursive: true, force: true })
