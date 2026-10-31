@@ -57,6 +57,7 @@ const TESTS = [
   'src/release-notes-selftest.js',
   'src/bird-selftest.js',
   'src/opendata-selftest.js',
+  'src/shopping-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 
