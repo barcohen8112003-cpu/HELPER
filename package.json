@@ -57,7 +57,8 @@
     "check:scrapling-py": "node scripts/scrapling-py-test.mjs",
     "check:bird": "node src/bird-selftest.js",
     "check:opendata": "node src/opendata-selftest.js",
-    "check:shopping": "node src/shopping-selftest.js"
+    "check:shopping": "node src/shopping-selftest.js",
+    "check:stays": "node src/stays-selftest.js"
   },
   "dependencies": {
     "@messagebird/sdk": "^0.107.0",

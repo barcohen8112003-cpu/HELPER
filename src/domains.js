@@ -28,8 +28,8 @@ export const DOMAINS = [
   {
     id: 'travel',
     label: 'טיסות וחופשות',
-    has: named('find_flights'),
-    words: /טיס|לטוס|טסים|חופש(ה|ות)? ב?חו"?ל|חו"ל|נופש|יעד|מלון|דיל|כרטיס(י)? טיסה|flight|fly|trip|vacation|hotel|airline|נתב"ג|רמון/i,
+    has: named('find_flights', 'find_stays'),
+    words: /לינה|ללון|לישון ב|צימר|airbnb|אייר ?בי ?אנ ?בי|בוקינג|booking|הוסטל|hostel|אכסני|דיר(ה|ת) נופש|וילה|טיס|לטוס|טסים|חופש(ה|ות)? ב?חו"?ל|חו"ל|נופש|יעד|מלון|דיל|כרטיס(י)? טיסה|flight|fly|trip|vacation|hotel|airline|נתב"ג|רמון/i,
   },
   {
     id: 'shopping',
@@ -60,6 +60,12 @@ export const DOMAINS = [
     label: 'המחשב בבית',
     has: either(starts('pc_'), named('run_command', 'read_file', 'write_file', 'use_computer', 'open', 'play_youtube', 'wake_pc', 'play_spotify')),
     words: /מחשב|מסך|מסכים|ווליום|עוצמ|תנמיך|תגביר|שיר|ספוטיפ|spotify|יוטיוב|youtube|תפתח|תסגור|תכבה|תדליק|לילה טוב|הולך לישון|מצב לילה|נעיל|תנעל|קובץ|קבצים|צילום מסך|מצלמ|טאב|לשונית|התקן|תוכנ|הורדות|תנגן|תשים|טיימר|לוח העתקה|תקליד|pc|windows/i,
+  },
+  {
+    id: 'youtube',
+    label: 'יוטיוב: חיפוש סרטונים',
+    has: named('youtube_search'),
+    words: /יוטיוב|youtube|סרטון|קליפ|הדרכה בווידאו|וידאו של/i,
   },
   {
     id: 'phone',
