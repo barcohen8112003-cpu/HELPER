@@ -38,7 +38,7 @@ export function parseFeed(xml, max = 5) {
   })
 }
 
-async function geo(place) {
+export async function geo(place) {
   const name = String(need(place, 'שם מקום')).trim()
   const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${enc(name)}&count=1&language=he`, { timeoutMs: T })
   const r = d?.results?.[0]
