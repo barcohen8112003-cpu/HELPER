@@ -567,6 +567,7 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `MAIL_HOST` / `MAIL_USER` / `MAIL_PASS` / `MAIL_POLL_MINUTES` | IMAP |
 | `SCRAPLING_ENABLED` | `true`: `fetch_page` קורא דפים ציבוריים ב-https דרך Scrapling. כבוי כברירת מחדל. התקנה וכיבוי: `py/README.md` |
 | `TAVILY_API_KEY` | חיפוש טוב יותר מ-DuckDuckGo (לא חובה) |
+| `JINA_API_KEY` | קריאת דפים מהירה יותר דרך Jina Reader (לא חובה, עובד גם בלי) |
 | `TRAVELPAYOUTS_TOKEN` | טיסות: התאריכים והיעדים הזולים בטווח (חינם, travelpayouts.com) |
 | `DUFFEL_TOKEN` | טיסות: הצעות חיות עם שעות, עצירות וקונקשן (duffel.com) |
 | `TOOL_ROUTING` | `off` = כל הכלים בכל הודעה (ברירת מחדל: רק התחומים שההודעה עוסקת בהם) |

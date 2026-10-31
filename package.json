@@ -55,7 +55,8 @@
     "check:release": "node src/release-notes-selftest.js",
     "check:scrapling": "node src/scrapling-selftest.js",
     "check:scrapling-py": "node scripts/scrapling-py-test.mjs",
-    "check:bird": "node src/bird-selftest.js"
+    "check:bird": "node src/bird-selftest.js",
+    "check:opendata": "node src/opendata-selftest.js"
   },
   "dependencies": {
     "@messagebird/sdk": "^0.107.0",
