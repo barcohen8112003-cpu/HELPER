@@ -56,6 +56,7 @@
     "check:scrapling": "node src/scrapling-selftest.js",
     "check:scrapling-py": "node scripts/scrapling-py-test.mjs",
     "check:bird": "node src/bird-selftest.js",
+    "check:discord": "node src/discord-selftest.js",
     "check:opendata": "node src/opendata-selftest.js",
     "check:shopping": "node src/shopping-selftest.js",
     "check:stays": "node src/stays-selftest.js",
