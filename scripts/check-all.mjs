@@ -57,6 +57,7 @@ const TESTS = [
   'src/wa-link-selftest.js',
   'src/release-notes-selftest.js',
   'src/bird-selftest.js',
+  'src/discord-selftest.js',
   'src/opendata-selftest.js',
   'src/shopping-selftest.js',
   'src/team-selftest.js',

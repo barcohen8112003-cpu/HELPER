@@ -293,6 +293,8 @@ const build = () => ({
     proxy: env('PHONE_PROXY'),
     mode: ['off', 'ask', 'ask-writes', 'ask-all', 'auto'].includes(env('PHONE_MODE', 'ask')) ? env('PHONE_MODE', 'ask') : 'ask',
   },
+  // Discord, built in (src/discord.js): the bot's token, and optionally the owner's Discord user id.
+  discord: { token: env('DISCORD_TOKEN'), ownerId: env('DISCORD_OWNER_ID') },
   // Home PC bridge (src/pc-bridge.js). The cloud listens; the Windows PC dials out. Empty secret = computer tools stay local-only.
   pcBridge: {
     secret: env('PC_BRIDGE_SECRET'),

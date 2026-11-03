@@ -27,6 +27,7 @@ import { metricsSummary } from './metrics.js'
 import { handleTvUpgrade } from './tv-app.js'
 import { handleBirdWebhook } from './bird.js'
 import { fastCommand } from './fast-commands.js'
+import { discordStatus } from './discord.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
@@ -41,11 +42,14 @@ const MAX_SPEECH_BODY = 1_500_000
 const SECRETS = ['LLM_API_KEY', 'LLM_BACKUP_API_KEY', 'ELEVENLABS_API_KEY', 'GITHUB_TOKEN', 'GOOGLE_CLIENT_SECRET', 'MAIL_PASS', 'TAVILY_API_KEY', 'TRAVELPAYOUTS_TOKEN', 'DUFFEL_TOKEN', 'SERPAPI_KEY', 'YOUTUBE_API_KEY', 'VOICE_API_KEY', 'GEMINI_API_KEY', 'BACKUP_PASSPHRASE', 'CLAUDE_CODE_OAUTH_TOKEN', 'BIRD_API_KEY', 'BIRD_WEBHOOK_SECRET']
 // Price comparison (src/shopping.js), kept on its own line.
 SECRETS.push('SEARCHAPI_KEY')
+// The built-in Discord bot (src/discord.js).
+SECRETS.push('DISCORD_TOKEN')
 const PLAIN = [
   'LLM_BASE_URL', 'LLM_MODEL', 'LLM_BACKUP_BASE_URL', 'LLM_BACKUP_MODEL', 'LLM_CHEAP_MODEL', 'LLM_STRONG_MODEL', 'LLM_FALLBACK_MODEL', 'LLM_LIGHT', 'IMAGE_MODEL',
   'GEMINI_MODEL', 'BIRD_ENABLED', 'BIRD_WHATSAPP_FROM', 'BIRD_OWNER_NUMBER', 'BACKUP_GOOGLE_ACCOUNT', 'BOT_NAME', 'QUIET_HOURS', 'DAILY_BRIEF_TIME', 'NEWS_BRIEF_TIME', 'NEWS_FEEDS', 'TIMEZONE', 'COMPUTER_MODE',
   'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
   'MAIL_HOST', 'MAIL_USER', 'MAIL_POLL_MINUTES', 'CALENDAR_ICS_URL', 'WEEKLY_REVIEW_TIME', 'MESSAGE_BUDGET', 'LLM_PRICES', 'MONTHLY_COST_LIMIT',
+  'DISCORD_OWNER_ID',
 ]
 // Read once at startup, so a change only takes effect after a restart.
 const NEEDS_RESTART = ['TIMEZONE', 'LLM_LIGHT', 'MAIL_HOST', 'MAIL_USER', 'MAIL_PASS']
@@ -119,6 +123,8 @@ function liveSources(googleLive) {
     out.push({ label: `גיבוי ל-Drive (${backupAccount()})`, ok: b.lastOk || b.fails ? !(b.fails && stale) : null, checked: b.lastOk ? ago(b.lastOk) : 'עוד לא גובה', note: b.lastError || '' })
   }
   if (bridgeReady()) out.push({ label: 'המחשב הביתי', ok: bridgeConnected(), checked: 'עכשיו', note: bridgeConnected() ? '' : 'הגשר בבית לא מחובר. המחשב כבוי, או ש-pc-bridge לא רץ' })
+  const discord = discordStatus()
+  if (discord) out.push({ label: discord.user ? `דיסקורד (${discord.user})` : 'דיסקורד', ok: discord.connected ? true : discord.error ? false : null, checked: 'עכשיו', note: discord.error || (discord.connected && !discord.owner ? 'עוד אין בעלים: תשלח לבוט הודעה פרטית ותקבל קוד בוואטסאפ' : '') })
   if (phoneEnabled() || phoneAppInfo()) out.push({ label: 'הטלפון', ok: phoneAppConnected(), checked: 'עכשיו', note: phoneAppConnected() ? '' : 'אפליקציית HELPER בטלפון לא מחוברת' })
   return out
 }

@@ -36,6 +36,7 @@ import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 import { announceRelease } from './release-notes.js'
 import * as groups from './groups.js'
 import { groupAdders } from './group-tools.js'
+import { startDiscord } from './discord.js'
 
 let reconciled = false
 import { scraplingEnabled, scraplingStatus } from './scrapling.js'
@@ -522,6 +523,15 @@ const bridgeAsk = (text, { voice, source }) => {
   queue = run.catch(() => {}).then(() => compact().catch(() => {}))
   return run
 }
+
+// The built-in Discord bot (src/discord.js), when DISCORD_TOKEN is set. Its pairing code goes to WhatsApp.
+startDiscord({
+  ask: (text) => bridgeAsk(text, { voice: false, source: 'discord' }),
+  tellOwner: (text) => {
+    if (!state.owner) throw new Error('וואטסאפ עוד לא מקושר')
+    return wa.send(state.owner.jid, text)
+  },
+})
 
 const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk })
 setSettingsUrl(settingsUrl)
