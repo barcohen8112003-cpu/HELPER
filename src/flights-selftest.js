@@ -8,7 +8,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-flights-'))
 fs.writeFileSync(path.join(dir, '.env'), '')
 Object.assign(process.env, { HELPER_DATA_DIR: dir, HELPER_ENV_FILE: path.join(dir, '.env'), HELPER_OFFLINE: '1' })
 
-const { findFlights, resolvePlace, cardHtml, _setForTest, _test } = await import('./flights.js')
+const { findFlights, resolvePlace, cardHtml, devtoolsEndpoint, _setForTest, _test } = await import('./flights.js')
 const { config } = await import('./config.js')
 
 let passed = 0
@@ -137,6 +137,8 @@ config.flights.duffelToken = 'duffel_test_x'
   const html = cardHtml([_test.offerCard(duffelOffers[1])], 'תל אביב → ניו יורק')
   ok(html.includes('dir="rtl"') && html.includes('$1,124') && html.includes('MAD'), 'the card holds price, route and connection')
   ok(!cardHtml([{ ..._test.offerCard(duffelOffers[1]), airline: '<script>x</script>' }], 't').includes('<script>x'), 'text from the provider is escaped')
+  const split = 'DevTools listening on ws://127.0.0.1:33'
+  ok(devtoolsEndpoint(split) === '' && devtoolsEndpoint(`${split}921/devtools/browser/abc\n`) === 'ws://127.0.0.1:33921/devtools/browser/abc', 'a DevTools address split across chunks is not used early')
   const chrome = [process.env.CHROME_PATH, '/usr/bin/chromium', '/usr/bin/google-chrome', 'C:/Program Files/Google/Chrome/Application/chrome.exe'].filter(Boolean).find((p) => fs.existsSync(p))
   if (chrome) {
     process.env.CHROME_PATH = chrome

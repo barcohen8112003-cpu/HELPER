@@ -256,6 +256,13 @@ export function cardHtml(options, title) {
   </style></head><body><h1>${esc(title)}</h1>${options.map(card).join('')}</body></html>`
 }
 
+// The DevTools address is one line. A chunk that ends in the middle of it must not count: the next request
+// would go to a port that never answers, and the render sits until its timeout.
+export function devtoolsEndpoint(log) {
+  const m = String(log).match(/DevTools listening on (ws:\/\/\S+)\s/)
+  return m ? m[1] : ''
+}
+
 // HTML -> PNG with the installed Chrome/Chromium, headless, over the DevTools protocol (the --screenshot flag hangs
 // in some Chromium builds). The page is measured first, so the picture is exactly as tall as the cards.
 // Null when there is no browser or anything fails: the caller then sends the options as text.
@@ -265,24 +272,36 @@ async function renderPng(html, _height, timeoutMs = 30000) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-flights-'))
   const file = path.join(dir, 'card.html')
   fs.writeFileSync(file, html)
-  const proc = spawn(exe, ['--headless=new', ...SERVER_FLAGS, '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${path.join(dir, 'p')}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
+  const proc = spawn(exe, ['--headless=new', ...SERVER_FLAGS, '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check', '--remote-allow-origins=*', '--remote-debugging-port=0', `--user-data-dir=${path.join(dir, 'p')}`, 'about:blank'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   let socket
   const timer = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs))
   try {
     return await Promise.race([timer, (async () => {
+      // The address is only complete once whitespace follows it. Matching `\S+` on a partial chunk
+      // (the line split after the port) sends the next request to a port that never answers, and the
+      // 30s timeout is the whole failure. Chrome prints this on stderr, some builds on stdout.
       const browserWs = await new Promise((resolve, reject) => {
-        let err = ''
-        proc.stderr.on('data', (d) => {
-          err += d
-          const m = err.match(/DevTools listening on (ws:\/\/\S+)/)
-          if (m) resolve(m[1])
-        })
+        let log = ''
+        const onData = (d) => {
+          log += d
+          const found = devtoolsEndpoint(log)
+          if (found) resolve(found)
+        }
+        proc.stdout.on('data', onData)
+        proc.stderr.on('data', onData)
         proc.on('error', reject)
         proc.on('exit', () => reject(new Error('the browser closed')))
       })
       const port = new URL(browserWs).port
-      const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-      const page = pages.find((p) => p.type === 'page')
+      let page
+      for (let i = 0; i < 40 && !page; i++) {
+        try {
+          const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) })).json()
+          page = pages.find((p) => p.type === 'page' && p.webSocketDebuggerUrl)
+        } catch {}
+        if (!page) await new Promise((r) => setTimeout(r, 100))
+      }
+      if (!page) throw new Error('the browser opened no page')
       const { default: WebSocket } = await import('ws')
       socket = new WebSocket(page.webSocketDebuggerUrl)
       await new Promise((resolve, reject) => (socket.once('open', resolve), socket.once('error', reject)))
