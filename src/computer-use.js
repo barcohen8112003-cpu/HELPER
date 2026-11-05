@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import { llm, chatModel, LONG_PATIENCE, Aborted } from './llm.js'
 import { screenshot, act } from './pc.js'
 import { browserScreenshot, browserAct, browserProbe } from './errand-browser.js'
+import { researchNotes } from './obscura.js'
 import { phoneBody, onPhoneStop } from './phone-app.js'
 
 const IMAGE_WIDTH = 1280
@@ -297,8 +298,27 @@ export async function runOnPhone(goal, constraints, ctx = {}, { think } = {}) {
 // The user's own desktop (use_computer).
 export const useComputer = (goal, ctx) => runGoal({ goal, body: BODIES.desktop, ctx })
 
-// An errand in the assistant's own browser (run_errand).
-export const runErrand = (goal, constraints, ctx, opts = {}) => runGoal({ goal, constraints, body: BODIES.browser, ctx, survey: Boolean(opts.survey) })
+// Replaces the body for a self-test. Production always drives the signed-in errand window.
+let goalHook = null
+export const _setGoalForTest = (fn) => {
+  goalHook = fn
+}
+
+// An errand in the assistant's own browser (run_errand). Public reading happens first in Obscura when it is up.
+// The signed-in window still does the shop session, the cart and the checkout. A survey call already tried Obscura.
+export async function runErrand(goal, constraints, ctx, opts = {}) {
+  let notes = ''
+  if (!opts.survey) {
+    try {
+      notes = await researchNotes(goal)
+    } catch (e) {
+      console.log(`[obscura] מחקר לפני סידור נכשל (${e.message}); ממשיך בחלון הקניות`)
+    }
+  }
+  const merged = [constraints, notes].filter(Boolean).join('\n')
+  if (goalHook) return goalHook({ goal, constraints: merged, survey: Boolean(opts.survey), ctx })
+  return runGoal({ goal, constraints: merged, body: BODIES.browser, ctx, survey: Boolean(opts.survey) })
+}
 
 // Exposed for the self-test only.
 export const _test = { BODIES, COMMIT, CART, gateCard, RULES, SURVEY_ONLY }

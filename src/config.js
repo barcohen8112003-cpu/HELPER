@@ -50,6 +50,21 @@ function parseQuiet(value) {
   return m ? { from: m[1] * 60 + Number(m[2]), to: m[3] * 60 + Number(m[4]) } : null
 }
 
+// Obscura's egress. Its own value wins. "direct" means none. An empty value reuses the errand proxy,
+// and an empty errand proxy reuses the Webtop proxy, so Israeli shops see the same exit the owner already set.
+export function obscuraProxyFrom(own, errand, webtop) {
+  const pick = (value) => String(value ?? '').trim()
+  const mine = pick(own)
+  if (/^direct$/i.test(mine)) return ''
+  if (mine) return mine
+  const shop = pick(errand)
+  if (/^direct$/i.test(shop)) return ''
+  if (shop) return shop
+  const web = pick(webtop)
+  if (web && !/^direct$/i.test(web)) return web
+  return ''
+}
+
 const DEFAULT_FEEDS = [
   'https://www.ynet.co.il/Integration/StoryRss1854.xml',
   'https://www.maariv.co.il/Rss/RssFeedsMivzakiChadashot',
@@ -252,6 +267,19 @@ const build = () => ({
   errand: {
     port: Number(env('ERRAND_DEBUG_PORT', '9227')) || 9227,
     proxy: env('ERRAND_PROXY'),
+  },
+  // Anonymous public pages (search, fetch, price survey) via Obscura, beside the Chromium windows.
+  // Default on: a missing binary, a dead process, a timeout or a blocked page uses the previous reader.
+  // The port is always bound to 127.0.0.1 inside the container and is not published. 9223/9224/9226/9227
+  // belong to Webtop, Gemini, Google Home and the errand window; a request for one of those is ignored.
+  obscura: {
+    enabled: !['off', '0', 'false', 'no'].includes(env('OBSCURA_ENABLED', 'on').toLowerCase()),
+    port: Number(env('OBSCURA_PORT', '9228')) || 9228,
+    bin: env('OBSCURA_BIN', '/usr/local/bin/obscura'),
+    timeoutMs: Math.min(45000, Math.max(5000, Number(env('OBSCURA_TIMEOUT_MS', '20000')) || 20000)),
+    heapMb: Math.min(512, Math.max(64, Number(env('OBSCURA_V8_HEAP_MB', '192')) || 192)),
+    maxRssMb: Math.min(800, Math.max(160, Number(env('OBSCURA_MAX_RSS_MB', '400')) || 400)),
+    proxy: obscuraProxyFrom(env('OBSCURA_PROXY'), env('ERRAND_PROXY'), env('WEBTOP_PROXY')),
   },
   // "תשאל את ג'מיני": Google's Gemini through its official API (key from aistudio.google.com/apikey).
   // Daily encrypted backup to the owner's Google Drive (src/backup.js).
