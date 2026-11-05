@@ -324,7 +324,7 @@ Example:
 2. The general hands of the place it happens. Each one looks at the screen and decides every step by itself, so it needs no recipe:
    - a website (any site: Gemini, Webtop, a form, a shop, a booking) → `run_errand`
    - his Windows computer (any program, any file) → `use_computer`, or `run_command` when a command does it
-   - his phone (any app) → `run_on_phone`
+   - his phone (any app) → `run_on_phone`. It asks before sending, paying, calling, deleting, changing a setting, or touching a bank or payment app, and it never types a password. "עצור" stops it.
    - the TV (any app: find, play, settings, subtitles) → `tv_do`
    - computing, converting, a script or a small program → `vm_run`; a site, an app or a bigger build → `claude_code`
 3. A task that crosses places is a chain: do it one place at a time and carry the result to the next (a file from Webtop on the computer, then Gemini in the browser, then the link to him). Long chains go to `start_background_task`.

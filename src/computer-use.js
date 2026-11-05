@@ -14,7 +14,7 @@ import { llm, chatModel, LONG_PATIENCE, Aborted } from './llm.js'
 import { screenshot, act } from './pc.js'
 import { browserScreenshot, browserAct, browserProbe } from './errand-browser.js'
 import { researchNotes } from './obscura.js'
-import { phoneBody, onPhoneStop } from './phone-app.js'
+import { phoneAgentTimeoutMs, phoneBody, phoneVisionModel, phoneVisionOn, onPhoneStop } from './phone-app.js'
 
 const IMAGE_WIDTH = 1280
 const MAX_GATES = 3
@@ -153,7 +153,14 @@ function gateCard(g) {
 }
 
 const pointed = (a) => Number.isFinite(a.index) || (Number.isFinite(a.x) && Number.isFinite(a.y))
-const isCommitAction = (a) => a && (['click', 'double_click', 'tap', 'long_press'].includes(a.type) ? pointed(a) : a.type === 'key')
+const isCommitAction = (a, body) => {
+  if (!a) return false
+  if (['click', 'double_click', 'tap', 'long_press'].includes(a.type)) return pointed(a)
+  if (a.type === 'key') return true
+  // A phone setting change is itself the commit, once he has approved the gate.
+  if (body?.name === 'phone' && (a.type === 'device' || (a.type === 'intent' && String(a.kind) === 'settings'))) return true
+  return false
+}
 // Actions that land on a control, so the page or screen is asked what that control is before they run.
 const PROBED = ['click', 'double_click', 'tap', 'select', 'long_press', 'type', 'key']
 
@@ -168,17 +175,37 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   const screens = []
   const messages = [{ role: 'system', content: systemFor(body, survey) }]
   let gates = 0
+  const askVerdict = async (verdict, shot) => {
+    if (!verdict?.ask) return null
+    const media = shot?.buffer ? { buffer: shot.buffer, mime: shot.mime } : body.capture ? await body.capture().catch(() => null) : null
+    const ok = ctx.confirm ? await ctx.confirm(verdict.ask, media?.buffer ? media : undefined) : false
+    if (signal?.aborted) throw new Aborted()
+    if (!ok) return end('DENIED', verdict.deny || 'לא אושר, ולכן לא המשכתי.')
+    verdict.allow?.()
+    return null
+  }
   const end = async (status, text) => {
     body.finish?.(text)
     if (body.finalShot) {
       const final = await body.screenshot().catch(() => null)
-      if (final) await ctx.sendMedia?.({ buffer: final.buffer, mime: final.mime, caption: text })
+      if (final?.buffer) {
+        const caption = body.shotCaption ? body.shotCaption(text) : text
+        await Promise.resolve(ctx.sendMedia?.({ buffer: final.buffer, mime: final.mime, caption })).catch(() => {})
+      }
     }
     return `${status}: ${text}\n${found.length ? `מה נבדק:\n${found.map((f) => `• ${f}`).join('\n')}\n` : ''}צעדים: ${log.length}\n${log.slice(-6).join('\n')}`
   }
   for (let step = 1; step <= body.maxSteps; step++) {
     if (signal?.aborted) throw new Aborted()
     const shot = await body.screenshot()
+    if (body.guardScreen) {
+      const verdict = await Promise.resolve()
+        .then(() => body.guardScreen())
+        .catch(() => null)
+      const stopped = await askVerdict(verdict, shot)
+      if (stopped) return stopped
+      if (signal?.aborted) throw new Aborted()
+    }
     // Only the newest screenshot is sent in full; older ones become a line of text, to keep each step cheap.
     for (const m of messages) if (Array.isArray(m.content)) m.content = m.content.filter((p) => p.type === 'text')
     const head = step === 1 ? `Goal: ${goal}\n${constraints ? `Constraints: ${constraints}\n` : ''}` : `Goal: ${goal}\n${found.length ? `Your notes so far:\n${found.map((f) => `- ${f}`).join('\n')}\n` : ''}`
@@ -198,6 +225,10 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
     }
     const a = out.action
     if (out.step) body.status?.(String(out.step).slice(0, 60))
+    if (body.progress) {
+      const line = out.step || (step === 1 ? 'מתחיל בטלפון' : '')
+      if (line) await Promise.resolve(body.progress(line)).catch(() => {})
+    }
     if (out.learned && String(out.learned).trim()) body.learn?.(String(out.learned))
     if (out.found && String(out.found).trim()) {
       found.push(String(out.found).trim().slice(0, 200))
@@ -214,7 +245,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
         messages.push({ role: 'user', content: 'This run is research only. Do not check out or pay. Reply with "done" and the ranked Hebrew list.' })
         continue
       }
-      if (!isCommitAction(a.then)) {
+      if (!isCommitAction(a.then, body)) {
         messages.push({ role: 'user', content: 'A gate needs "then": the single click or key action that commits. Reply again.' })
         continue
       }
@@ -240,6 +271,17 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       return end('NEED_USER', 'זה נראה כמו מספר כרטיס. פרטי תשלום אני לא מקליד, את זה תזין בעצמך בחלון.')
     }
     const scaled = scale(a, shot)
+    if (body.guard && !['wait', 'look'].includes(a.type)) {
+      const verdict = await Promise.resolve()
+        .then(() => body.guard(scaled))
+        .catch(() => null)
+      if (verdict?.block) {
+        messages.push({ role: 'user', content: verdict.block })
+        continue
+      }
+      const stopped = await askVerdict(verdict, shot)
+      if (stopped) return stopped
+    }
     if (body.probe && PROBED.includes(a.type)) {
       const found = await body.probe(scaled).catch(() => null)
       if (a.type === 'type' && found?.secret) return end('NEED_USER', `השדה מבקש סיסמה, קוד או פרטי כרטיס. את זה תזין בעצמך ${body.name === 'phone' ? 'בטלפון' : 'בחלון של העוזר במחשב'}, ואז תגיד לי להמשיך.`)
@@ -248,8 +290,12 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
         messages.push({ role: 'user', content: `Blocked: "${found.label.slice(0, 80)}" would leave the survey (cart or checkout). Go back and finish the ranked list with "done".` })
         continue
       }
+      if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && body.settings?.test(found.label)) {
+        messages.push({ role: 'user', content: `Blocked: "${found.label.slice(0, 80)}" changes a setting or a permission. Reply with a "gate" of kind "account" and this action as "then".` })
+        continue
+      }
       if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && (COMMIT.test(found.label) || body.commit?.test(found.label))) {
-        messages.push({ role: 'user', content: `Blocked by the safety check: the control there reads "${found.label.slice(0, 80)}", which may pay, order, send or delete. If it commits, reply with a "gate" with the details on screen and this action as "then". If it does not, take another way forward.` })
+        messages.push({ role: 'user', content: `Blocked by the safety check: the control there reads "${found.label.slice(0, 80)}", which may pay, order, send, call or delete. If it commits, reply with a "gate" with the details on screen and this action as "then". If it does not, take another way forward.` })
         continue
       }
     }
@@ -275,21 +321,52 @@ function scale(a, shot) {
 }
 
 // A task on the user's phone, through the HELPER app (run_on_phone). "Stop" in the app's bubble or notification ends
-// the run, the same as "עצור" in WhatsApp; the turn itself goes on and reports it.
+// the run, the same as "עצור" in WhatsApp; the turn itself goes on and reports it. A wall-clock limit ends it too.
 export async function runOnPhone(goal, constraints, ctx = {}, { think } = {}) {
   const local = new AbortController()
-  const outer = () => local.abort()
+  let stopReason = ''
+  const outer = () => {
+    if (!stopReason) stopReason = 'outer'
+    local.abort()
+  }
   ctx.signal?.addEventListener('abort', outer, { once: true })
-  const off = onPhoneStop(() => local.abort())
+  const off = onPhoneStop(() => {
+    if (!stopReason) stopReason = 'phone'
+    local.abort()
+  })
+  const timer = setTimeout(() => {
+    if (!stopReason) stopReason = 'timeout'
+    local.abort()
+  }, phoneAgentTimeoutMs())
+  const seeing = phoneVisionOn()
   const body = phoneBody()
+  if (seeing) {
+    const said = new Set()
+    let sent = 0
+    body.progress = (line) => {
+      const text = String(line || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+      if (!text || said.has(text) || sent >= 8) return
+      said.add(text)
+      sent++
+      return ctx.say?.(text)
+    }
+  }
+  const thinkFn = think || ((messages) => llm(messages, null, seeing ? phoneVisionModel() : chatModel(), LONG_PATIENCE, { max_completion_tokens: seeing ? 450 : 600 }, local.signal))
   try {
-    return await runGoal({ goal, constraints, body, ctx: { ...ctx, signal: local.signal }, think })
+    return await runGoal({ goal, constraints, body, ctx: { ...ctx, signal: local.signal }, think: thinkFn })
   } catch (e) {
     if (!(e instanceof Aborted)) throw e
-    body.finish('נעצר')
-    if (ctx.signal?.aborted) throw e
+    const timedOut = stopReason === 'timeout'
+    body.finish(timedOut ? 'נגמר הזמן' : 'נעצר')
+    if (seeing && stopReason !== 'outer') {
+      const shot = await body.capture().catch(() => null)
+      if (shot?.buffer) await Promise.resolve(ctx.sendMedia?.({ buffer: shot.buffer, mime: shot.mime, caption: timedOut ? 'נגמר הזמן' : 'נעצר' })).catch(() => {})
+    }
+    if (stopReason === 'outer' || ctx.signal?.aborted) throw e
+    if (timedOut) return 'FAIL: עצרתי כי עבר הזמן המותר לפעולה בטלפון. לא המשכתי.'
     return 'STOPPED: עצרת את זה מהטלפון. לא המשכתי.'
   } finally {
+    clearTimeout(timer)
     off()
     ctx.signal?.removeEventListener('abort', outer)
   }

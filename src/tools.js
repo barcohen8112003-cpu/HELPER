@@ -17,7 +17,7 @@ import * as services from './services.js'
 import * as googleHome from './google-home.js'
 import { groupTools } from './group-tools.js'
 import { useComputer, runErrand, runOnPhone } from './computer-use.js'
-import { phoneAppConnected } from './phone-app.js'
+import { phoneAppConnected, phoneVisionOn } from './phone-app.js'
 import { errandBrowserEnabled } from './errand-browser.js'
 import { shoppingEnabled, searchShopping, formatOffers } from './shopping.js'
 import { obscuraInstalled, surveyPrices } from './obscura.js'
@@ -653,7 +653,12 @@ ${await askGemini(question)}`
   {
     name: 'run_on_phone',
     enabled: phoneAppConnected,
-    description: 'מבצע כל משימה בטלפון של המשתמש מקצה לקצה, דרך אפליקציית HELPER (שירות נגישות): "תזמין לי מונית ב-Gett הביתה", "תשלח לאבא בוואטסאפ שאני בדרך", "תדליק שעון מעורר ל-7", "תנווט הביתה", "מה ההתראות שלי". הסוכן קורא את המסך ובוחר כל צעד בעצמו, ומשתמש בקיצורים ישירים (שעון מעורר, טיימר, יומן, ניווט, חיוג) כשיש. שעון מעורר, פתיחת אפליקציה וקריאת המסך רצים בלי אישור בוואטסאפ. לפני תשלום, הזמנה, שליחה בשמו, שיחה או מחיקה הוא שולח בעצמו בקשת אישור עם צילום מסך, אל תשאל לפני. מחזיר DONE, NEED_USER, DENIED, STOPPED או FAIL. כשהאפליקציה מחוברת זה הכלי היחיד לטלפון; כלי ה-phone_* של ADB כבויים.',
+    get description() {
+      const seeing = phoneVisionOn()
+        ? 'סוכן הראייה דלוק: בכל צעד צילום מסך מוקטן ועץ הנגישות, מודל ראייה זול בוחר פעולה אחת, והצעד הבא בודק שהמסך השתנה. התקדמות קצרה וצילום בסיום נשלחים לוואטסאפ.'
+        : 'הסוכן קורא את המסך ובוחר כל צעד בעצמו, ומשתמש בקיצורים ישירים (שעון מעורר, טיימר, יומן, ניווט, חיוג) כשיש.'
+      return `מבצע כל משימה בטלפון של המשתמש מקצה לקצה, דרך אפליקציית HELPER (שירות נגישות), מוואטסאפ או מקול: "תפתח ווייז ותנווט הביתה", "תמצא ביוטיוב שיר ותשמיע", "תזמין לי מונית הביתה", "תשלח לאבא בוואטסאפ שאני בדרך". ${seeing} שעון מעורר, פתיחת אפליקציה רגילה וקריאת המסך רצים בלי אישור. לפני שליחת הודעה, תשלום, הזמנה, שיחה, מחיקה או שינוי הגדרות או הרשאות, ולפני כל פעולה באפליקציית בנק או תשלום, הוא שולח בקשת אישור עם צילום מסך, אל תשאל לפני. סיסמה הוא לא מקליד. "עצור" עוצר אותו. מחזיר DONE, NEED_USER, DENIED, STOPPED או FAIL. כשהאפליקציה מחוברת זה הכלי היחיד לטלפון; כלי ה-phone_* של ADB כבויים.`
+    },
     parameters: obj(
       {
         goal: str('המטרה במילים של המשתמש, מלאה. בלי הוראות צעד-צעד.'),
@@ -863,7 +868,11 @@ const BRIEF = {
   google_home_devices: 'List smart home devices and their state (on/off) from Google Home.',
   google_home_control: 'Turn on, turn off, or toggle smart home devices (lights, speakers) via Google Home.',
   use_computer: 'Autonomous mouse and keyboard agent to operate the PC step by step (requires user approval).',
-  run_on_phone: 'Do any task on the user\'s phone end to end through the HELPER app: order a ride, send a WhatsApp, set an alarm, navigate, read notifications. It picks every step itself. Setting an alarm, opening an app or reading the screen does not ask. It asks him with a screenshot only before paying, ordering, sending, calling or deleting; do not ask first. When the app is connected this is the only phone tool. Returns DONE, NEED_USER, DENIED, STOPPED or FAIL.',
+  get run_on_phone() {
+    return phoneVisionOn()
+      ? 'Vision phone agent (screenshot + accessibility tree each step, cheap vision model, one tap/type/swipe/open, then it checks the screen). Short progress lines and a final screenshot go to WhatsApp. Asks before send, pay, call, delete, a settings change, or any bank/payment app. Never types a password. "עצור" stops it. Returns DONE, NEED_USER, DENIED, STOPPED or FAIL.'
+      : 'Do any task on the user\'s phone end to end through the HELPER app: order a ride, send a WhatsApp, set an alarm, navigate, read notifications. It picks every step itself. Setting an alarm, opening an app or reading the screen does not ask. It asks him with a screenshot before paying, ordering, sending, calling, deleting, changing settings, or touching a bank or payment app. Never types a password. "עצור" stops it. When the app is connected this is the only phone tool. Returns DONE, NEED_USER, DENIED, STOPPED or FAIL.'
+  },
   run_errand: 'Order, book or buy in your own browser. For the cheapest product, compare_prices first unless he already asked to order. Before paying or ordering it asks him with a screenshot. Prefer PayPal; he has a debit/prepaid card only, no credit card. Returns DONE, NEED_USER, DENIED or FAIL.',
   compare_prices: 'Market survey only: cheapest exact model. Google Shopping API first (seconds); then the anonymous Obscura browser on zap.co.il; the signed-in shop window only if both find nothing. Ranked Hebrew list with prices and links. Shipping only when the source shows it. Never a cart or checkout.',
 }

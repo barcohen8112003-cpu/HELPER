@@ -463,7 +463,7 @@ private fun PhoneControlCard(
     GlassCard(Modifier.fillMaxWidth()) {
         Column {
             Text("שליטה בטלפון", color = TextHigh, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            Text("HELPER מבצע בטלפון משימות שביקשת בוואטסאפ, ומבקש אישור לפני תשלום, שליחה או שיחה", color = TextLow, fontSize = 12.sp)
+            Text("HELPER רואה את המסך ומבצע משימות שביקשת בוואטסאפ או בקול. לפני שליחה, תשלום, שיחה, מחיקה, שינוי הגדרות או בנק הוא מבקש אישור", color = TextLow, fontSize = 12.sp)
             val linkText = when {
                 !accessibility -> ""
                 link == PhoneLink.State.CONNECTED -> "מחובר לשרת"
