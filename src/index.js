@@ -39,6 +39,7 @@ import { groupAdders } from './group-tools.js'
 
 let reconciled = false
 import { scraplingEnabled, scraplingStatus } from './scrapling.js'
+import { startObscura, stopObscura } from './obscura.js'
 import { exec } from 'node:child_process'
 import { recoverTeam, teamStatus } from './team/conductor.js'
 
@@ -56,6 +57,10 @@ if (config.team.mode !== 'off') console.log(`[team] ${teamStatus()}`)
 if (scraplingEnabled()) {
   scraplingStatus().then((s) => console.log(s.ok ? `[scrapling] זמין: Scrapling ${s.scrapling}, Python ${s.python}` : `[scrapling] לא זמין (${s.kind}): ${s.error}. fetch_page משתמש בקורא הרגיל רק כשהוא לא מותקן`))
 }
+startObscura().then((s) => {
+  if (s.started) console.log(`[obscura] מאזין על 127.0.0.1:${s.port} (לא מפורסם). חיפוש, דפים וסקר מחירים עוברים אליו; חלונות Chromium לא משתנים`)
+  else if (s.reason && s.reason !== 'off' && s.reason !== 'offline') console.log(`[obscura] לא עלה (${s.reason}). חיפוש, דפים וסקר מחירים נשארים בדרך הרגילה`)
+})
 function startCloudBrowsers() {
   if (cloudWebtopOn()) ensureCloudWebtop().catch((e) => console.log(`[webtop] ${e.message}`))
   if (cloudGoogleHomeOn()) ensureCloudBrowser('google-home').catch((e) => console.log(`[google-home] ${e.message}`))
@@ -90,7 +95,10 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK'])
   process.on(signal, () => {
     if (stopping) return
     stopping = true
-    closeCloudBrowsers().finally(() => process.exit(0))
+    closeCloudBrowsers().finally(() => {
+      stopObscura()
+      process.exit(0)
+    })
   })
 // start.bat reads this file as "the last run was fine", and stops retrying only after a string of quick crashes.
 setTimeout(() => fs.writeFileSync(HEALTHY, ''), 5 * 60000).unref()
