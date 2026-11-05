@@ -148,4 +148,13 @@ class PhoneSafetyTest {
         val s = PhoneSafety.swipeFor("down", 1000, 2000)
         assertArrayEquals(intArrayOf(500, 1600, 500, 400), s)
     }
+
+    @Test fun visionShotsStaySmall() {
+        assertEquals(720, PhoneSafety.shotWidth(null))
+        assertEquals(480, PhoneSafety.shotWidth(480))
+        assertEquals(240, PhoneSafety.shotWidth(80))
+        assertEquals(720, PhoneSafety.shotWidth(4000))
+        assertEquals(50, PhoneSafety.shotQuality(480))
+        assertEquals(60, PhoneSafety.shotQuality(720))
+    }
 }

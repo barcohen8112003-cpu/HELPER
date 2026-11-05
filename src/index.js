@@ -526,7 +526,22 @@ const BRIDGE_NOTE = {
   text: (source) => `[הודעה דרך ${source}. עיצוב רגיל של צ'אט, לא של וואטסאפ.]`,
 }
 const bridgeAsk = (text, { voice, source }) => {
-  const run = queue.then(() => runTurn(`${BRIDGE_NOTE[voice ? 'voice' : 'text'](source)}\n${text}`, { source: String(source || 'bridge').slice(0, 30), confirm, sendMedia, say }))
+  const run = queue.then(async () => {
+    // The same "עצור" that ends a WhatsApp turn ends a voice turn from the app, including a phone-agent run.
+    const ac = new AbortController()
+    let finish
+    const done = new Promise((r) => (finish = r))
+    activeTurn = { ac, done }
+    try {
+      return await runTurn(`${BRIDGE_NOTE[voice ? 'voice' : 'text'](source)}\n${text}`, { source: String(source || 'bridge').slice(0, 30), confirm, sendMedia, say, signal: ac.signal })
+    } catch (e) {
+      if (e instanceof Aborted || ac.signal.aborted) return 'עצרתי.'
+      throw e
+    } finally {
+      if (activeTurn?.ac === ac) activeTurn = null
+      finish()
+    }
+  })
   queue = run.catch(() => {}).then(() => compact().catch(() => {}))
   return run
 }

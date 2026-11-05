@@ -320,6 +320,13 @@ const build = () => ({
     host: env('PHONE_ADB_HOST'),
     proxy: env('PHONE_PROXY'),
     mode: ['off', 'ask', 'ask-writes', 'ask-all', 'auto'].includes(env('PHONE_MODE', 'ask')) ? env('PHONE_MODE', 'ask') : 'ask',
+    // Screenshot + accessibility-tree agent. Off unless PHONE_VISION_AGENT=on (also true / 1).
+    vision: ['on', 'true', '1'].includes(env('PHONE_VISION_AGENT', 'off').toLowerCase()) ? 'on' : 'off',
+    visionModel: env('PHONE_VISION_MODEL'),
+    visionWidth: Math.min(720, Math.max(240, Number(env('PHONE_VISION_WIDTH', '480')) || 480)),
+    agentMaxSteps: env('PHONE_AGENT_MAX_STEPS'),
+    // Empty: 180s for the vision loop, 8 minutes for the older tree loop. A set value applies to both.
+    agentTimeoutSec: env('PHONE_AGENT_TIMEOUT_SEC'),
   },
   // Home PC bridge (src/pc-bridge.js). The cloud listens; the Windows PC dials out. Empty secret = computer tools stay local-only.
   pcBridge: {
