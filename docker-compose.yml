@@ -25,6 +25,7 @@ services:
       # 3212 is the home bridge (the PC dials out). 3210 is the settings page. Nothing at home is exposed.
       # 9223, 9224, 9226 and 9227 (Webtop, Gemini, Google Home, errand Chromium) stay on 127.0.0.1.
       # 9228 is Obscura, also 127.0.0.1 only. Do not publish any of them.
+      # The talking face does not add a port. The PC dials out on 3212; viewers use 3210.
       PC_BRIDGE_LISTEN: "1"
       PC_BRIDGE_PORT: "3212"
       NODE_ENV: production

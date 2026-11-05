@@ -352,6 +352,16 @@ const build = () => ({
   },
   // Live voice (src/live-voice.js). Off unless LIVE_VOICE=on and the LiveKit key pair is set.
   liveVoice: liveVoiceFrom(process.env),
+  // Talking face (src/face.js). Off unless FACE_ENABLED=on, so a deploy changes nothing until the owner turns it on.
+  // The GPU render runs on the home PC. This process only forwards audio over the existing bridge and frames back.
+  face: {
+    enabled: ['on', '1', 'true', 'yes'].includes(env('FACE_ENABLED', 'off').toLowerCase()),
+    engine: ['pc', 'browser', 'auto'].includes(env('FACE_ENGINE', 'auto').toLowerCase()) ? env('FACE_ENGINE', 'auto').toLowerCase() : 'auto',
+    tv: ['on', 'auto', 'off'].includes(env('FACE_TV', 'auto').toLowerCase()) ? env('FACE_TV', 'auto').toLowerCase() : 'auto',
+    webrtc: ['on', '1', 'true', 'yes'].includes(env('FACE_WEBRTC', 'off').toLowerCase()),
+    localUrl: env('FACE_LOCAL_URL', 'http://127.0.0.1:8771'),
+    lipDelayMs: Math.min(2000, Math.max(0, Number(env('FACE_LIP_DELAY_MS', '350')) || 0)),
+  },
 })
 
 export const liveDuffelToken = (token, allowTest = false) => (String(token || '').startsWith('duffel_test_') && !allowTest ? '' : String(token || ''))

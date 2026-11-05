@@ -32,6 +32,7 @@
 <main>
   <h1>HELPER</h1>
   <p id="status">בודק אם השיחה החיה דלוקה…</p>
+  <iframe id="face" title="הפנים של HELPER" hidden src="about:blank" style="width:min(280px,70vw);height:min(280px,70vw);border:0;border-radius:24px;margin:12px auto;display:block;background:#10181d"></iframe>
   <div class="orb" id="orb"></div>
   <p id="err"></p>
   <div class="row">
@@ -56,10 +57,19 @@ let muted = false
 
 function say(text) { statusEl.textContent = text }
 
+function showFace(cred) {
+  if (!cred.face || !cred.face.path) return
+  const frame = document.getElementById('face')
+  frame.hidden = false
+  if (!frame.src.endsWith(cred.face.path)) frame.src = cred.face.path
+  document.getElementById('orb').style.display = 'none'
+}
+
 async function credentials() {
   const res = await fetch('/api/live/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
   const body = await res.json().catch(() => ({}))
   if (!res.ok || !body.ok) throw new Error(body.reason || body.error || 'השיחה החיה לא זמינה')
+  showFace(body)
   return body
 }
 
