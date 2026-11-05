@@ -452,12 +452,12 @@ export async function runTurn(userText, ctx, image) {
   // He wrote: Helper's own messages are being answered, and he is in the conversation right now.
   noteUserMessage()
   try {
-    // The team (src/team/conductor.js, off unless TEAM_MODE is set): a request it takes is answered by it, once.
-    // null = not a team request, and the turn goes on exactly as before.
+    // The team (src/team/conductor.js, off unless TEAM_MODE is set): a flight with limits, or a big task that
+    // opens the war room. A request it takes is answered by it, once. null = the turn goes on as before.
     const team = await conduct(userText, { ...ctx, image: Boolean(image) })
     if (team) {
       state.history.push({ role: 'assistant', content: team.reply })
-      recordTurn({ ms: Date.now() - started, tools: 0, model: 'team' })
+      recordTurn({ ms: Date.now() - started, tools: team.toolCalls || 0, model: 'team' })
       trimHistory()
       save()
       return team.reply

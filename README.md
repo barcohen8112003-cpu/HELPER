@@ -611,7 +611,12 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `OBSCURA_PORT` | פורט פנימי, ברירת מחדל `9228`. לא 9223/9224/9226/9227 |
 | `OBSCURA_PROXY` | פרוקסי ל-Obscura. ריק = `ERRAND_PROXY` ואז `WEBTOP_PROXY`. `direct` = בלי |
 | `OBSCURA_V8_HEAP_MB` / `OBSCURA_MAX_RSS_MB` / `OBSCURA_TIMEOUT_MS` | תקרת זיכרון V8 (192), RSS שמאתחל את התהליך (400), וזמן ניווט (20000) |
-| `TEAM_MODE` | צוות חוקר ובודק לבקשת טיסה עם מגבלות. ריק = כבוי, המסלול הרגיל. `live` פועל רק עם `TEAM_MODEL` וכל ארבעת שדות העלות. ראה `src/team/README.md` |
+| `TEAM_MODE` | צוות. ריק = כבוי, המסלול הרגיל. `live` פועל רק עם `TEAM_MODEL` וכל ארבעת שדות העלות: טיסה עם מגבלות (חוקר ובודק), ובקשה גדולה או המילה "צוות" (חדר מלחמה). ראה `src/team/README.md` |
+| `TEAM_MODEL` / `TEAM_PRICE_IN_PER_MTOK` / `TEAM_PRICE_OUT_PER_MTOK` | המודל של הצוות ומחירו למיליון טוקנים. בלי שני המחירים הצוות נשאר כבוי |
+| `TEAM_MAX_USD_PER_REQUEST` / `TEAM_MAX_USD_PER_DAY` | תקרת דולר לבקשה וליום, משותפת לטיסה ולחדר המלחמה. חסר = כבוי |
+| `TEAM_MAX_AGENTS` / `TEAM_MAX_ROUNDS` | חדר מלחמה: עד 4 תפקידים (ברירת מחדל 4, מינימום 2) ועד 2 סבבים (ברירת מחדל 2). אפשר רק להוריד |
+| `TEAM_WAR_MAX_CALLS` / `TEAM_WAR_MAX_IN_TOKENS` / `TEAM_WAR_MAX_OUT_TOKENS` | תקרת קריאות וטוקנים לחדר המלחמה (8 / 16000 / 4000). לא נוגעות בתקרת 4 הקריאות של טיסה |
+| `TEAM_WAR_DEADLINE_SECONDS` / `TEAM_WAR_UPDATES` | זמן לחדר (ריק = `TEAM_DEADLINE_SECONDS`) וכמה בועות וואטסאפ באמצע (ברירת מחדל 2, עד 3). התשובה הסופית נפרדת |
 | `TAVILY_API_KEY` | חיפוש טוב יותר מ-DuckDuckGo (לא חובה) |
 | `JINA_API_KEY` | קריאת דפים מהירה יותר דרך Jina Reader (לא חובה, עובד גם בלי) |
 | `TRAVELPAYOUTS_TOKEN` | טיסות: התאריכים והיעדים הזולים בטווח (חינם, travelpayouts.com) |
@@ -660,7 +665,7 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `npm run check:pc-bridge` | גשר המחשב הביתי: חתימה, שידור חוזר, מחשב מנותק, וסירוב אישור |
 | `npm run check:obscura` | Obscura: פורט לולאה בלבד, נפילה לדרך הקודמת, סקר זאפ, ושהחלון המחובר לא נפתח כשהסקר הצליח |
 | `npm run check:scrapling` | fetch_page עם Scrapling: Node -> Python -> JSON, timeout, עצירה, מקביליות, חסימת כתובות פרטיות ומסלול הבוט מול מודל מזויף |
-| `npm run check:team` | הצוות (חוקר ובודק) עם מודל ומתאם טיסות מדומים: דגל כבוי, בקשה פשוטה, שאלת הבהרה אחת, נעילת הקונקשן, פסילה לפי הנתונים, כפילות, כלי אסור, timeout, עצירה, כשל, תקציב, אתחול מחדש |
+| `npm run check:team` | הצוות עם מודל מדומה: טיסה (דגל כבוי, הבהרה, נעילת קונקשן, פסילה, כפילות, כלי אסור, timeout, עצירה, תקציב) וחדר מלחמה (מקביל, בועות, ויכוח, מחיר שלא במקור, בלי קנייה, תקרות) |
 | `npm run demo:team` | ההדגמה עם תמליל האירועים: מי קיבל מה, איזו אפשרות נפסלה ולמה, ומה המשתמש קיבל (נתוני בדיקה) |
 | `npm run check:scrapling-py` | ה-worker של Scrapling עצמו (צריך `.venv-scrapling`, ראה `py/README.md`): DNS, הפניות, robots.txt, 401/403, מגבלת גודל |
 

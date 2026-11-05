@@ -9,9 +9,9 @@
 //     researcher (model + find_flights through Helper's own tool) -> checker (model, no tools) -> code check
 //     -> one answer from the tool's own data, with its source
 //
-// Version one: one task profile (flights), read-only tools, two roles run one after the other (the checker needs
-// the researcher's result), depth 1 (a worker cannot start workers), and nothing that changes the outside world:
-// a worker asking for any tool outside its task's list is refused, not forwarded.
+// Two profiles. Flights: a researcher and a checker, one after the other, read-only find_flights. War room
+// (src/team/warroom.js): a big task, several roles in parallel and then a challenge round, a few WhatsApp
+// bubbles, one answer. Depth 1 either way: a worker cannot start workers, and a tool outside its list is refused.
 import crypto from 'node:crypto'
 import { config } from '../config.js'
 import { state, save } from '../store.js'
@@ -21,6 +21,8 @@ import { _test as flightsTest } from '../flights.js'
 import { RESEARCHER, CHECKER } from './roles.js'
 import * as flights from './flights-task.js'
 import { makeBudget, estimateTokens, BudgetError } from './budget.js'
+import { INJECTION, clean, parseJson } from './guard.js'
+import { runWarRoom, warMatches, warClarify, warAnswer, setWarHooks } from './warroom.js'
 
 const { optionText } = flightsTest
 const PENDING_TTL = 2 * 3600 * 1000
@@ -32,10 +34,11 @@ const RESULT_CHARS = 6000
 let testModel = null
 let testSearch = null
 let testClock = null
-export const _setForTest = ({ model, search, clock } = {}) => {
+export const _setForTest = ({ model, search, clock, tools } = {}) => {
   testModel = model ?? null
   testSearch = search ?? null
   testClock = clock ?? null
+  setWarHooks({ tools: tools ?? null })
 }
 const now = () => (testClock ? testClock() : Date.now())
 
@@ -55,9 +58,10 @@ export function teamOn() {
   return false
 }
 export function teamStatus() {
+  const war = `חדר מלחמה: עד ${config.team.maxAgents} תפקידים ו-${config.team.maxRounds} סבבים`
   if (config.team.mode === 'off') return 'כבוי'
-  if (config.team.mode === 'mock') return testModel ? 'מודל מדומה (בדיקות)' : 'מודל מדומה בלי תסריט: כבוי'
-  return liveReady() ? `חי: ${config.team.model}, עד $${config.team.maxUsdPerRequest} לבקשה ו-$${config.team.maxUsdPerDay} ליום` : 'חי, אבל חסרה תקרת עלות או מחיר: כבוי'
+  if (config.team.mode === 'mock') return testModel ? `מודל מדומה (בדיקות). ${war}` : 'מודל מדומה בלי תסריט: כבוי'
+  return liveReady() ? `חי: ${config.team.model}, עד $${config.team.maxUsdPerRequest} לבקשה ו-$${config.team.maxUsdPerDay} ליום. ${war}` : 'חי, אבל חסרה תקרת עלות או מחיר: כבוי'
 }
 
 // ── the team's own short-lived state (memory and approvals stay where they are) ────────────────────────────────────
@@ -113,18 +117,7 @@ const raceAbort = (promise, signal) =>
     )
   })
 
-// Text that reads like an order rather than a fact. Worker output with it is dropped, and the event says so.
-const INJECTION = /ignore (all |any |your |the )?(previous|prior|above)|disregard (the |your )?(rules|instructions)|system prompt|you are now|התעלם מ|תתעלם מ|הוראות חדשות|send_(whatsapp|mail|message)|שלח הודעה|תשלח הודעה|\bapproved?\b|אושר|book (it|now)|הזמן עכשיו|transfer money/i
-const clean = (s) => String(s ?? '').replace(/[\u0000-\u001f]+/g, ' ').slice(0, 400)
-function parseJson(text) {
-  const m = String(text || '').match(/\{[\s\S]*\}/)
-  if (!m) return null
-  try {
-    return JSON.parse(m[0])
-  } catch {
-    return null
-  }
-}
+// Text that reads like an order rather than a fact is dropped. INJECTION, clean and parseJson live in guard.js.
 // The offer data a role sees: only what checking it needs. No links to follow, no free text beyond the airline.
 const compact = (o) => ({
   id: o.id, airline: clean(o.airline).slice(0, 60), price: o.price, currency: o.currency, from: o.from, to: o.to, depart: o.depart, back: o.back,
@@ -141,6 +134,7 @@ export function decide(text, ctx = {}) {
   if (!teamOn()) return { use: false, why: 'off' }
   if (ctx.source && ctx.source !== 'whatsapp') return { use: false, why: 'not a chat message' }
   if (flights.matches(text)) return { use: true, profile: 'flights' }
+  if (warMatches(text)) return { use: true, profile: 'war' }
   return { use: false, why: 'simple' }
 }
 
@@ -179,12 +173,20 @@ export async function conduct(userText, ctx = {}) {
   }
   // An answer to the one question asked before: the same task continues with his details added.
   const pending = team.pending && team.tasks[team.pending]
-  if (pending && now() - pending.at < PENDING_TTL && !flights.matches(userText)) {
-    const added = flights.readSlots(userText)
-    if (['from', 'to', 'dates', 'nights', 'adults', 'country'].some((k) => added[k])) {
-      task = pending
-      task.text = `${task.text}\n${userText}`
-      if (msgId) task.msgIds.push(msgId)
+  if (pending && now() - pending.at < PENDING_TTL && !flights.matches(userText) && !warMatches(userText)) {
+    if ((pending.profile || 'flights') === 'war') {
+      if (pending.asked && warAnswer(userText)) {
+        task = pending
+        task.text = `${task.text}\n${userText}`
+        if (msgId) task.msgIds.push(msgId)
+      }
+    } else {
+      const added = flights.readSlots(userText)
+      if (['from', 'to', 'dates', 'nights', 'adults', 'country'].some((k) => added[k])) {
+        task = pending
+        task.text = `${task.text}\n${userText}`
+        if (msgId) task.msgIds.push(msgId)
+      }
     }
   }
   team.pending = null
@@ -210,7 +212,8 @@ export async function conduct(userText, ctx = {}) {
     return { taskId: task.id, events: task.events, reply }
   }
 
-  log('decide', { profile: task.profile, by: 'helper', why: 'flight request with limits' })
+  log('decide', { profile: task.profile, by: 'helper', why: task.profile === 'war' ? 'big task' : 'flight request with limits' })
+  if (task.profile === 'war') return conductWar(task, team, ctx, { log, finish })
   const home = process.env.FLIGHTS_HOME ? config.flights.home : ''
   const slots = flights.readSlots(task.text, { home })
   const need = flights.missing(slots)
@@ -276,6 +279,78 @@ export async function conduct(userText, ctx = {}) {
 }
 // No two team runs on the same profile at once (two writers of the same task state).
 const running = new Set()
+
+// A big task: role agents in parallel, then a challenge round, a few Hebrew bubbles, one answer.
+// The flight path above is unchanged. Money caps and the daily spend are the same pool.
+async function conductWar(task, team, ctx, { log, finish }) {
+  if (!task.asked) {
+    const ask = warClarify(task.text)
+    if (ask) {
+      task.asked = true
+      team.pending = task.id
+      log('clarify', { ask })
+      return finish('waiting', ask)
+    }
+  }
+  if (running.has('war')) {
+    log('busy', { note: 'another war room holds the lock; normal path instead' })
+    return null
+  }
+  running.add('war')
+  task.status = 'running'
+  save()
+  const live = config.team.mode === 'live'
+  const limits = {
+    maxModelCalls: config.team.warMaxCalls,
+    maxInTokens: config.team.warMaxInTokens,
+    maxOutTokens: config.team.warMaxOutTokens,
+    priceInPerMTok: config.team.priceInPerMTok,
+    priceOutPerMTok: config.team.priceOutPerMTok,
+    maxUsdPerRequest: config.team.maxUsdPerRequest,
+    maxUsdPerDay: config.team.maxUsdPerDay,
+    maxAgents: config.team.maxAgents,
+    maxRounds: config.team.maxRounds,
+  }
+  const budget = makeBudget(limits, { spentToday: spentToday(), live })
+  const deadline = new AbortController()
+  const ms = config.team.warDeadlineMs
+  const timer = setTimeout(() => deadline.abort(), ms)
+  const signal = ctx.signal ? AbortSignal.any([deadline.signal, ctx.signal]) : deadline.signal
+  log('limits', { profile: 'war', agents: limits.maxAgents, rounds: limits.maxRounds, calls: limits.maxModelCalls, inTokens: limits.maxInTokens, outTokens: limits.maxOutTokens, seconds: ms / 1000, updates: config.team.warUpdates, live, ...(live ? { usdPerRequest: limits.maxUsdPerRequest, usdPerDay: limits.maxUsdPerDay, spentToday: spentToday() } : {}) })
+  const port = testModel || ((req) => llmOnce({ messages: req.messages, tools: req.tools, model: config.team.model, maxTokens: req.maxTokens, signal: req.signal }))
+  try {
+    const out = await runWarRoom({ task, ctx, budget, signal, log, limits, port })
+    const done = finish('done', out.reply)
+    done.toolCalls = out.toolCalls
+    return done
+  } catch (e) {
+    if (ctx.signal?.aborted) {
+      log('cancelled', { by: 'user' })
+      finish('cancelled', '')
+      throw new Aborted()
+    }
+    if (deadline.signal.aborted) {
+      log('timeout', { seconds: ms / 1000 })
+      return finish('failed', `חדר המלחמה לא הסתיים בתוך ${ms / 1000} שניות, אז עצרתי בלי תוכנית. לא הצגתי טיוטה כאילו נבדקה.`)
+    }
+    if (e instanceof BudgetError) {
+      log('budget', { error: e.message })
+      return finish('failed', `עצרתי לפני חריגה מהתקציב: ${e.message}. לא הצגתי תוצאה חלקית כאילו נבדקה.`)
+    }
+    if (e instanceof Unclear) {
+      log('unclear', { error: e.message })
+      return finish('unclear', 'חלק מהעבודה התחיל קודם ולא ברור אם הסתיים, אז לא הרצתי אותו שוב. לכתוב "תחפש שוב" ואריץ מההתחלה.')
+    }
+    log('worker-failed', { error: String(e.message).slice(0, 200) })
+    return finish('failed', `הצוות נעצר באמצע (${String(e.message).slice(0, 120)}). לא הצגתי טיוטה כאילו נבדקה.`)
+  } finally {
+    clearTimeout(timer)
+    running.delete('war')
+    addSpend(budget.used.usd)
+    task.used = { ...budget.used }
+    save()
+  }
+}
 
 // One model call, reserved before it is sent. Output arriving after a stop is thrown away, never used.
 async function callModel(role, messages, tools, wantOut, { budget, signal, log }) {
