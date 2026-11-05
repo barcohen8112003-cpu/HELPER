@@ -250,6 +250,21 @@ const build = () => ({
     priceOutPerMTok: Number(env('TEAM_PRICE_OUT_PER_MTOK')) || 0,
     maxUsdPerRequest: Number(env('TEAM_MAX_USD_PER_REQUEST')) || 0,
     maxUsdPerDay: Number(env('TEAM_MAX_USD_PER_DAY')) || 0,
+    // The war room (src/team/warroom.js) for a big task. Same TEAM_MODE switch and the same USD caps as the
+    // flight profile. These ceilings are separate so a flight search stays at 4 calls / 90s, and env can only
+    // lower them. TEAM_WAR_DEADLINE_SECONDS unset follows TEAM_DEADLINE_SECONDS.
+    maxAgents: Math.min(4, Math.max(2, Number(env('TEAM_MAX_AGENTS', '4')) || 4)),
+    maxRounds: Math.min(2, Math.max(1, Number(env('TEAM_MAX_ROUNDS', '2')) || 2)),
+    warMaxCalls: Math.min(8, Math.max(2, Number(env('TEAM_WAR_MAX_CALLS', '8')) || 8)),
+    warMaxInTokens: Math.min(20000, Math.max(2000, Number(env('TEAM_WAR_MAX_IN_TOKENS', '16000')) || 16000)),
+    warMaxOutTokens: Math.min(6000, Math.max(256, Number(env('TEAM_WAR_MAX_OUT_TOKENS', '4000')) || 4000)),
+    warDeadlineMs: env('TEAM_WAR_DEADLINE_SECONDS')
+      ? Math.min(120000, Math.max(10000, Number(env('TEAM_WAR_DEADLINE_SECONDS')) * 1000 || 90000))
+      : Math.max(5000, Math.min(90000, Number(env('TEAM_DEADLINE_SECONDS', '90')) * 1000 || 90000)),
+    warUpdates: (() => {
+      const n = Number(env('TEAM_WAR_UPDATES', '2'))
+      return Number.isFinite(n) ? Math.min(3, Math.max(0, Math.floor(n))) : 2
+    })(),
   },
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.

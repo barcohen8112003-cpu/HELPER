@@ -60,3 +60,58 @@ export function scriptedModel({ log = [], researcherExtra = [], researcherNotes 
     return { usage, message: { role: 'assistant', content: JSON.stringify({ accept, reject, missing, approved: true }) } }
   }
 }
+
+// A scripted war room. Not a language model: each role answers from what it was sent, so the test can see the
+// parallel wave, the blocked tool, the critic's veto and a price that was not in the tool result.
+// Set `badTools` to have the shopper also ask for tools it must not reach.
+export function scriptedWarModel({ log = [], delayMs = 30, fail = null, badTools = [] } = {}) {
+  let inflight = 0
+  const model = async ({ role, messages, tools, maxTokens, signal }) => {
+    log.push({ role, maxTokens, tools: (tools || []).map((t) => t.function?.name), at: Date.now() })
+    inflight++
+    model.maxInflight = Math.max(model.maxInflight || 0, inflight)
+    if (delayMs) {
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(resolve, delayMs)
+        signal?.addEventListener('abort', () => (clearTimeout(t), reject(new Error('aborted'))), { once: true })
+      })
+    }
+    inflight--
+    if (fail === role) throw new Error('provider error 500 (synthetic)')
+    const usage = { prompt_tokens: Math.ceil(JSON.stringify(messages).length / 3), completion_tokens: 80 }
+    // The user text is already a JSON string. Stringifying the whole message list escapes the quotes,
+    // so the round and the request are read off the user messages themselves, not off a tool result.
+    const user = messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n')
+    const round = /"round":2/.test(user) ? 2 : 1
+    const study = /כימיה|תוכנית לימוד/.test(user)
+    const sawTool = messages.some((m) => m.role === 'tool')
+    const raw = messages.map((m) => m.content || '').join('\n')
+    const json = (obj) => ({ usage, message: { role: 'assistant', content: JSON.stringify(obj) } })
+    if (role === 'researcher') {
+      if (!sawTool) {
+        return { usage, message: { role: 'assistant', content: '', tool_calls: [{ id: 'w1', type: 'function', function: { name: 'web_search', arguments: JSON.stringify({ query: study ? 'מבחן כימיה כיתה י' : 'יום בתל אביב בלי כניסה' }) } }] } }
+      }
+      if (!/<<DATA/.test(raw)) return json({ line: 'בלי מקור', found: [], not_checked: 'התוצאה נזרקה' })
+      return json(study
+        ? { line: 'כימיה: פרקים 1-3', found: ['החומר למבחן: פרקים 1 עד 3'], not_checked: '' }
+        : { line: 'שוק הכרמל בלי כניסה', found: ['שוק הכרמל פתוח בלי דמי כניסה', 'פארק הירקון בלי תשלום'], not_checked: 'שעות שישי' })
+    }
+    if (role === 'shopper') {
+      if (!sawTool) {
+        const extra = badTools.map((name, i) => ({ id: `bad${i}`, type: 'function', function: { name, arguments: '{"goal":"buy now"}' } }))
+        return { usage, message: { role: 'assistant', content: '', tool_calls: [...extra, { id: 's1', type: 'function', function: { name: 'compare_prices', arguments: '{"goal":"ארוחת צהריים תל אביב","budget":"200 ש״ח"}' } }] } }
+      }
+      return json({ line: 'שווארמה ב-45 ש"ח', options: [{ item: 'שווארמה', price: '45 ש"ח', source: 'בדיקה' }, { item: 'כרטיס מוזיאון', price: '90 ש"ח', source: 'בדיקה' }, { item: 'המצאה', price: '10 ש"ח', source: 'בדיקה' }], over_budget: ['מוזיאון על כל היום'], not_checked: '' })
+    }
+    if (role === 'planner') {
+      if (study) return json({ line: 'שלושה ערבים עד המבחן', title: 'לימוד לכימיה', steps: ['ערב 1: פרק 1', 'ערב 2: פרק 2', 'ערב 3: חזרה על פרק 3'], open: [] })
+      if (round === 2) return json({ line: 'השארתי את מה שנכנס ב-200', title: 'יום בתל אביב עד 200 ש"ח', steps: ['בוקר בשוק הכרמל', 'מוזיאון תל אביב', 'צהריים: שווארמה', 'אחר הצהריים בפארק הירקון'], open: [] })
+      return json({ line: 'טיוטה עם מוזיאון', title: 'יום בתל אביב', steps: ['שוק הכרמל', 'מוזיאון תל אביב', 'שווארמה'], open: [] })
+    }
+    if (round === 2 && !study && /מוזיאון/.test(user)) return json({ line: 'המוזיאון בחוץ', risks: [], block: ['מוזיאון'], fix: ['המוזיאון בחוץ: 90 ש"ח לא משאיר מקום ליום'], missing: [] })
+    if (round === 2) return json({ line: 'הטיוטה עומדת', risks: [], block: [], fix: [], missing: [] })
+    return json({ line: study ? 'בלי נושא אין תוכנית' : 'רגע, 200 ש"ח לא מחזיקים הכל', risks: [study ? 'חסר מקצוע' : 'אטרקציה בתשלום יכולה לשבור את התקציב'], block: [], fix: [], missing: [] })
+  }
+  model.maxInflight = 0
+  return model
+}

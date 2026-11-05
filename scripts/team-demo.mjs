@@ -13,7 +13,7 @@ delete process.env.FLIGHTS_HOME
 const { config } = await import('../src/config.js')
 const { runTurn } = await import('../src/agent.js')
 const team = await import('../src/team/conductor.js')
-const { mockOptions, scriptedModel, DETAILS_REPLY } = await import('../src/team/fixtures.js')
+const { mockOptions, scriptedModel, scriptedWarModel, DETAILS_REPLY } = await import('../src/team/fixtures.js')
 
 Object.assign(config.llm, { apiKey: 'demo', model: 'not-called', baseUrl: 'http://fake.invalid', fallbackModels: [], cheapModel: '', backup: { apiKey: '', model: '' } })
 config.memoryLearn = false
@@ -42,4 +42,23 @@ console.log('\nאירועים:')
 console.log(events(e2))
 show('Helper (התשובה האחת שהוא מקבל)', reply)
 console.log(`\nקריאות מודל לצוות: ${calls.length} (${calls.map((c) => `${c.role} עד ${c.maxTokens} טוקני פלט`).join(', ')}). עלות: $0, מודל מדומה.`)
+
+const warCalls = []
+const bubbles = []
+team._setForTest({
+  model: scriptedWarModel({ log: warCalls, delayMs: 0 }),
+  tools: {
+    web_search: async () => 'שוק הכרמל פתוח, כניסה חינם. פארק הירקון בלי תשלום.',
+    compare_prices: async () => 'שווארמה 45 ש"ח. כרטיס מוזיאון 90 ש"ח.',
+  },
+})
+const day = 'תתכנן לי יום בתל אביב עד 200 ש"ח'
+show('הוא כותב', day)
+const e3 = []
+const plan = await runTurn(day, { source: 'whatsapp', msgId: 'demo-3', teamEvents: e3, say: (t) => bubbles.push(t) })
+show('חדר מלחמה (בועות, לא התשובה)', bubbles.join('\n\n'))
+console.log('\nאירועים:')
+console.log(events(e3))
+show('Helper (התשובה האחת)', plan)
+console.log(`\nקריאות מודל לחדר: ${warCalls.length}. עלות: $0, מודל מדומה. לא הוזמן כלום.`)
 fs.rmSync(dir, { recursive: true, force: true })
