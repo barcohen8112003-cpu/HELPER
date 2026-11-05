@@ -50,6 +50,7 @@ android {
         }
     }
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
@@ -94,4 +95,7 @@ dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(libs.guava)
     implementation(libs.gson)
+    implementation(libs.livekit.android)
+    implementation(libs.porcupine.android)
+    coreLibraryDesugaring(libs.desugar.jdk)
 }

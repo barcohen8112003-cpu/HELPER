@@ -2,6 +2,7 @@ package com.example.helper.ui.screens
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,9 +32,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -53,6 +56,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -79,9 +83,12 @@ import com.example.helper.ui.theme.TextHigh
 import com.example.helper.ui.theme.TextLow
 import com.example.helper.ui.theme.TextMid
 import com.example.helper.ui.theme.Violet
+import com.example.helper.voice.LiveVoiceActivity
 import com.example.helper.voice.Phase
 import com.example.helper.voice.VoiceEngine
+import com.example.helper.wake.OnDeviceWakeService
 import com.example.helper.wake.WakeAccess
+import com.example.helper.wake.WakeFiles
 import com.example.helper.wake.WakeWordService
 
 @Composable
@@ -128,8 +135,12 @@ fun MainScreen(
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
     var wakeEnabled by remember { mutableStateOf(settingsRepository.isWakeWordEnabled()) }
+    var deviceWake by remember { mutableStateOf(settingsRepository.isDeviceWakeEnabled()) }
     // The listener keeps running after the app is closed; opening the app brings it back after a reboot.
-    LaunchedEffect(Unit) { if (wakeEnabled && micGranted) WakeWordService.start(context) }
+    LaunchedEffect(Unit) {
+        if (wakeEnabled && micGranted) WakeWordService.start(context)
+        if (deviceWake && micGranted) OnDeviceWakeService.start(context)
+    }
 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         micGranted = granted
@@ -139,9 +150,14 @@ fun MainScreen(
         val mic = result[Manifest.permission.RECORD_AUDIO] ?: micGranted
         micGranted = mic
         if (mic) {
-            settingsRepository.setWakeWordEnabled(true)
-            wakeEnabled = true
-            WakeWordService.start(context)
+            if (settingsRepository.isDeviceWakeEnabled()) {
+                deviceWake = true
+                OnDeviceWakeService.start(context)
+            } else {
+                settingsRepository.setWakeWordEnabled(true)
+                wakeEnabled = true
+                WakeWordService.start(context)
+            }
         }
     }
 
@@ -227,6 +243,20 @@ fun MainScreen(
                 textAlign = TextAlign.Center
             )
 
+            Spacer(Modifier.height(14.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Brush.linearGradient(listOf(Violet, Cyan)))
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        context.startActivity(Intent(context, LiveVoiceActivity::class.java))
+                    }
+                    .padding(horizontal = 28.dp, vertical = 14.dp)
+            ) {
+                Text("שיחה חיה", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            }
+
             Spacer(Modifier.height(18.dp))
 
             // ── what was heard, and the answer ──────────────────────────────
@@ -310,11 +340,40 @@ fun MainScreen(
                         wakeEnabled = false
                         WakeWordService.stop(context)
                     } else {
+                        settingsRepository.setDeviceWakeEnabled(false)
+                        deviceWake = false
+                        OnDeviceWakeService.stop(context)
                         val needed = buildList {
                             add(Manifest.permission.RECORD_AUDIO)
                             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
                         }
                         wakePermissions.launch(needed.toTypedArray())
+                    }
+                }
+            )
+            Spacer(Modifier.height(12.dp))
+            val deviceStatus by OnDeviceWakeService.status.collectAsState()
+            DeviceWakeCard(
+                enabled = deviceWake,
+                status = deviceStatus,
+                settings = settingsRepository,
+                onChange = { on ->
+                    if (!on) {
+                        settingsRepository.setDeviceWakeEnabled(false)
+                        deviceWake = false
+                        OnDeviceWakeService.stop(context)
+                    } else {
+                        settingsRepository.setWakeWordEnabled(false)
+                        wakeEnabled = false
+                        WakeWordService.stop(context)
+                        val needed = buildList {
+                            add(Manifest.permission.RECORD_AUDIO)
+                            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        settingsRepository.setDeviceWakeEnabled(true)
+                        deviceWake = true
+                        if (micGranted) OnDeviceWakeService.start(context)
+                        else wakePermissions.launch(needed.toTypedArray())
                     }
                 }
             )
@@ -527,6 +586,97 @@ private fun PhoneStep(title: String, detail: String, done: Boolean, onClick: () 
             if (!done) Text(detail, color = TextLow, fontSize = 12.sp)
         }
         Text(if (done) "✓" else "←", color = if (done) Mint else TextLow, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun DeviceWakeCard(
+    enabled: Boolean,
+    status: String,
+    settings: SettingsRepository,
+    onChange: (Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    var key by remember { mutableStateOf(settings.porcupineKey()) }
+    var jarvis by remember { mutableStateOf(settings.jarvisWake()) }
+    var keyword by remember { mutableStateOf(WakeFiles.keyword(context) != null) }
+    var model by remember { mutableStateOf(WakeFiles.model(context) != null) }
+    val pickKeyword = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            WakeFiles.save(context, uri, "keyword.ppn")
+            keyword = true
+            if (enabled) {
+                OnDeviceWakeService.stop(context)
+                OnDeviceWakeService.start(context)
+            }
+        }
+    }
+    val pickModel = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            WakeFiles.save(context, uri, "model.pv")
+            model = true
+            if (enabled) {
+                OnDeviceWakeService.stop(context)
+                OnDeviceWakeService.start(context)
+            }
+        }
+    }
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("היי הלפר, על המכשיר", color = TextHigh, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text("כבוי עד שמדליקים. Porcupine אם יש מפתח וקובץ מילה, אחרת הזיהוי המקומי של הטלפון. שמע לא יוצא מהמכשיר.", color = TextLow, fontSize = 12.sp)
+                    if (enabled && status.isNotBlank()) Text(status, color = Cyan, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onChange,
+                    colors = SwitchDefaults.colors(checkedTrackColor = Violet, checkedThumbColor = Color.White)
+                )
+            }
+            if (enabled) {
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = {
+                        key = it
+                        settings.setPorcupineKey(it)
+                    },
+                    label = { Text("Picovoice AccessKey") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    colors = TextFieldDefaults.colors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text("אחרי שינוי המפתח כבה והדלק. מפתח חינם ב-console.picovoice.ai", color = TextLow, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (keyword) "קובץ מילה שמור" else "אין קובץ .ppn", color = TextMid, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text("בחר", color = Cyan, fontSize = 14.sp, modifier = Modifier.clickable { pickKeyword.launch(arrayOf("*/*")) })
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (model) "מודל שפה שמור" else "מודל .pv (לעברית)", color = TextMid, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text("בחר", color = Cyan, fontSize = 14.sp, modifier = Modifier.clickable { pickModel.launch(arrayOf("*/*")) })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("גם Jarvis באנגלית", color = TextMid, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = jarvis,
+                        onCheckedChange = {
+                            jarvis = it
+                            settings.setJarvisWake(it)
+                            if (enabled) {
+                                OnDeviceWakeService.stop(context)
+                                OnDeviceWakeService.start(context)
+                            }
+                        },
+                        colors = SwitchDefaults.colors(checkedTrackColor = Violet, checkedThumbColor = Color.White)
+                    )
+                }
+            }
+        }
     }
 }
 

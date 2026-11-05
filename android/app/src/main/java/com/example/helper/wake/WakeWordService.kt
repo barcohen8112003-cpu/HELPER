@@ -230,7 +230,10 @@ class WakeWordService : Service() {
  * ("הבוט לא עובד"), so it only counts after a greeting, or when it is almost all that was said.
  */
 object WakePhrase {
-    private val names = setOf("בוט", "הבוט", "בוטי", "בוד", "בוטט", "bot", "bott", "boat", "bote", "bought")
+    private val names = setOf(
+        "בוט", "הבוט", "בוטי", "בוד", "בוטט", "bot", "bott", "boat", "bote", "bought",
+        "הלפר", "הילפר", "הלפרר", "helper"
+    )
     private val greetings = setOf("היי", "הי", "הייי", "אי", "איי", "האי", "hey", "hi", "hay", "hei", "a", "ok", "okay", "אוקי", "אוקיי")
 
     private fun words(text: String) =

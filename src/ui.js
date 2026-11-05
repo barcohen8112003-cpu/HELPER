@@ -27,8 +27,20 @@ import { metricsSummary } from './metrics.js'
 import { handleTvUpgrade } from './tv-app.js'
 import { handleBirdWebhook } from './bird.js'
 import { fastCommand } from './fast-commands.js'
+import {
+  bearer,
+  liveJoin,
+  liveKitBrowserFile,
+  liveVoiceFrom,
+  liveVoiceStatus,
+  proxyLiveKit,
+  secretOk,
+  synthesize,
+  takeSlot,
+} from './live-voice.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
+const LIVE_PAGE = path.join(ROOT, 'src', 'live.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
 const PHONE_PAGE = path.join(ROOT, 'src', 'phone.html')
 const SENT_LOG = path.join(DATA_DIR, 'sent.log')
@@ -193,6 +205,7 @@ async function snapshot(connectedSince) {
     phone: { enabled: phoneEnabled(), host: phoneBox().host || config.phone.host, mode: config.phone.mode, loginPath: '/phone' },
     desktop: { enabled: config.desktop.enabled, path: '/desktop/' },
     errand: { enabled: errandCloudOn(), path: '/errand' },
+    liveVoice: liveVoiceStatus(),
   }
 }
 
@@ -216,7 +229,67 @@ export function maskSettingsUrl(url) {
 
 // { connectedSince(): number, restart(): void }
 // agent(text, { voice, source }) => Promise<string>: optional; enables the bridge for other local programs.
-export function startUi({ connectedSince, restart, agent }) {
+// Phone and browser join, and the voice worker's tool turn. The worker shares LIVEKIT_API_SECRET.
+// A wrong secret is the same answer as a missing one, so the path does not confirm that the feature exists.
+async function liveHttp(req, res, url, { bridgeToken, liveTurn, send }) {
+  const cfg = liveVoiceFrom()
+  if (url.pathname === '/bridge/live/join') {
+    const given = bearer(req.headers.authorization)
+    if (!secretOk(given, bridgeToken)) return send(res, 403, { ok: false, reason: 'bridge token missing or wrong' })
+    if (!takeSlot('live-join', 30)) return send(res, 429, { ok: false, reason: 'יותר מדי בקשות. נסה שוב בעוד דקה.' })
+    const proto = req.headers['x-forwarded-proto'] || 'http'
+    return send(res, 200, await liveJoin({ identity: 'phone', host: req.headers.host, proto }))
+  }
+  const given = bearer(req.headers.authorization)
+  if (!cfg.ready || !secretOk(given, cfg.apiSecret)) return send(res, 404, { error: 'not found' })
+  if (!takeSlot('live-worker', 60)) return send(res, 429, { error: 'too many requests' })
+  let body = {}
+  try {
+    body = JSON.parse(await readBody(req, 20000))
+  } catch (e) {
+    return send(res, 400, { error: e.message || 'bad body' })
+  }
+  const text = String(body.text || '').trim()
+  if (!text) return send(res, 400, { error: 'empty text' })
+  if (url.pathname === '/internal/live/tts') {
+    const out = await synthesize(text)
+    if (out.engine === 'eleven' && out.pcm) {
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': out.pcm.length, 'Cache-Control': 'no-store' })
+      return res.end(out.pcm)
+    }
+    return send(res, 200, { engine: out.engine, voice: out.voice || '', error: out.error || '' })
+  }
+  if (!liveTurn) return send(res, 503, { error: 'live turn is not wired' })
+  const ac = new AbortController()
+  let finished = false
+  req.on('close', () => { if (!finished) ac.abort() })
+  try {
+    const reply = await liveTurn(text.slice(0, 4000), { signal: ac.signal })
+    finished = true
+    if (ac.signal.aborted) return
+    return send(res, 200, { reply: String(reply || '') })
+  } catch (e) {
+    finished = true
+    if (ac.signal.aborted) return
+    return send(res, 500, { error: e.message || 'turn failed' })
+  }
+}
+
+function readBody(req, max) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks = []
+    req.on('data', (c) => {
+      size += c.length
+      if (size > max) reject(Object.assign(new Error('too large'), { status: 413 }))
+      else chunks.push(c)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+export function startUi({ connectedSince, restart, agent, liveTurn }) {
   const token = (state.uiToken ||= randomBytes(24).toString('hex'))
   const bridgeToken = (state.bridgeToken ||= randomBytes(24).toString('hex'))
   save()
@@ -387,6 +460,9 @@ export function startUi({ connectedSince, restart, agent }) {
           console.log(bridgeAskLog({ source, status, ms: Date.now() - started }))
         }
       }
+      if (req.method === 'POST' && (url.pathname === '/bridge/live/join' || url.pathname === '/internal/live/turn' || url.pathname === '/internal/live/tts')) {
+        return liveHttp(req, res, url, { bridgeToken, liveTurn, send })
+      }
       if (req.method === 'POST' && url.pathname === '/bridge/tts') {
         state.bridgeSeenAt = Date.now()
         const given = (req.headers.authorization || '').replace(/^Bearer /, '')
@@ -429,7 +505,7 @@ export function startUi({ connectedSince, restart, agent }) {
       // not sent on the 302 follow to dest, so the next GET looks signed out. Lax is sent on that GET.
       // Cross-site POSTs still omit the cookie, and the Origin allow-list rejects a foreign page anyway.
       const desktopEntry = isDesktopPath(url.pathname)
-      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || url.pathname === '/errand' || desktopEntry) && url.searchParams.has('t')) {
+      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || url.pathname === '/errand' || url.pathname === '/live' || desktopEntry) && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
         const dest = desktopEntry ? '/desktop/' : (url.pathname === '/' ? '/' : url.pathname)
         return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000` })
@@ -445,6 +521,17 @@ export function startUi({ connectedSince, restart, agent }) {
       if (await handleDashboard(req, res, url, signedIn)) return
 
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'))
+      if (req.method === 'GET' && url.pathname === '/live') return send(res, 200, fs.readFileSync(LIVE_PAGE, 'utf8'))
+      if (req.method === 'GET' && url.pathname === '/live/client.js') {
+        const file = liveKitBrowserFile(ROOT)
+        if (!file) return send(res, 404, note('ספריית השיחה לא מותקנת'))
+        return send(res, 200, fs.readFileSync(file, 'utf8'), { 'Content-Type': 'text/javascript; charset=utf-8' })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/live/join') {
+        if (!takeSlot('live-join', 30)) return send(res, 429, { ok: false, reason: 'יותר מדי בקשות. נסה שוב בעוד דקה.' })
+        const proto = req.headers['x-forwarded-proto'] || 'http'
+        return send(res, 200, await liveJoin({ identity: 'browser', host: req.headers.host, proto }))
+      }
       if (req.method === 'GET' && (url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/errand')) {
         if (url.pathname === '/errand') ensureCloudBrowser('errand').catch(() => {})
         return send(res, 200, fs.readFileSync(WEBTOP_PAGE, 'utf8'))
@@ -496,6 +583,10 @@ export function startUi({ connectedSince, restart, agent }) {
     // The HELPER home screen on the TV (tv/launcher), the same way.
     if ((req.url || '').split('?')[0] === '/bridge/tv') {
       return handleTvUpgrade(req, socket, head, (r) => same((r.headers.authorization || '').replace(/^Bearer /, ''), bridgeToken))
+    }
+    // LiveKit signaling, only while the feature is ready. The token inside the URL is a LiveKit JWT we minted.
+    if ((req.url || '').startsWith('/livekit/') && liveVoiceFrom().ready) {
+      return proxyLiveKit(req, socket, head, liveVoiceFrom().url)
     }
     const host = req.headers.host || ''
     const access = policy()
