@@ -52,7 +52,8 @@ export function nightText(s) {
 }
 
 // deps: { send(text) => Promise<messageId>, now() => Date, getDay() => Promise<{ reminders, events, homework }>,
-//   news?() => Promise<string> (the morning news lines, '' for none) }
+//   news?() => Promise<string> (the morning news lines, '' for none),
+//   onBrief?(text) => void  optional, after the morning message has been sent }
 export function createDelivery(deps) {
   const now = () => deps.now()
 
@@ -191,7 +192,12 @@ export function createDelivery(deps) {
     // The morning news, when it is set for about the same time, rides in the same message (deps.news, src/scheduler.js).
     const news = deps.news ? await Promise.resolve(deps.news()).catch((e) => (console.log(`[news] ${e.message}`), '')) : ''
     const text = news ? `${day || 'בוקר טוב.'}\n\n📰 *מה קרה מאז אתמול בערב*\n${news}` : day
-    if (text) await sendNow(text, { event_id: `brief:${today}` })
+    if (text) {
+      await sendNow(text, { event_id: `brief:${today}` })
+      // The talking face, when the owner turned it on. Not awaited: the WhatsApp message is already out,
+      // and a missing PC must not delay or fail the brief.
+      if (typeof deps.onBrief === 'function') Promise.resolve(deps.onBrief(text)).catch((e) => console.log(`[face] ${e.message}`))
+    }
     // In the only-today mode the night's alerts are not part of that message; they leave on their own, if there are any.
     const night = config.briefOnlyToday ? nightText(s) : ''
     if (night) await sendNow(night, { event_id: `night:${today}` })

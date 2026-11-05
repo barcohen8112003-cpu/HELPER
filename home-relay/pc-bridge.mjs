@@ -1,5 +1,6 @@
 // Runs on the user's Windows PC. It only dials out to the assistant in the cloud; no port is opened at home.
-// Computer actions (src/pc.js) and Webtop reads (the Chrome window from webtop-browser.bat, 127.0.0.1:9223) run here.
+// Computer actions (src/pc.js), Webtop reads (the Chrome window from webtop-browser.bat, 127.0.0.1:9223),
+// and the talking-face calls (127.0.0.1:8771, only if face/start-face.ps1 is running) run here.
 //
 //   node home-relay/pc-bridge.mjs
 //

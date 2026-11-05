@@ -6,6 +6,7 @@ import http from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import os from 'node:os'
 import QRCode from 'qrcode'
+import { WebSocketServer } from 'ws'
 import { config, saveSettings, mailEnabled, ROOT, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
 import { setWebtopLoginUrl, webtopCloudBlockedNow, WEBTOP_BLOCKED_STATUS } from './session.js'
@@ -37,7 +38,9 @@ import {
   secretOk,
   synthesize,
   takeSlot,
+  wavFromPcm,
 } from './live-voice.js'
+import { attachFaceTrack, faceSnapshot, handleFaceHttp, handleFaceUpgrade, presentSpeech } from './face.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
 const LIVE_PAGE = path.join(ROOT, 'src', 'live.html')
@@ -56,6 +59,7 @@ SECRETS.push('SEARCHAPI_KEY')
 const PLAIN = [
   'LLM_BASE_URL', 'LLM_MODEL', 'LLM_BACKUP_BASE_URL', 'LLM_BACKUP_MODEL', 'LLM_CHEAP_MODEL', 'LLM_STRONG_MODEL', 'LLM_FALLBACK_MODEL', 'LLM_LIGHT', 'IMAGE_MODEL',
   'GEMINI_MODEL', 'BIRD_ENABLED', 'BIRD_WHATSAPP_FROM', 'BIRD_OWNER_NUMBER', 'BACKUP_GOOGLE_ACCOUNT', 'BOT_NAME', 'QUIET_HOURS', 'DAILY_BRIEF_TIME', 'NEWS_BRIEF_TIME', 'NEWS_FEEDS', 'TIMEZONE', 'COMPUTER_MODE',
+  'FACE_ENABLED', 'FACE_ENGINE', 'FACE_TV', 'FACE_WEBRTC', 'FACE_LIP_DELAY_MS',
   'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
   'MAIL_HOST', 'MAIL_USER', 'MAIL_POLL_MINUTES', 'CALENDAR_ICS_URL', 'WEEKLY_REVIEW_TIME', 'MESSAGE_BUDGET', 'LLM_PRICES', 'MONTHLY_COST_LIMIT',
 ]
@@ -206,6 +210,7 @@ async function snapshot(connectedSince) {
     desktop: { enabled: config.desktop.enabled, path: '/desktop/' },
     errand: { enabled: errandCloudOn(), path: '/errand' },
     liveVoice: liveVoiceStatus(),
+    face: faceSnapshot(),
   }
 }
 
@@ -225,6 +230,13 @@ export function uiPolicy(port = config.uiPort, env = process.env, extraHosts = [
 // The startup banner must not print the sign-in token. The full address stays in the return value and in the prompt.
 export function maskSettingsUrl(url) {
   return String(url || '').replace(/([?&]t=)([^&\s#]+)/g, (_, key, token) => `${key}…${token.slice(-4)}`)
+}
+
+// The face track for the current live-call utterance. Replaced on the next reply. Empty while FACE_ENABLED is off.
+let dropLiveFace = () => {}
+function holdLiveFace(track) {
+  dropLiveFace()
+  dropLiveFace = typeof track?.subscribe === 'function' ? track.subscribe(() => {}) : () => {}
 }
 
 // { connectedSince(): number, restart(): void }
@@ -254,6 +266,13 @@ async function liveHttp(req, res, url, { bridgeToken, liveTurn, send }) {
   if (url.pathname === '/internal/live/tts') {
     const out = await synthesize(text)
     if (out.engine === 'eleven' && out.pcm) {
+      // Same utterance on the face, only when FACE_ENABLED is on. The PCM reply to the voice worker stays as it was.
+      try {
+        const shown = await presentSpeech({ text, audio: wavFromPcm(out.pcm), mime: 'audio/wav', source: 'live', synthesize: false })
+        if (shown?.mode !== 'off' && shown.sessionId) holdLiveFace(attachFaceTrack(shown.sessionId))
+      } catch (e) {
+        console.log(`[face] ${e.message}`)
+      }
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': out.pcm.length, 'Cache-Control': 'no-store' })
       return res.end(out.pcm)
     }
@@ -310,6 +329,13 @@ export function startUi({ connectedSince, restart, agent, liveTurn }) {
   }
   const note = (text) => `<body dir="rtl" style="font-family:system-ui;padding:48px;background:#faf8f5;color:#222"><h2>${text}</h2></body>`
   const signedIn = (req) => (req.headers.cookie || '').split(/;\s*/).some((c) => c.startsWith(COOKIE + '=') && same(c.slice(COOKIE.length + 1), token))
+  const faceWss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 })
+  const faceCtx = {
+    signedIn,
+    bearerOk: (r) => same((r.headers.authorization || '').replace(/^Bearer /, ''), bridgeToken),
+    deny: (res) => send(res, 403, note('כדי לראות את הפנים, פתח את הכתובת שמופיעה בחלון של העוזר.')),
+    upgrade: (rq, sk, hd, cb) => faceWss.handleUpgrade(rq, sk, hd, cb),
+  }
 
   async function readJson(req, max = MAX_BODY) {
     let raw = ''
@@ -443,16 +469,21 @@ export function startUi({ connectedSince, restart, agent, liveTurn }) {
           const reply = quick ? quick.reply : await agent(text, { voice: Boolean(body.voice), source })
           // Speech costs ElevenLabs credits, so a client that only shows text (the app's chat) asks for none: "audio": false.
           let audio = null
+          let face = null
           if (body.audio !== false) {
             try {
               const audioBuffer = await elevenSpeakMp3(reply)
-              if (audioBuffer) audio = audioBuffer.toString('base64')
+              if (audioBuffer) {
+                audio = audioBuffer.toString('base64')
+                face = await presentSpeech({ text: reply, audio: audioBuffer, mime: 'audio/mpeg', source, synthesize: false })
+              }
             } catch (e) {
               console.error('[ui] ElevenLabs audio generation failed:', e.message)
             }
           }
           status = 200
-          return send(res, 200, { reply, audio, heard })
+          const faceInfo = face && face.mode !== 'off' ? { mode: face.mode, path: '/face', ticket: face.ticket } : undefined
+          return send(res, 200, { reply, audio, heard, ...(faceInfo ? { face: faceInfo } : {}) })
         } catch (e) {
           status = e.status || 400
           throw e
@@ -472,6 +503,7 @@ export function startUi({ connectedSince, restart, agent, liveTurn }) {
         if (!text) return send(res, 400, { error: 'empty text' })
         try {
           const mp3 = await elevenSpeakMp3(text)
+          presentSpeech({ text, audio: mp3, mime: 'audio/mpeg', source: 'tts', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
           res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': mp3.length })
           return res.end(mp3)
         } catch (e) {
@@ -505,11 +537,14 @@ export function startUi({ connectedSince, restart, agent, liveTurn }) {
       // not sent on the 302 follow to dest, so the next GET looks signed out. Lax is sent on that GET.
       // Cross-site POSTs still omit the cookie, and the Origin allow-list rejects a foreign page anyway.
       const desktopEntry = isDesktopPath(url.pathname)
-      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || url.pathname === '/errand' || url.pathname === '/live' || desktopEntry) && url.searchParams.has('t')) {
+      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || url.pathname === '/errand' || url.pathname === '/live' || url.pathname === '/face' || desktopEntry) && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
         const dest = desktopEntry ? '/desktop/' : (url.pathname === '/' ? '/' : url.pathname)
         return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000` })
       }
+      // Face page, portrait and watch socket: settings cookie, bridge bearer, or a short-lived face ticket.
+      // A face ticket does not sign the visitor into the rest of the settings site.
+      if (await handleFaceHttp(req, res, faceCtx)) return
       if (!signedIn(req)) return send(res, 403, note('כדי להיכנס, פתח את הכתובת שמופיעה בחלון של העוזר.'))
       if (desktopEntry) {
         if (!config.desktop.enabled) return send(res, 503, note('שולחן העבודה בענן כבוי.'))
@@ -530,7 +565,9 @@ export function startUi({ connectedSince, restart, agent, liveTurn }) {
       if (req.method === 'POST' && url.pathname === '/api/live/join') {
         if (!takeSlot('live-join', 30)) return send(res, 429, { ok: false, reason: 'יותר מדי בקשות. נסה שוב בעוד דקה.' })
         const proto = req.headers['x-forwarded-proto'] || 'http'
-        return send(res, 200, await liveJoin({ identity: 'browser', host: req.headers.host, proto }))
+        const joined = await liveJoin({ identity: 'browser', host: req.headers.host, proto })
+        if (joined.ok && faceSnapshot().enabled) joined.face = { path: '/face', kind: 'video' }
+        return send(res, 200, joined)
       }
       if (req.method === 'GET' && (url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/errand')) {
         if (url.pathname === '/errand') ensureCloudBrowser('errand').catch(() => {})
@@ -597,6 +634,7 @@ export function startUi({ connectedSince, restart, agent, liveTurn }) {
     if (!access.hosts.includes(host)) return fail(403, 'Forbidden')
     let pathname = '/'
     try { pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname } catch { /* keep / */ }
+    if (pathname === '/face/watch') return handleFaceUpgrade(req, socket, head, faceCtx)
     if (!isDesktopPath(pathname)) return fail(404, 'Not Found')
     if (!config.desktop.enabled || !signedIn(req)) return fail(403, 'Forbidden')
     proxyDesktopUpgrade(req, socket, head, config.desktop.upstream)

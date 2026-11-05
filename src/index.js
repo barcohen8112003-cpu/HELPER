@@ -35,6 +35,7 @@ import { kindOf, noticeLevel, noticeSent, noticeEngaged, parseNoticeCommand, run
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 import { announceRelease } from './release-notes.js'
 import { parseLiveCall, liveCallReply, LIVE_NOTE } from './live-voice.js'
+import { presentSpeech } from './face.js'
 import * as groups from './groups.js'
 import { groupAdders } from './group-tools.js'
 
@@ -311,7 +312,10 @@ const wa = await startWhatsApp(async (m) => {
       // The text follows only when it has links, or when speech failed.
       const wantsVoice = input.voice || state.voiceMode === 'always'
       const spoken = reply && wantsVoice ? await speak(reply).catch((e) => (console.log(`[voice] ${e.message}`), null)) : null
-      if (spoken) await wa.sendVoice(state.owner.jid, spoken)
+      if (spoken) {
+        await wa.sendVoice(state.owner.jid, spoken)
+        presentSpeech({ text: reply, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+      }
       if (reply && (!spoken || /https?:\/\//.test(reply))) await wa.send(state.owner.jid, reply)
       answered = true
       settle(reacted && !reply ? 'reaction' : 'reply')
@@ -471,7 +475,13 @@ const scheduledTask = (instruction, { noAsk = false } = {}) => {
 // The tools HELPER wrote for itself and Naor approved come back with it, each checked again before it loads.
 if (config.learning) loadUserTools().then((n) => n && console.log(`[tools] נטענו ${n} כלים שהעוזר כתב לעצמו`)).catch((e) => console.log(`[tools] ${e.message}`))
 
-const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, text), getDay, news: () => (newsInBrief() ? newsDigest() : '') })
+const monitoring = createMonitoring({
+  send: (text) => wa.send(state.owner.jid, text),
+  getDay,
+  news: () => (newsInBrief() ? newsDigest() : ''),
+  // Spoken morning brief on the face page. presentSpeech does nothing while FACE_ENABLED is off.
+  onBrief: (text) => presentSpeech({ text, source: 'brief' }),
+})
 
 // Proactive notices from the rest of the assistant. During quiet hours a non-urgent one is not held to be sent
 // on its own at 08:00: it joins the night's batch and arrives inside the one morning brief.

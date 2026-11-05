@@ -47,6 +47,13 @@ let server = null
 let home = null
 const pending = new Map()
 const helloSeen = new Map()
+const eventListeners = new Set()
+
+// Home can push a face frame without waiting for a call, so video is not stuck behind a screenshot.
+export function onBridgeEvent(fn) {
+  eventListeners.add(fn)
+  return () => eventListeners.delete(fn)
+}
 
 const secret = () => config.pcBridge.secret
 const keyOf = (s) => createHash('sha256').update(`pc-bridge|${s}`).digest()
@@ -256,6 +263,16 @@ function onCloudFrame(text) {
   const opened = openFrame(secret(), text, home.seen)
   if (!opened.ok) return
   const body = opened.payload
+  if (body?.t === 'event') {
+    for (const fn of eventListeners) {
+      try {
+        fn(body)
+      } catch (e) {
+        console.log(`[pc-bridge] ${e.message}`)
+      }
+    }
+    return
+  }
   if (body?.t !== 'result' || !pending.has(body.id)) return
   const waiter = pending.get(body.id)
   pending.delete(body.id)
@@ -414,9 +431,24 @@ export function connectHome({ url, secret: s, handlers }) {
           return fail(new Error(opened.ok ? 'תשובת חיבור לא צפויה' : `הענן לא אומת (${opened.error})`))
         }
         settled = true
+        let stopPump = () => {}
+        let stopped = false
+        if (process.env.PC_BRIDGE_EXECUTOR === '1') {
+          import('./face-pc.js').then((m) => {
+            if (stopped || ws.readyState !== WebSocket.OPEN) return
+            stopPump = m.startFacePump(ws, s) || (() => {})
+          }).catch((e) => console.log(`[face] ${e.message}`))
+        }
         resolve({
           ws,
-          close: () => ws.close(),
+          sendEvent(data) {
+            if (ws.readyState === WebSocket.OPEN) ws.send(seal(s, { t: 'event', name: 'face', data }))
+          },
+          close: () => {
+            stopped = true
+            try { stopPump() } catch { /* already stopped */ }
+            ws.close()
+          },
           get connected() {
             return ws.readyState === WebSocket.OPEN
           },
@@ -449,6 +481,12 @@ export async function homeHandlers() {
   handlers.getHomeDevices = () => home.getHomeDevices()
   handlers.controlHomeDevice = (query, action) => home.controlHomeDevice(query, action)
   handlers.googleHomeKeepAlive = () => home.googleHomeKeepAlive()
+  // Face render on this PC. Not a model tool: only the cloud calls these, and only when FACE_ENABLED is on.
+  const facePc = await import('./face-pc.js')
+  handlers.faceStatus = () => facePc.faceStatus()
+  handlers.faceAudio = (body) => facePc.faceAudio(body || {})
+  handlers.faceSignal = (body) => facePc.faceSignal(body || {})
+  handlers.faceClose = (body) => facePc.faceClose(body || {})
   return handlers
 }
 
