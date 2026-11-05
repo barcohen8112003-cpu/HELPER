@@ -61,6 +61,7 @@ const TESTS = [
   'src/shopping-selftest.js',
   'src/obscura-selftest.js',
   'src/team-selftest.js',
+  'src/live-voice-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

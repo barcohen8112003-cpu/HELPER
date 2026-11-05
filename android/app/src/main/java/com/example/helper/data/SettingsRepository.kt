@@ -56,6 +56,26 @@ class SettingsRepository(context: Context) {
         sharedPreferences.edit().putBoolean(KEY_CHAT_SPEAK, enabled).apply()
     }
 
+    /** On-device "היי הלפר". Off until the owner turns it on. */
+    fun isDeviceWakeEnabled(): Boolean = sharedPreferences.getBoolean(KEY_DEVICE_WAKE, false)
+
+    fun setDeviceWakeEnabled(enabled: Boolean) {
+        sharedPreferences.edit().putBoolean(KEY_DEVICE_WAKE, enabled).apply()
+    }
+
+    fun porcupineKey(): String = sharedPreferences.getString(KEY_PICOVOICE, "").orEmpty()
+
+    fun setPorcupineKey(key: String) {
+        sharedPreferences.edit().putString(KEY_PICOVOICE, key.trim()).apply()
+    }
+
+    /** Built-in English "Jarvis" keyword. Still needs a Picovoice AccessKey. */
+    fun jarvisWake(): Boolean = sharedPreferences.getBoolean(KEY_JARVIS, false)
+
+    fun setJarvisWake(enabled: Boolean) {
+        sharedPreferences.edit().putBoolean(KEY_JARVIS, enabled).apply()
+    }
+
     fun clearConnectionDetails() {
         sharedPreferences.edit()
             .remove(KEY_URL)
@@ -68,6 +88,9 @@ class SettingsRepository(context: Context) {
         private const val KEY_TOKEN = "connection_token"
         private const val KEY_WAKE_WORD = "wake_word_enabled"
         private const val KEY_CHAT_SPEAK = "chat_speak_enabled"
+        private const val KEY_DEVICE_WAKE = "device_wake_enabled"
+        private const val KEY_PICOVOICE = "picovoice_access_key"
+        private const val KEY_JARVIS = "wake_jarvis"
 
         @Volatile
         private var INSTANCE: SettingsRepository? = null

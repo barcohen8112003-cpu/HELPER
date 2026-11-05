@@ -19,6 +19,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // LiveKit's audio helper is published as a commit on JitPack, not Maven Central.
+        maven { url = uri("https://jitpack.io") }
     }
 }
 

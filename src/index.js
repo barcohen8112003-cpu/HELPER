@@ -34,6 +34,7 @@ import { takeProactiveSlot } from './metrics.js'
 import { kindOf, noticeLevel, noticeSent, noticeEngaged, parseNoticeCommand, runNoticeCommand } from './notice-learning.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
 import { announceRelease } from './release-notes.js'
+import { parseLiveCall, liveCallReply, LIVE_NOTE } from './live-voice.js'
 import * as groups from './groups.js'
 import { groupAdders } from './group-tools.js'
 
@@ -125,6 +126,7 @@ const HELP = `*פקודות*
 מה רץ - המשימות שרצות ברקע עכשיו. עצור את <שם> עוצר רק אחת
 שיחה חדשה (או /new) - מתחיל שיחה חדשה (זיכרון, תזכורות ומעקבים נשארים)
 /voice on - עונה בהודעה קולית על כל הודעה, /voice off חוזר לטקסט
+תתקשר אליי - קישור לשיחה חיה (כבוי עד LIVE_VOICE=on)
 /compact - מסכם את השיחה כדי לחסוך
 /model strong - עובר למודל החזק, /model default חוזר
 /unpair - מנתק את הצ'אט הזה
@@ -137,6 +139,7 @@ const HELP = `*פקודות*
 
 let pairCode = null
 let pendingConfirm = null
+let settingsPage = ''
 let queue = Promise.resolve()
 // The turn that is running for a WhatsApp message ({ ac: AbortController, done: Promise }), so "עצור" can end it.
 let activeTurn = null
@@ -236,6 +239,7 @@ const wa = await startWhatsApp(async (m) => {
   if (text === '/help') return wa.send(state.owner.jid, HELP)
   // A shortcut: no model, no queue, no cost. It answers while a long turn is still running.
   if (text === '/wake') return wa.send(state.owner.jid, wakeEnabled() ? `🖥️ ${await wakePc().catch((e) => `לא הצלחתי: ${e.message}`)}` : 'ההדלקה מרחוק לא מוגדרת. חסר WAKE_MAC בהגדרות.')
+  if (parseLiveCall(text)) return wa.send(state.owner.jid, liveCallReply(settingsPage))
   // Only a command typed by the owner here reaches the watch registry. Nothing read from mail or the web can.
   if (text === '/watch' || text.startsWith('/watch ')) return wa.send(state.owner.jid, await monitoring.command(text))
   if (text === '/status') return wa.send(state.owner.jid, status(wa.connectedSince()))
@@ -365,10 +369,26 @@ const say = (text) => wa.send(state.owner.jid, text)
 // for arrive as one bubble.
 // One approval is open at a time: with background tasks two could ask at once, and one "כן" must answer one question.
 let confirmChain = Promise.resolve()
+// Set when a live call hangs up in the middle of an approval, so that approval is a "no"
+// and the next WhatsApp approval is not swallowed.
+let declineNext = false
 function confirm(question, media) {
+  if (declineNext) {
+    declineNext = false
+    return Promise.resolve(false)
+  }
   const asked = confirmChain.then(() => askOnce(question, media))
   confirmChain = asked.catch(() => {})
   return asked
+}
+function declinePendingConfirm() {
+  if (pendingConfirm) {
+    const resolve = pendingConfirm
+    pendingConfirm = null
+    resolve(false)
+    return
+  }
+  declineNext = true
 }
 
 // Starts a background task (start_background_task). Its result, or why it failed, arrives as its own message.
@@ -531,7 +551,22 @@ const bridgeAsk = (text, { voice, source }) => {
   return run
 }
 
-const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk })
+// One spoken turn. Same queue, tools and WhatsApp approval as a chat message. Hanging up declines an open approval.
+async function liveTurn(text, { signal } = {}) {
+  const onAbort = () => declinePendingConfirm()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  const run = queue.then(() => runTurn(`${LIVE_NOTE}\n${text}`, { source: 'live', confirm, sendMedia, say, signal }))
+  queue = run.catch(() => {}).then(() => compact().catch(() => {}))
+  try {
+    return await run
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+    declineNext = false
+  }
+}
+
+const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk, liveTurn })
+settingsPage = settingsUrl
 setSettingsUrl(settingsUrl)
 console.log(`\nאתר ההגדרות (חיבור חשבונות, העדפות, מה פעיל):\n${maskSettingsUrl(settingsUrl)}\n`)
 // On a fresh install the page opens by itself, since connecting accounts is the next thing to do.

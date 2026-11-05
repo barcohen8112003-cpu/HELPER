@@ -212,6 +212,7 @@ function render(S) {
     W.cloud && h('a', { href: '/webtop' }, 'Webtop'),
     GH.cloud && h('a', { href: '/google-home' }, 'Google Home'),
     P.enabled && h('a', { href: '/phone' }, 'טלפון'),
+    h('a', { href: '/live' }, 'שיחה חיה'),
     S.errand?.enabled && h('a', { href: '/errand' }, '🛒 דפדפן קניות'),
   ].filter(Boolean)
   fill($('shortcuts'),

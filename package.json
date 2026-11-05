@@ -61,12 +61,15 @@
     "check:obscura": "node src/obscura-selftest.js",
     "check:stays": "node src/stays-selftest.js",
     "check:team": "node src/team-selftest.js",
+    "check:live": "node src/live-voice-selftest.js",
     "demo:team": "node scripts/team-demo.mjs"
   },
   "dependencies": {
     "@messagebird/sdk": "^0.107.0",
     "@whiskeysockets/baileys": "~6.7.24",
     "imapflow": "^1.0.180",
+    "livekit-client": "^2.23.0",
+    "livekit-server-sdk": "^2.19.2",
     "mailparser": "^3.7.2",
     "mammoth": "^1.13.0",
     "node-ical": "^0.20.1",

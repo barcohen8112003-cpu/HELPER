@@ -39,5 +39,41 @@ services:
     # 6080 (noVNC) is intentionally not published. Reach it through the settings site or Tailscale Serve.
     shm_size: "512mb"
 
+  # Live voice. Off with the default `docker compose up` (no profile, no new ports).
+  # Turn on with LIVE_VOICE=on plus the keys in .env, then:
+  #   docker compose --profile live-voice up -d --build
+  # Signaling is proxied through 3210 (already published) and only after HELPER's token.
+  # WebRTC itself needs UDP 50000-50019 and TCP 7881 on the public IP. Do not publish 7880 or 8081.
+  livekit:
+    profiles: ["live-voice"]
+    build:
+      context: ./voice
+      dockerfile: livekit.Dockerfile
+    container_name: helper-livekit
+    restart: on-failure
+    env_file: .env
+    mem_limit: 192m
+    cpus: 0.4
+    ports:
+      - "7881:7881/tcp"
+      - "50000-50019:50000-50019/udp"
+
+  voice-agent:
+    profiles: ["live-voice"]
+    build:
+      context: ./voice
+      dockerfile: Dockerfile
+    container_name: helper-voice
+    restart: on-failure
+    env_file: .env
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+      HELPER_URL: http://helper:3210
+    mem_limit: 768m
+    cpus: 1.0
+    depends_on:
+      - helper
+      - livekit
+
 volumes:
   helper-data:

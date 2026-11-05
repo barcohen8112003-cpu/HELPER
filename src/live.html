@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HELPER · שיחה חיה</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #070b14; color: #e8f1ff; font-family: system-ui, "Segoe UI", sans-serif; }
+  body { display: flex; align-items: center; justify-content: center; padding: 24px; }
+  main { width: min(720px, 100%); text-align: center; }
+  h1 { font-weight: 700; letter-spacing: 0.18em; font-size: clamp(28px, 5vw, 44px); margin: 0 0 8px; }
+  p { color: #9eb0c9; line-height: 1.5; font-size: clamp(16px, 2.4vw, 20px); }
+  .orb { width: min(240px, 46vw); height: min(240px, 46vw); margin: 28px auto; border-radius: 50%;
+    background: radial-gradient(circle at 40% 35%, #9af7ff, #2a6cff 42%, #091226 72%);
+    box-shadow: 0 0 60px #2a6cff88; animation: pulse 2.8s ease-in-out infinite; }
+  .orb.talk { animation-duration: 0.7s; box-shadow: 0 0 80px #7dfff7aa; }
+  .orb.think { animation-duration: 1.2s; filter: saturate(0.7); }
+  @keyframes pulse { 50% { transform: scale(1.06); } }
+  .row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
+  button { min-width: 160px; min-height: 64px; padding: 12px 22px; border-radius: 16px; border: 0; font-size: 22px; font-weight: 650; cursor: pointer; }
+  button.primary { background: #d7f7ff; color: #07111f; }
+  button.ghost { background: #162033; color: #d7e6ff; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  .costs { text-align: right; margin-top: 36px; color: #8ea0b8; font-size: 14px; }
+  .costs li { margin: 6px 0; }
+  #err { color: #ffb4b4; }
+</style>
+</head>
+<body>
+<main>
+  <h1>HELPER</h1>
+  <p id="status">בודק אם השיחה החיה דלוקה…</p>
+  <div class="orb" id="orb"></div>
+  <p id="err"></p>
+  <div class="row">
+    <button class="primary" id="join" disabled>דבר עם HELPER</button>
+    <button class="ghost" id="mute" disabled>השתק</button>
+    <button class="ghost" id="hang" disabled>נתק</button>
+  </div>
+  <ul class="costs">
+    <li>Groq Whisper: בערך $0.04 לשעת שמע. ElevenLabs לפי הקרדיטים בחשבון, או קול עברי חינמי (edge-tts) אם אין מפתח.</li>
+    <li>LiveKit רץ על השרת, בלי GPU. האות עובר בפורט 3210 שכבר פתוח. הקול עצמו צריך UDP 50000–50019 ו-TCP 7881. לא פותחים את 7880.</li>
+    <li>שליחה, תשלום, שיחה ומחיקה עדיין מחכים לאישור בוואטסאפ.</li>
+  </ul>
+</main>
+<script src="/live/client.js"></script>
+<script>
+const $ = (id) => document.getElementById(id)
+const statusEl = $('status')
+const errEl = $('err')
+const orb = $('orb')
+let room = null
+let muted = false
+
+function say(text) { statusEl.textContent = text }
+
+async function credentials() {
+  const res = await fetch('/api/live/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok || !body.ok) throw new Error(body.reason || body.error || 'השיחה החיה לא זמינה')
+  return body
+}
+
+async function join() {
+  errEl.textContent = ''
+  $('join').disabled = true
+  try {
+    if (!window.LivekitClient) throw new Error('ספריית השיחה לא נטענה')
+    const cred = await credentials()
+    say('מתחבר…')
+    room = new LivekitClient.Room({ adaptiveStream: false, dynacast: false })
+    room.on(LivekitClient.RoomEvent.Disconnected, () => {
+      say('השיחה נותקה')
+      orb.className = 'orb'
+      $('hang').disabled = true
+      $('mute').disabled = true
+      $('join').disabled = false
+    })
+    await room.connect(cred.url, cred.token)
+    await room.localParticipant.setMicrophoneEnabled(true)
+    say('אני איתך. דבר, ואפשר לקטוע אותי באמצע.')
+    orb.className = 'orb talk'
+    $('hang').disabled = false
+    $('mute').disabled = false
+  } catch (e) {
+    errEl.textContent = e.message || String(e)
+    say('לא נכנסתי לשיחה')
+    $('join').disabled = false
+  }
+}
+
+$('join').onclick = () => join()
+$('mute').onclick = async () => {
+  if (!room) return
+  muted = !muted
+  await room.localParticipant.setMicrophoneEnabled(!muted)
+  $('mute').textContent = muted ? 'בטל השתקה' : 'השתק'
+}
+$('hang').onclick = () => { if (room) room.disconnect() }
+
+credentials().then(() => { $('join').disabled = false; say('לחץ והתחל לדבר.') }).catch((e) => { say(e.message) })
+</script>
+</body>
+</html>

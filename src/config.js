@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { liveVoiceFrom } from './live-voice.js'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // HELPER_DATA_DIR lets tests run against a throwaway folder instead of the real state.
@@ -327,6 +328,8 @@ const build = () => ({
     port: Number(env('PC_BRIDGE_PORT', '0')) || 0,
     url: env('PC_BRIDGE_URL'),
   },
+  // Live voice (src/live-voice.js). Off unless LIVE_VOICE=on and the LiveKit key pair is set.
+  liveVoice: liveVoiceFrom(process.env),
 })
 
 export const liveDuffelToken = (token, allowTest = false) => (String(token || '').startsWith('duffel_test_') && !allowTest ? '' : String(token || ''))
