@@ -36,6 +36,7 @@
     "check:webtop": "node src/webtop-selftest.js",
     "check:google-home": "node src/google-home-selftest.js",
     "check:phone": "node src/phone-selftest.js",
+    "call:telnyx": "node scripts/telnyx-test-call.mjs",
     "check:desktop": "node src/cloud-desktop-selftest.js",
     "check:phone-app": "node src/phone-app-selftest.js",
     "check:study": "node src/study-selftest.js",
