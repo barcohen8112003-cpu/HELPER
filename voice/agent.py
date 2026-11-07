@@ -9,7 +9,8 @@ import re
 
 import aiohttp
 from livekit import agents, rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobProcess, function_tool, inference
+from livekit.agents import Agent, AgentServer, AgentSession, JobProcess, function_tool, inference, tts, utils
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.plugins import groq, silero
 
 from edge_pcm import edge_pcm, pcm_frames
@@ -128,6 +129,36 @@ async def speak_pcm(text: str) -> bytes:
     if isinstance(body, dict) and body.get("engine") == "empty":
         return b""
     return await edge_pcm(text, voice)
+
+
+class HelperTTS(tts.TTS):
+    """The voice HELPER already has (ElevenLabs or edge), exposed as a LiveKit TTS.
+
+    The session needs a TTS object for say() (the greeting) to work at all; the
+    per-sentence parallel synthesis stays in HelperVoice.tts_node.
+    """
+
+    def __init__(self):
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=False),
+            sample_rate=16000,
+            num_channels=1,
+        )
+
+    def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+        return _HelperChunks(tts=self, input_text=text, conn_options=conn_options)
+
+
+class _HelperChunks(tts.ChunkedStream):
+    async def _run(self, output_emitter):
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=16000,
+            num_channels=1,
+            mime_type="audio/pcm",
+        )
+        output_emitter.push(await speak_pcm(self.input_text))
+        output_emitter.flush()
 
 
 class HelperVoice(Agent):
@@ -254,6 +285,7 @@ async def helper_voice(ctx: agents.JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=stt_options(),
+        tts=HelperTTS(),
         allow_interruptions=True,
         min_endpointing_delay=_seconds("LIVE_VOICE_MIN_ENDPOINT", 0.3),
         max_endpointing_delay=_seconds("LIVE_VOICE_MAX_ENDPOINT", 1.1),
