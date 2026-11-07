@@ -51,6 +51,7 @@
     "check:tv-agent": "node src/tv-agent-selftest.js",
     "check:docs": "node src/google-docs-selftest.js",
     "check:webtop-file": "node src/webtop-file-selftest.js",
+    "check:webtop-watch": "node src/webtop-watch-selftest.js",
     "check:groups": "node src/groups-selftest.js",
     "check:wa-link": "node src/wa-link-selftest.js",
     "check:release": "node src/release-notes-selftest.js",

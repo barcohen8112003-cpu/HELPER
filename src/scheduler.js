@@ -6,6 +6,7 @@ import { mailEvent, calendarEvent } from './monitoring/intake.js'
 import { briefMinutes } from './monitoring/delivery.js'
 
 import { inQuietHours } from './outbox.js'
+import { webtopUpdates } from './webtop-watch.js'
 import { sessionEnabled, sessionKeepAlive, isWebtopLoginError, planWebtopLoginNotice, clearWebtopLoginNotice, webtopKeepAliveFailure } from './session.js'
 import { googleHomeKeepAlive, isGoogleHomeLoginError, planGoogleHomeLoginNotice, clearGoogleHomeLoginNotice } from './google-home.js'
 import { lessonReminders } from './lessons.js'
@@ -468,7 +469,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
       listenToGmail()
       // costTick's second argument is a Date. The loop passes runTask as that argument, which threw
       // 'now.getFullYear is not a function' and skipped the monthly cost summary.
-      for (const job of [reminders, tasks, watchers, webtop, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, (n) => costTick(n), news, followUps, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of [reminders, tasks, watchers, webtop, webtopUpdates, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, (n) => costTick(n), news, followUps, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {

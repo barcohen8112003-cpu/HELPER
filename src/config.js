@@ -191,6 +191,9 @@ const build = () => ({
     cloud: ['1', 'true', 'yes'].includes(env('WEBTOP_CLOUD').toLowerCase()),
     // Optional proxy for that Chromium only (http:// or socks5://). A server outside Israel is blocked by Webtop's CloudFront.
     proxy: env('WEBTOP_PROXY'),
+    // WhatsApp notices for new grades, timetable changes, exams and school events (src/webtop-watch.js).
+    alerts: env('WEBTOP_ALERTS', 'true') !== 'false',
+    alertsMinutes: Math.max(15, Number(env('WEBTOP_ALERTS_MINUTES', '60')) || 60),
   },
   // fetch_page through Scrapling (Python, py/scrapling_worker.py): public HTTPS pages only, with DNS and redirect
   // checks. Off unless SCRAPLING_ENABLED=true. SCRAPLING_PYTHON is the interpreter inside its own venv.
