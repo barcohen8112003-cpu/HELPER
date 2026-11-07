@@ -42,6 +42,11 @@ SENTENCE_END = re.compile(r"(?<=[.!?…:;])\s+|\n+")
 
 
 def stt_options():
+    # A model id with a provider prefix (deepgram/nova-3, assemblyai/universal-streaming-multilingual)
+    # runs on LiveKit Inference with the project key pair: no extra key, streaming, built for phone audio.
+    chosen = os.environ.get("LIVE_VOICE_STT_MODEL") or ""
+    if "/" in chosen:
+        return inference.STT(chosen, language="he")
     key = os.environ.get("GROQ_API_KEY") or os.environ.get("LIVE_VOICE_STT_KEY") or ""
     base = os.environ.get("LIVE_VOICE_STT_BASE_URL") or ""
     voice_base = os.environ.get("VOICE_BASE_URL") or ""
@@ -290,6 +295,16 @@ async def helper_voice(ctx: agents.JobContext):
         min_endpointing_delay=_seconds("LIVE_VOICE_MIN_ENDPOINT", 0.3),
         max_endpointing_delay=_seconds("LIVE_VOICE_MAX_ENDPOINT", 1.1),
     )
+
+    @session.on("user_input_transcribed")
+    def _heard(ev):
+        if getattr(ev, "is_final", False):
+            print(f"heard: {str(ev.transcript)[:120]}")
+
+    @session.on("error")
+    def _error(ev):
+        print(f"session error: {getattr(ev, 'error', ev)}")
+
     await session.start(HelperVoice(greeting), room=ctx.room, record=False)
 
 
