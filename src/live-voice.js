@@ -6,7 +6,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
-import { AccessToken, TokenVerifier } from 'livekit-server-sdk'
+import { AccessToken, RoomAgentDispatch, RoomConfiguration, TokenVerifier } from 'livekit-server-sdk'
 
 const ON = new Set(['on', '1', 'true', 'yes'])
 const IDENTITIES = new Set(['phone', 'browser'])
@@ -27,6 +27,33 @@ const CALLS = new Set([
 ])
 
 const trim = (v) => String(v || '').trim()
+const digitsOf = (v) => String(v || '').replace(/\D/g, '')
+const digitList = (v) => String(v || '').split(',').map(digitsOf).filter(Boolean)
+
+// LiveKit Cloud (wss://….livekit.cloud) is reached directly. The docker server stays behind HELPER's proxy.
+export function isCloudUrl(url) {
+  try {
+    const u = new URL(String(url || ''))
+    return u.protocol === 'wss:' && u.hostname.endsWith('.livekit.cloud')
+  } catch {
+    return false
+  }
+}
+
+// Who may talk to HELPER on the phone number. Israeli 05x and +9725x are the same number.
+export function phoneKey(v) {
+  let d = digitsOf(v)
+  if (d.startsWith('00')) d = d.slice(2)
+  if (d.startsWith('0') && d.length === 10) d = '972' + d.slice(1)
+  return d
+}
+
+export function callerAllowed(caller, ownerDigits, env = process.env) {
+  const who = phoneKey(caller)
+  if (!who) return false
+  const allowed = [ownerDigits, ...liveVoiceFrom(env).phoneAllow].map(phoneKey).filter(Boolean)
+  return allowed.includes(who)
+}
 
 export function liveVoiceFrom(env = process.env) {
   const enabled = ON.has(trim(env.LIVE_VOICE).toLowerCase())
@@ -43,6 +70,10 @@ export function liveVoiceFrom(env = process.env) {
     apiKey,
     apiSecret,
     url: trim(env.LIVEKIT_URL) || 'ws://livekit:7880',
+    // Set when the worker registers under a name (LiveKit Cloud phone numbers dispatch by name).
+    agentName: trim(env.LIVE_VOICE_AGENT_NAME),
+    // Extra numbers allowed to call in, besides the owner's WhatsApp number. Digits, comma separated.
+    phoneAllow: digitList(env.LIVE_VOICE_PHONE_ALLOW),
     room: trim(env.LIVE_VOICE_ROOM) || ROOM,
     nodeIp: trim(env.LIVEKIT_NODE_IP),
     udpStart: Number(env.LIVEKIT_UDP_START) || 50000,
@@ -138,6 +169,8 @@ export async function mintJoinToken(cfg, identity) {
     canSubscribe: true,
     canPublishData: true,
   })
+  // A named worker only joins when asked. The token asks for it when the browser or the app opens the room.
+  if (cfg.agentName) token.roomConfig = new RoomConfiguration({ agents: [new RoomAgentDispatch({ agentName: cfg.agentName })] })
   return token.toJwt()
 }
 
@@ -151,7 +184,8 @@ export async function liveJoin({ identity, host, proto, env = process.env } = {}
   if (!IDENTITIES.has(identity)) return { ok: false, reason: 'בקשת הצטרפות לא מוכרת' }
   try {
     const token = await mintJoinToken(cfg, identity)
-    return { ok: true, url: signalingUrl(host, proto), token, room: cfg.room, identity }
+    const url = isCloudUrl(cfg.url) ? cfg.url : signalingUrl(host, proto)
+    return { ok: true, url, token, room: cfg.room, identity }
   } catch (e) {
     return { ok: false, reason: e.message || 'לא הצלחתי לפתוח שיחה' }
   }
