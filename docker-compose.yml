@@ -72,7 +72,7 @@ services:
       LIVEKIT_URL: ${LIVEKIT_URL:-ws://livekit:7880}
       HELPER_URL: http://helper:3210
     mem_limit: 768m
-    cpus: 1.0
+    cpus: 2.0
     depends_on:
       - helper
       - livekit
