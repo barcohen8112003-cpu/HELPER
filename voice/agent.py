@@ -9,7 +9,7 @@ import re
 
 import aiohttp
 from livekit import agents, rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobProcess
+from livekit.agents import Agent, AgentServer, AgentSession, JobProcess, function_tool, inference
 from livekit.plugins import groq, silero
 
 from edge_pcm import edge_pcm, pcm_frames
@@ -26,6 +26,12 @@ def _seconds(name: str, default: float) -> float:
     except ValueError:
         return default
 
+
+# pipeline = Groq hears, HELPER's server thinks, a TTS speaks (old behavior).
+# realtime = a fast speech-to-speech model talks as HELPER and asks the server whenever there is real work.
+MODE = os.environ.get("LIVE_VOICE_MODE", "pipeline").strip().lower()
+REALTIME_MODEL = os.environ.get("LIVE_VOICE_REALTIME_MODEL", "").strip() or "openai/gpt-realtime-2.1-mini"
+REALTIME_VOICE = os.environ.get("LIVE_VOICE_REALTIME_VOICE", "").strip()
 
 # When HELPER takes longer than this, a short "רגע" goes out so the line is not silent. 0 = never.
 FILLER_AFTER = _seconds("LIVE_VOICE_FILLER_AFTER", 1.2)
@@ -189,6 +195,31 @@ class HelperVoice(Agent):
                     job.cancel()
 
 
+REALTIME_INSTRUCTIONS = """You are HELPER, Naor's personal assistant, on a live phone call with him. You ARE Helper: never say you are a different assistant, a model, or that you "ask" someone else.
+Speak Hebrew, in a warm natural spoken tone, like a person. One or two short sentences per turn. Never read lists, links or formatting aloud.
+You have one tool, ask_helper. It is your real hands, memory and senses: calendar, mail, WhatsApp, reminders, memory, search, the web, the computer, the phone, the TV, shopping, and anything that changes the outside world.
+Rules:
+- Small talk, greetings, thanks and simple questions about this call: answer yourself, instantly.
+- Anything else, every request for information about Naor's life or the world, and every action ("open Google", "remind me", "what do I have tomorrow"): call ask_helper with Naor's request in his own words, in Hebrew, with all the details he said. Do not answer these from your own knowledge.
+- Before calling ask_helper, say a very short Hebrew phrase ("רגע, בודק" / "שנייה") so the line is not silent. Then say the result plainly in your own words.
+- If the result says an action waits for approval in WhatsApp, tell him that in one sentence and wait.
+- If he interrupts, stop and listen."""
+
+
+class HelperRealtime(Agent):
+    def __init__(self, greeting: str = "היי, כאן הלפר."):
+        super().__init__(instructions=REALTIME_INSTRUCTIONS, allow_interruptions=True)
+        self.greeting = greeting
+
+    async def on_enter(self):
+        self.session.generate_reply(instructions=f"Greet him in Hebrew in a few words, like: {self.greeting}")
+
+    @function_tool
+    async def ask_helper(self, request: str) -> str:
+        """Do or look up anything real for Naor. Pass his request in Hebrew with every detail he gave."""
+        return await ask_helper(request)
+
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load(force_cpu=True)
 
@@ -214,6 +245,12 @@ async def helper_voice(ctx: agents.JobContext):
             await ctx.delete_room()
             return
         greeting = "היי, כאן הלפר."
+    if MODE == "realtime":
+        # Authenticates with the LiveKit project key pair already used here: no separate model key.
+        kwargs = {"voice": REALTIME_VOICE} if REALTIME_VOICE else {}
+        session = AgentSession(llm=inference.RealtimeModel(REALTIME_MODEL, **kwargs), allow_interruptions=True)
+        await session.start(HelperRealtime(greeting), room=ctx.room, record=False)
+        return
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=stt_options(),
