@@ -203,8 +203,10 @@ async function withTab(run) {
       const timer = setTimeout(done, ms)
       listeners.set(event, [done])
     })
+  // A listener that stays for the whole conversation (several may share one event).
+  const on = (event, fn) => listeners.set(event, [...(listeners.get(event) || []), fn])
   try {
-    return await run({ call, once })
+    return await run({ call, once, on })
   } finally {
     ws.close()
   }
@@ -368,6 +370,97 @@ export function readTimetable() {
   return runSessionRead(
     () => timetableLocal(),
     () => remoteCall('readTimetable', []),
+    sessionTransport(),
+  )
+}
+
+// The site's own API answers, read in the signed-in tab: grades, timetable changes, exams, events and messages.
+// Webtop's pages call webtopserver.../server/api/*, authorized by the session cookie. The answers are taken from
+// the page's own requests (no ids to guess), and the school-changes board for today and tomorrow is asked for
+// from inside the page with the same cookie. Nothing signs in and no password is involved.
+// -> { grades: [...], changes: { changes, exams, events, messages }, school: [{ date, data }] }
+const API_WAIT_MS = 20000
+const parseJson = (t) => {
+  try {
+    return JSON.parse(t)
+  } catch {
+    return null
+  }
+}
+
+async function captureApi({ call, once, on }, url, want) {
+  const asked = new Map()
+  const done = []
+  on('Network.requestWillBeSent', (p) => {
+    const u = p.request?.url || ''
+    const w = want.find((x) => u.includes(x))
+    if (w) asked.set(p.requestId, { want: w, url: u, body: p.request.postData })
+  })
+  on('Network.loadingFinished', (p) => asked.has(p.requestId) && done.push(p.requestId))
+  await call('Network.enable')
+  const loaded = once('Page.loadEventFired')
+  await call('Page.navigate', { url })
+  await loaded
+  await snapshot(call)
+  const got = {}
+  const end = Date.now() + API_WAIT_MS
+  while (Date.now() < end && want.some((w) => !got[w])) {
+    for (const id of done.splice(0)) {
+      const r = asked.get(id)
+      try {
+        const { body, base64Encoded } = await call('Network.getResponseBody', { requestId: id })
+        const json = parseJson(base64Encoded ? Buffer.from(body, 'base64').toString('utf8') : body)
+        if (json?.status) got[r.want] = { url: r.url, request: parseJson(r.body), data: json.data }
+      } catch {}
+    }
+    await new Promise((res) => setTimeout(res, 400))
+  }
+  await call('Network.disable').catch(() => {})
+  return got
+}
+
+const GRADES_API = 'PupilCard/GetPupilGrades'
+const CHANGES_API = 'shotef/ChangesAndMessagesData'
+
+function updatesLocal() {
+  return runLocal(async (tab) => {
+    await tab.call('Page.enable')
+    const site = (p) => new URL(p, config.webtop.url).href
+    const ch = (await captureApi(tab, site('/Timetable_Changes?tabIndex=1&tab=scheduale'), [CHANGES_API]))[CHANGES_API]
+    const gr = (await captureApi(tab, site('/Student_Card/6'), [GRADES_API]))[GRADES_API]
+    if (!ch && !gr) throw fail('לא הצלחתי לקרוא ציונים ושינויים מ-Webtop.', 'אני ממשיך לנסות.')
+    // The school-changes board ("שינויי מערכת בית ספריים") for today and tomorrow, for his grade.
+    let school = []
+    const inst = ch?.request?.institutionCode
+    const grade = Number(String(ch?.request?.selectedValue || '').split('|')[0]) || 0
+    if (inst && grade) {
+      const api = new URL('/server/api/shotef/SchoolchangesPerGradeFirst', ch.url).href
+      const dates = [0, 1].map((d) => new Date(Date.now() + d * 86400000).toISOString())
+      const { result } = await tab.call('Runtime.evaluate', {
+        awaitPromise: true,
+        returnByValue: true,
+        expression: `(async () => {
+          const out = []
+          for (const date of ${JSON.stringify(dates)}) {
+            try {
+              const r = await fetch(${JSON.stringify(api)}, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ institutionCode: ${JSON.stringify(inst)}, grade: ${grade}, selectedDate: date }) })
+              const j = await r.json()
+              if (j && j.status) out.push({ date, data: j.data })
+            } catch (e) {}
+          }
+          return JSON.stringify(out)
+        })()`,
+      })
+      school = parseJson(result?.value) || []
+    }
+    return { grades: gr ? gr.data || [] : null, changes: ch ? ch.data || {} : null, school }
+  })
+}
+
+export function readWebtopUpdates() {
+  return runSessionRead(
+    () => updatesLocal(),
+    () => remoteCall('readWebtopUpdates', []),
     sessionTransport(),
   )
 }

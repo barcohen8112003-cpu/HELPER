@@ -21,6 +21,7 @@ const defaults = {
   sentKeys: [], // event keys already announced, so nothing is announced twice
   inbox: [], // { id, text, at, answered, how, alerted }: his last chat messages and whether each got an answer (src/inbox.js)
   lessons: { fetchedAt: 0, week: [] }, // the Webtop timetable: [{ day, lesson, subject, teacher, room, cancelled }]
+  webtopWatch: { seen: null, lastPoll: 0 }, // Webtop grades/changes/exams/events already seen (src/webtop-watch.js)
   webtopLoginOpen: false, // a re-login notice was already sent for the current signed-out stretch
   webtopLoginNotifiedAt: 0, // last WhatsApp notice, so a flapping session cannot send another inside the gap
   googleHomeLoginOpen: false,
