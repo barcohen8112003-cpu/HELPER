@@ -3,6 +3,9 @@
 import { AccessToken } from 'livekit-server-sdk'
 import {
   COST_NOTE,
+  callerAllowed,
+  isCloudUrl,
+  phoneKey,
   LIVE_NOTE,
   createCall,
   createVad,
@@ -137,6 +140,23 @@ ok(call.push(loud).event === 'start' && interrupted === 1 && call.playing === fa
 call.push(silence)
 call.push(silence)
 ok(heard === 1, 'the utterance is still delivered after the interrupt')
+
+
+// Phone numbers on LiveKit Cloud: the worker is named, the browser token asks for it, only the owner gets in.
+ok(isCloudUrl('wss://helper-abc.livekit.cloud') && !isCloudUrl('ws://livekit:7880') && !isCloudUrl('wss://evil.example/livekit.cloud'), 'only a livekit.cloud wss address is Cloud')
+ok(phoneKey('+972 50-123-4567') === '972501234567' && phoneKey('050-1234567') === '972501234567' && phoneKey('00972501234567') === '972501234567', 'Israeli number forms match')
+ok(callerAllowed('+972501234567', '972501234567', {}), 'the owner may call')
+ok(callerAllowed('0501234567', '972501234567', {}), 'the owner in local form may call')
+ok(!callerAllowed('+14845550000', '972501234567', {}), 'a stranger is hung up')
+ok(!callerAllowed('', '972501234567', {}) && !callerAllowed('+972501234567', '', {}), 'no caller id or no owner means no')
+ok(callerAllowed('+14845550000', '972501234567', { LIVE_VOICE_PHONE_ALLOW: '+1 484 555 0000, 0529999999' }), 'an allowed extra number may call')
+const cloudEnv = { ...readyEnv, LIVEKIT_URL: 'wss://helper-abc.livekit.cloud', LIVE_VOICE_AGENT_NAME: 'helper-voice' }
+const cloudJoin = await liveJoin({ identity: 'browser', host: '37.60.240.231:3210', env: cloudEnv })
+ok(cloudJoin.ok && cloudJoin.url === 'wss://helper-abc.livekit.cloud', 'Cloud join goes straight to Cloud, not through the proxy')
+const cloudClaims = await verifyJoinToken(liveVoiceFrom(cloudEnv), cloudJoin.token)
+ok(cloudClaims.roomConfig?.agents?.[0]?.agentName === 'helper-voice', 'a named worker is dispatched by the join token')
+const plainClaims = await verifyJoinToken(cfg, await mintJoinToken(cfg, 'browser'))
+ok(!plainClaims.roomConfig, 'no agent name keeps the old automatic join')
 
 resetSlots()
 ok(takeSlot('turn', 2, 0) && takeSlot('turn', 2, 10) && !takeSlot('turn', 2, 20), 'a minute has a cap')

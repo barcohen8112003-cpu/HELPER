@@ -30,6 +30,7 @@ import { handleBirdWebhook } from './bird.js'
 import { fastCommand } from './fast-commands.js'
 import {
   bearer,
+  callerAllowed,
   liveJoin,
   liveKitBrowserFile,
   liveVoiceFrom,
@@ -263,6 +264,11 @@ async function liveHttp(req, res, url, { bridgeToken, liveTurn, send }) {
   }
   const text = String(body.text || '').trim()
   if (!text) return send(res, 400, { error: 'empty text' })
+  // A phone call reached the room. Only the owner (and LIVE_VOICE_PHONE_ALLOW) gets HELPER; anyone else is hung up.
+  if (url.pathname === '/internal/live/caller') {
+    const owner = String(state.owner?.jid || '').split('@')[0]
+    return send(res, 200, { allowed: callerAllowed(text, owner) })
+  }
   if (url.pathname === '/internal/live/tts') {
     const out = await synthesize(text)
     if (out.engine === 'eleven' && out.pcm) {
@@ -491,7 +497,7 @@ export function startUi({ connectedSince, restart, agent, liveTurn }) {
           console.log(bridgeAskLog({ source, status, ms: Date.now() - started }))
         }
       }
-      if (req.method === 'POST' && (url.pathname === '/bridge/live/join' || url.pathname === '/internal/live/turn' || url.pathname === '/internal/live/tts')) {
+      if (req.method === 'POST' && (url.pathname === '/bridge/live/join' || url.pathname === '/internal/live/turn' || url.pathname === '/internal/live/tts' || url.pathname === '/internal/live/caller')) {
         return liveHttp(req, res, url, { bridgeToken, liveTurn, send })
       }
       if (req.method === 'POST' && url.pathname === '/bridge/tts') {

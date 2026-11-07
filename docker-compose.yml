@@ -68,7 +68,8 @@ services:
     restart: on-failure
     env_file: .env
     environment:
-      LIVEKIT_URL: ws://livekit:7880
+      # wss://<project>.livekit.cloud in .env sends the worker to LiveKit Cloud (phone numbers). Default: this server.
+      LIVEKIT_URL: ${LIVEKIT_URL:-ws://livekit:7880}
       HELPER_URL: http://helper:3210
     mem_limit: 768m
     cpus: 1.0

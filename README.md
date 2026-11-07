@@ -375,6 +375,15 @@ Helper לא מחכה שתבקש כל דבר:
 
 **מילת השכמה בטלפון.** כבויה עד שמפעילים אותה באפליקציה. Porcupine רץ על המכשיר (מפתח חינם מ-[Picovoice Console](https://console.picovoice.ai/) וקובץ `.ppn` של "היי הלפר" או "Hey Helper"; לעברית גם קובץ המודל `.pv`). בלי מפתח, הזיהוי המקומי של אנדרואיד מזהה את אותן מילים ולא שולח שמע לרשת. אם הוא דורש רשת, ההאזנה נעצרת. בזמן ההאזנה יש התראה קבועה. אפשר גם את המילה המובנית Jarvis, באנגלית, בלי קובץ.
 
+**מספר טלפון (LiveKit Cloud).** מתקשרים למספר אמריקאי ומדברים עם אותו HELPER: אותם כלים, אותו זיכרון, אותו אישור בוואטסאפ. רק המספר של הוואטסאפ שלך (ומה שב-`LIVE_VOICE_PHONE_ALLOW`) מקבל את HELPER. כל מספר אחר מנותק לפני שמשהו עולה כסף.
+
+1. ב-[LiveKit Cloud](https://cloud.livekit.io) קונים מספר (Telephony > Phone numbers). בתוכנית החינמית: מספר אחד ו-50 דקות נכנסות בחודש. רק מספרים בארה"ב, ורק שיחות נכנסות.
+2. ב-`.env` בשרת: `LIVE_VOICE=on`, `LIVEKIT_URL=wss://<project>.livekit.cloud`, `LIVEKIT_API_KEY` ו-`LIVEKIT_API_SECRET` מהפרויקט ב-Cloud, ו-`LIVE_VOICE_AGENT_NAME=helper-voice`.
+3. `docker compose --profile live-voice up -d --build voice-agent helper`. הסוכן מתחבר החוצה ל-Cloud, אין פורט חדש לפתוח.
+4. ב-Cloud, Telephony > Dispatch rules: כלל Individual עם קידומת `call-`, הסוכן `helper-voice`, והמספר מסומן.
+
+כש-`LIVEKIT_URL` מצביע ל-Cloud, גם דף `/live` והאפליקציה מתחברים ל-Cloud ישירות. כדי להאיץ את התחושה: אחרי 1.2 שניות בלי תשובה HELPER אומר "רגע" (`LIVE_VOICE_FILLER_AFTER`), וכל משפט מוקרא ברגע שהוא מוכן, בלי לחכות לתשובה כולה.
+
 הקוד: `src/live-voice.js`, הסוכן ב-`voice/`, הבדיקות `npm run check:live`.
 
 ---
