@@ -50,8 +50,8 @@ curl -s -H "Authorization: Bearer $HELPER_PANEL_CREDENTIAL" https://panel.exampl
 
 ההמלצה לשרת בענן: **Caddy על השרת** מול פורט הפאנל, עם דומיין. Caddy מנפיק ומחדש תעודת Let's Encrypt לבד, בחינם. אם אין דומיין, אפשר תת-דומיין חינמי של DuckDNS שמצביע על כתובת השרת.
 
-1. `.env` בשרת: `PANEL_PUBLIC_ORIGIN=https://panel.example.com` (הכתובת המדויקת, בלי `/` בסוף).
-2. `docker compose -f docker-compose.yml -f deploy/panel/docker-compose.panel.yml up -d --build`. הפורט מתפרסם רק על `127.0.0.1` של השרת.
+1. `.env` בשרת: `PANEL_ENABLED=on` ו-`PANEL_PUBLIC_ORIGIN=https://panel.example.com` (הכתובת המדויקת, בלי `/` בסוף).
+2. `docker compose -f docker-compose.yml -f deploy/panel/docker-compose.panel.yml up -d --build`. הפורט מתפרסם רק על `127.0.0.1` של השרת. כל עוד `PANEL_ENABLED=on` כתוב ב-`.env`, העדכון האוטומטי (`scripts/auto-update.sh`) מוסיף את הקובץ הזה בעצמו, כך שעדכון לא סוגר את הפאנל.
 3. `PANEL_DOMAIN=panel.example.com caddy run --config deploy/panel/Caddyfile`. ה-Caddyfile מעביר רק את שישת הנתיבים, לפי method ו-path, ומחזיר 404 לכל השאר.
 4. פתיחת 80 ו-443 בחומת האש של השרת (Caddy צריך את 80 לאימות התעודה).
 
