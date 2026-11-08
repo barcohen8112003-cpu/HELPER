@@ -58,6 +58,14 @@ export function shortReply(out, action) {
   return text.split('\n').slice(0, 2).join('\n') || 'בוצע'
 }
 
+// Which device action a message is, without carrying it out: 'tv:off', 'lights:on', 'lights:off', or null.
+// The remote panel checks this against its scopes before fastCommand is ever called.
+export function fastAction(text) {
+  if (parseScreenOff(text)) return 'tv:off'
+  const lights = parseLights(text)
+  return lights ? `lights:${lights.action}` : null
+}
+
 // -> { reply } when the message was one of these commands and has been carried out (or failed, plainly), else null.
 export async function fastCommand(text, { control = controlHomeDevice, screenOff = tvPowerOff } = {}) {
   if (parseScreenOff(text)) {

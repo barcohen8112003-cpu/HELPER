@@ -290,6 +290,16 @@ async function runCall(call, tools, ctx) {
   let failed = ''
   let loggedArgs = {}
   try {
+    // An actor with its own scopes (the remote panel): every call, whatever asked for it, passes this gate before
+    // anything else, including a tool the model named that was never offered to it. Default deny.
+    if (ctx?.gate) {
+      const why = ctx.gate(call.function.name)
+      if (why) {
+        ctx.denied?.push(call.function.name)
+        approval = 'denied'
+        throw new Error(why)
+      }
+    }
     if (!tool) throw new Error('כלי לא קיים')
     const args = JSON.parse(call.function.arguments || '{}')
     loggedArgs = args
@@ -342,15 +352,18 @@ async function work(messages, ctx, scaffold) {
   ctx.planTouched = false
   ctx.verified = false
   const query = lastUserText(messages)
-  const memory = memoryBlock(query, { english: config.llm.light })
-  const learning = learningBlock(query, { english: config.llm.light })
+  // An isolated turn (the remote panel) reads none of his private context: no memory, no learned notes, no open
+  // loops, no WhatsApp summary. It brings its own system prompt and its own tool list.
+  const isolated = Boolean(ctx.isolated)
+  const memory = isolated ? '' : memoryBlock(query, { english: config.llm.light })
+  const learning = isolated ? '' : learningBlock(query, { english: config.llm.light })
   // What he left open, so a message that settles one closes it. Read once per turn: open_loop answers for itself.
-  const loops = loopsBlock(config.llm.light)
+  const loops = isolated ? '' : loopsBlock(config.llm.light)
   // A background task is long work by definition; a scheduled check is usually one lookup.
-  const goalHint = ctx.source === 'job' || (ctx.source !== 'task' && looksLikeGoal(query))
+  const goalHint = !isolated && (ctx.source === 'job' || (ctx.source !== 'task' && looksLikeGoal(query)))
   // What this message is about: only those areas' tools and instructions are sent (src/domains.js). tool_search,
   // or a call to a tool by name, opens more during the turn.
-  ctx.domains = config.routing ? pickDomains(routingText(messages, ctx.plan?.goal || '')) : undefined
+  ctx.domains = config.routing && !isolated ? pickDomains(routingText(messages, ctx.plan?.goal || '')) : undefined
   // Helper writing first (a scheduled task, a background job) needs the notification rules; a reply to him does not.
   const outbound = ctx.source === 'task' || ctx.source === 'job'
   const signal = ctx.signal
@@ -359,12 +372,13 @@ async function work(messages, ctx, scaffold) {
   for (let step = 0; step < limit(); step++) {
     if (signal?.aborted) throw new Aborted()
     // Recomputed every step: tool_search may have opened more tools in the step before.
-    const tools = activeTools(ctx.unlocked, ctx.domains)
+    const tools = isolated ? ctx.tools || [] : activeTools(ctx.unlocked, ctx.domains)
     const defs = toolDefs(tools)
     shortenOldResults(messages)
     // A scheduled run has nobody waiting on it, so it waits for the main model rather than settle for a weaker one.
-    const agent = [planBlock(ctx, config.llm.light, goalHint), loops].filter(Boolean).join('\n\n')
-    const msg = await llm([{ role: 'system', content: systemPrompt(memory, learning, agent, config.routing ? ctx.domains : undefined, outbound) }, ...messages], defs, undefined, ctx?.patient ? LONG_PATIENCE : undefined, undefined, signal)
+    const agent = isolated ? '' : [planBlock(ctx, config.llm.light, goalHint), loops].filter(Boolean).join('\n\n')
+    const system = isolated ? ctx.systemPrompt : systemPrompt(memory, learning, agent, config.routing ? ctx.domains : undefined, outbound)
+    const msg = await llm([{ role: 'system', content: system }, ...messages], defs, undefined, ctx?.patient ? LONG_PATIENCE : undefined, undefined, signal)
     const assistant = { role: 'assistant', content: msg.content ?? '' }
     if (msg.tool_calls?.length) assistant.tool_calls = msg.tool_calls
     messages.push(assistant)
@@ -420,7 +434,7 @@ async function closingAnswer(messages, ctx = {}, scaffold = new Set()) {
   const findings = [plan, ...notes].filter(Boolean).join('\n\n')
   const msg = await llm(
     [
-      { role: 'system', content: systemPrompt(undefined, '', '', config.routing ? ctx.domains : undefined, ctx.source === 'task' || ctx.source === 'job') },
+      { role: 'system', content: ctx.isolated ? ctx.systemPrompt : systemPrompt(undefined, '', '', config.routing ? ctx.domains : undefined, ctx.source === 'task' || ctx.source === 'job') },
       { role: 'user', content: `${question}\n\n---\nYou already looked into this and are out of tool calls. Below is everything you found. Answer the user now from it, with links where you have them, and say plainly what you could not check. Do not call tools.\n\n${findings}` },
     ],
     null,
@@ -517,6 +531,14 @@ export async function runBackground(title, instruction, ctx) {
   trimHistory()
   save()
   return reply
+}
+
+// A turn over its own conversation, apart from his chat: the remote panel. `messages` is that actor's own history
+// (appended to). ctx must carry isolated: true, systemPrompt, tools and gate. Nothing is written to state.history,
+// state.summary or memory, and no memory candidates are learned from it.
+export async function runIsolated(messages, ctx) {
+  if (!ctx?.isolated || typeof ctx.gate !== 'function' || !ctx.systemPrompt) throw new Error('runIsolated needs isolated, gate and systemPrompt')
+  return converse(messages, ctx)
 }
 
 export function resetHistory() {

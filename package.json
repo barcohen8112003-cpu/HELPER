@@ -29,6 +29,7 @@
     "check:learning": "node src/learning-selftest.js",
     "check:audit": "node src/audit-selftest.js",
     "check:fast": "node src/fast-commands-selftest.js",
+    "check:panel": "node src/panel-selftest.js",
     "check:errand": "node src/errand-selftest.js",
     "test:watch": "node src/monitoring/selftest.js",
     "check:pc-bridge": "node src/pc-bridge-selftest.js",
