@@ -31,6 +31,10 @@ set -- -f docker-compose.yml
 if [ -f docker-compose.tailscale.yml ] && docker compose -f docker-compose.yml -f docker-compose.tailscale.yml ps -q tailscale 2>/dev/null | grep -q .; then
   set -- "$@" -f docker-compose.tailscale.yml
 fi
+# The remote panel's port (127.0.0.1:3214 only) is added while .env turns the panel on, so an update keeps it.
+if [ -f deploy/panel/docker-compose.panel.yml ] && grep -Eq '^PANEL_ENABLED=(on|1|true|yes)\s*$' .env 2>/dev/null; then
+  set -- "$@" -f deploy/panel/docker-compose.panel.yml
+fi
 # Healthy = the container keeps running and the settings site answers (any HTTP status, even 403, means Node is up).
 healthy() {
   i=0
