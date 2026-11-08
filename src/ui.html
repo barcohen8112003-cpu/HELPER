@@ -64,6 +64,7 @@
   <nav>
     <h1 id="name">Helper</h1>
     <a href="#connect">חיבורים</a>
+    <a href="#remote-panel">פאנל מרחוק</a>
     <a href="#active">מה פעיל</a>
     <a href="#memory">זיכרון</a>
     <a href="#prefs">העדפות</a>
@@ -75,6 +76,7 @@
     <div id="shortcuts" class="launch"></div>
     <section id="connect"><h2>חיבורים</h2><p class="sub">החשבונות והשירותים שהעוזר יכול להשתמש בהם</p><div class="rows" id="connectors"></div></section>
     <section id="app-connect"><h2>חיבור לאפליקציה</h2><p class="sub">סרוק את הקוד באפליקציית האנדרואיד כדי להתחבר</p><div class="rows" id="appQrRows"></div></section>
+    <section id="remote-panel"><h2>פאנל מרחוק</h2><p class="sub">גישה מכל דפדפן דרך HTTPS. קריאה בלבד, אלא אם הדלקת פעולה במפורש</p><div class="rows" id="panelRows"></div></section>
     <section id="active"><h2>מה פעיל</h2><p class="sub">מקורות, תזכורות, משימות ומעקבים</p><div class="rows" id="activeRows"></div></section>
     <section id="memory"><h2>זיכרון</h2><p class="sub">מה שהעוזר זוכר עליך. אפשר למחוק כל פריט בנפרד</p><div class="rows" id="memoryRows"></div></section>
     <section id="prefs"><h2>העדפות</h2><p class="sub">שם, שעות ותזמונים</p><div class="rows" id="prefRows"></div></section>
@@ -352,7 +354,57 @@ function render(S) {
       h('span', { class: 'small' }, 'קוד גישה'),
       shown, reveal, copyBtn(S.bridgeToken)))
   }
+  renderPanel(S.panel || {}, copyBtn)
   fill($('appQrRows'), appRows.length ? h('div', { class: 'row block', style: 'text-align:center' }, appRows) : h('div', { class: 'row small' }, 'לא נמצאה כתובת רשת זמינה לחיבור.'))
+}
+
+// The remote panel: credentials, their device switches (all off until turned on here), limits and today's use.
+// A new credential's secret is shown once, right after it is made, and never again.
+function renderPanel(P, copyBtn) {
+  const rows = []
+  if (!P.enabled) {
+    rows.push(h('div', { class: 'row small' }, 'כבוי. כדי להפעיל: PANEL_ENABLED=on בקובץ .env והפעלה מחדש. הפאנל עונה רק דרך פורט משלו (PANEL_PORT), ולא חושף את אתר ההגדרות, /dash, /face או /bridge.'))
+    return fill($('panelRows'), rows)
+  }
+  rows.push(h('div', { class: 'row small' }, `כתובת: ${P.origin ? P.origin + '/panel' : 'לא הוגדרה PANEL_PUBLIC_ORIGIN (מקומי בלבד)'} · היום: ${P.usage?.count || 0} מתוך ${P.settings?.dailyCap} בקשות`))
+  rows.push(h('div', { class: 'row small' }, 'מצב "גשר הבית מחובר" בפאנל אומר רק שהחיבור למחשב בבית קיים, לא שפעולה על מכשיר תצליח.'))
+  const fresh = renderPanel.fresh
+  if (fresh) {
+    rows.push(h('div', { class: 'copy-line' }, h('span', { class: 'small' }, 'הקוד החדש (מוצג פעם אחת בלבד)'), h('code', { class: 'copy-value' }, fresh), copyBtn(fresh)))
+    renderPanel.fresh = ''
+  }
+  for (const c of (P.credentials || []).filter((x) => x.active)) {
+    const switches = (P.devices || []).map((d) => {
+      const scope = 'device:' + d.id
+      const box = h('input', { type: 'checkbox', checked: c.scopes.includes(scope), onchange: () => {
+        const next = box.checked ? [...c.scopes, scope] : c.scopes.filter((x) => x !== scope)
+        act('panel/scopes', { id: c.id, scopes: next }, box.checked ? `${d.label}: מותר מהפאנל` : `${d.label}: כבוי`)
+      } })
+      return h('label', { class: 'small', style: 'display:inline-flex;gap:6px;margin-inline-end:14px' }, box, d.label)
+    })
+    rows.push(h('div', { class: 'row block' },
+      h('div', {}, h('b', {}, c.label), h('span', { class: 'small' }, ` · ${c.id} · נוצר ${new Date(c.createdAt).toLocaleDateString('he-IL')} · ${c.scopes.join(', ')}`)),
+      h('div', {}, switches),
+      h('button', { type: 'button', class: 'link', onclick: () => { if (confirm(`לבטל את "${c.label}"? כל החיבורים שלו ינותקו מיד.`)) act('panel/revoke', { id: c.id }, 'בוטל') } }, 'בטל')))
+  }
+  const name = h('input', { type: 'text', class: 'rtl', placeholder: 'שם (למשל: הלפטופ שלי)', autocomplete: 'off' })
+  rows.push(h('form', { class: 'fields', onsubmit: async (e) => {
+    e.preventDefault()
+    try {
+      const out = await post('panel/create', { label: name.value, scopes: [] })
+      renderPanel.fresh = out.secret
+      toast('נוצר. העתק את הקוד עכשיו')
+      await load()
+    } catch (err) { toast(err.message) }
+  } }, h('label', {}, 'credential חדש (קריאה בלבד)'), name, h('button', { class: 'primary' }, 'צור')))
+  const S = P.settings || {}
+  const lim = {}
+  const field = (k, label) => [h('label', {}, label), (lim[k] = h('input', { type: 'number', min: '0', value: S[k] }))]
+  rows.push(h('form', { class: 'fields', onsubmit: (e) => {
+    e.preventDefault()
+    act('panel/settings', { settings: Object.fromEntries(Object.entries(lim).map(([k, el]) => [k, el.value])) })
+  } }, field('dailyCap', 'תקרה יומית לכל הפאנל (בקשות)'), field('askPerHour', 'בקשות לשעה לכל credential'), field('statusPerHour', 'בדיקות מצב לשעה'), field('loginPerMinute', 'ניסיונות כניסה לדקה לכל כתובת'), h('button', { class: 'primary' }, 'שמור מגבלות')))
+  fill($('panelRows'), rows)
 }
 
 // While WhatsApp waits for a link the QR and code change, so the page refreshes itself until it connects.

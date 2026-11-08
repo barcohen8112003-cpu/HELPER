@@ -28,6 +28,7 @@ import { metricsSummary } from './metrics.js'
 import { handleTvUpgrade } from './tv-app.js'
 import { handleBirdWebhook } from './bird.js'
 import { fastCommand } from './fast-commands.js'
+import { panelSummary } from './panel.js'
 import {
   bearer,
   callerAllowed,
@@ -212,8 +213,13 @@ async function snapshot(connectedSince) {
     errand: { enabled: errandCloudOn(), path: '/errand' },
     liveVoice: liveVoiceStatus(),
     face: faceSnapshot(),
+    // The remote panel: credentials (never their secrets or hashes), device switches, limits and today's use.
+    panel: panelSummary(panelRef),
   }
 }
+
+// Set by startUi when the remote panel is on (src/panel.js).
+let panelRef = null
 
 // Host and Origin allow-lists. UI_PUBLIC_HOST (for example "37.60.240.231:3210") is added only when set.
 // Loopback stays allowed either way. extraHosts is the machine's own LAN address, same as before.
@@ -314,7 +320,8 @@ function readBody(req, max) {
   })
 }
 
-export function startUi({ connectedSince, restart, agent, liveTurn }) {
+export function startUi({ connectedSince, restart, agent, liveTurn, panel = null }) {
+  panelRef = panel
   const token = (state.uiToken ||= randomBytes(24).toString('hex'))
   const bridgeToken = (state.bridgeToken ||= randomBytes(24).toString('hex'))
   save()
@@ -379,6 +386,15 @@ export function startUi({ connectedSince, restart, agent, liveTurn }) {
       state[list] = state[list].filter((x) => x.id !== Number(body.id))
       save()
       return {}
+    }
+    // Remote panel credentials. Issued, changed and revoked only here, on the settings site, never from the panel.
+    // The new secret is returned once, in this response, and is not stored anywhere in readable form.
+    if (route.startsWith('panel/')) {
+      if (!panelRef) throw new Error('הפאנל המרוחק כבוי (PANEL_ENABLED=on בקובץ .env, ואז הפעלה מחדש)')
+      if (route === 'panel/create') return panelRef.issue({ label: body.label, scopes: body.scopes })
+      if (route === 'panel/revoke') return { ok: panelRef.revoke(body.id) }
+      if (route === 'panel/scopes') return { scopes: panelRef.setScopes(body.id, body.scopes) }
+      if (route === 'panel/settings') return { settings: panelRef.setSettings(body.settings || {}) }
     }
     if (route === 'backup/now') return { message: await runBackup() }
     // Pairing code and QR live only in this signed-in API. The route is reached after the settings token check.

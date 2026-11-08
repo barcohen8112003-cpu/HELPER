@@ -1,0 +1,69 @@
+# HTTPS in front of HELPER's remote panel. NOT deployed: shown for approval first (deploy/panel/README.md).
+#
+# Caddy gets and renews the certificate by itself (Let's Encrypt) for PANEL_DOMAIN. It forwards exactly the six
+# panel routes, by method and path, to the panel's own port. Everything else is 404 here, and the panel port
+# itself (src/panel.js) serves nothing else either. The settings site (3210), /dash, /face and /bridge/* are never
+# forwarded.
+#
+#   PANEL_DOMAIN=panel.example.com caddy run --config deploy/panel/Caddyfile
+
+{$PANEL_DOMAIN} {
+	# No query strings at all: a credential never travels in an address.
+	@has_query expression {query} != ""
+
+	@panel_page {
+		method GET
+		path /panel
+	}
+	@panel_post {
+		method POST
+		path /panel/api/login /panel/api/logout /panel/api/ask
+	}
+	@panel_get {
+		method GET
+		path /panel/api/status
+	}
+	@panel_result {
+		method GET
+		path_regexp ^/panel/api/ask/[A-Za-z0-9_-]{8,80}$
+	}
+
+	request_body {
+		max_size 20KB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	handle @has_query {
+		respond 400
+	}
+	handle @panel_page {
+		reverse_proxy 127.0.0.1:3214
+	}
+	handle @panel_post {
+		reverse_proxy 127.0.0.1:3214
+	}
+	handle @panel_get {
+		reverse_proxy 127.0.0.1:3214
+	}
+	handle @panel_result {
+		reverse_proxy 127.0.0.1:3214
+	}
+	handle {
+		respond 404
+	}
+
+	log {
+		# Method, path, status and time. Caddy does not log bodies; the Authorization header is redacted.
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Cookie delete
+			}
+		}
+	}
+}

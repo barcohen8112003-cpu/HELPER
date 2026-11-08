@@ -6,7 +6,7 @@ import { config, DATA_DIR } from './config.js'
 import { lockHeldByOther } from './instance-lock.js'
 import { state, save } from './store.js'
 import { startWhatsApp } from './whatsapp.js'
-import { runTurn, runTask, runBackground, resetHistory, compact, setSettingsUrl } from './agent.js'
+import { runTurn, runTask, runBackground, runIsolated, resetHistory, compact, setSettingsUrl } from './agent.js'
 import { startJob, stopJobs, jobsText, listJobs, interruptedJobs } from './jobs.js'
 import { startScheduler, newsDigest, newsInBrief } from './scheduler.js'
 import * as inbox from './inbox.js'
@@ -15,12 +15,12 @@ import { setLocation, isLiveUpdate } from './location.js'
 import { createOutbox } from './outbox.js'
 import { chatModel, Aborted } from './llm.js'
 import { parseCommand } from './commands.js'
-import { fastCommand } from './fast-commands.js'
+import { fastCommand, fastAction } from './fast-commands.js'
 import { loadUserTools } from './tool-builder.js'
 import { status } from './status.js'
 import { maskSettingsUrl, startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
-import { startPcBridgeServer, bridgeLabel } from './pc-bridge.js'
+import { startPcBridgeServer, bridgeLabel, bridgeConnected } from './pc-bridge.js'
 import { closeCloudBrowsers, cloudGoogleHomeOn, cloudWebtopOn, ensureCloudBrowser, ensureCloudWebtop, errandCloudOn } from './webtop-browser.js'
 import { startCloudDesktop } from './cloud-desktop.js'
 import { startVoice } from './voice.js'
@@ -44,6 +44,10 @@ import { scraplingEnabled, scraplingStatus } from './scrapling.js'
 import { startObscura, stopObscura } from './obscura.js'
 import { exec } from 'node:child_process'
 import { recoverTeam, teamStatus } from './team/conductor.js'
+import { allTools } from './tools.js'
+import { record as recordAudit } from './audit.js'
+import { createPanel, panelConfig, startPanelServer } from './panel.js'
+import { panelContext } from './panel-scopes.js'
 
 if (!config.llm.apiKey || !config.llm.model) {
   console.log('חסר LLM_API_KEY או LLM_MODEL. העתק את .env.example ל-.env ומלא אותם.')
@@ -590,7 +594,43 @@ async function liveTurn(text, { signal } = {}) {
   }
 }
 
-const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk, liveTurn })
+// The remote panel (src/panel.js). Off unless PANEL_ENABLED=on. Its turns wait in the same queue as everything else,
+// over the credential's own conversation, with no memory, no WhatsApp history and only the tools its scopes open.
+// Anything that needs approval is asked in the WhatsApp chat, like every other approval; nothing typed in the
+// panel can answer it.
+let panelBusy = 0
+function panelTurn(text, { actor, scopes, history, onWaiting }) {
+  const run = queue.then(async () => {
+    panelBusy++
+    try {
+      const ctx = panelContext({ actor, scopes, all: allTools(), confirm, onWaiting, timeZone: process.env.TIMEZONE || 'Asia/Jerusalem' })
+      const messages = [...history, { role: 'user', content: text }]
+      const reply = await runIsolated(messages, ctx)
+      return { reply, denied: ctx.denied, history: messages }
+    } finally {
+      panelBusy--
+    }
+  })
+  queue = run.catch(() => {})
+  return run
+}
+const panelCfg = panelConfig()
+const panel = panelCfg.enabled
+  ? createPanel({
+      file: path.join(DATA_DIR, 'panel.json'),
+      run: panelTurn,
+      status: () => ({ queueBusy: Boolean(activeTurn) || panelBusy > 0, computerMode: config.computerMode, pcBridgeConnected: bridgeConnected(), pendingApprovals: pendingConfirm ? 1 : 0 }),
+      notify: (text) => notify(text, true),
+      fast: { action: fastAction, run: (text) => fastCommand(text) },
+      audit: recordAudit,
+      origin: panelCfg.origin,
+      port: panelCfg.port,
+      trustProxy: panelCfg.trustProxy,
+    })
+  : null
+if (panel) startPanelServer(panel, panelCfg)
+
+const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk, liveTurn, panel })
 settingsPage = settingsUrl
 setSettingsUrl(settingsUrl)
 console.log(`\nאתר ההגדרות (חיבור חשבונות, העדפות, מה פעיל):\n${maskSettingsUrl(settingsUrl)}\n`)
