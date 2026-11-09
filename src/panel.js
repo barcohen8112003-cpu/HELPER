@@ -1,5 +1,5 @@
 // The remote panel: one small HTTPS page (behind a reverse proxy) where the owner, or a client he allows, types a
-// request and gets HELPER's answer. It is its own listener, on its own port, and it knows exactly seven routes:
+// request and gets HELPER's answer. It is its own listener, on its own port, and it knows exactly nine routes:
 //
 //   GET  /panel                 static sign-in page, the same for every visitor, no personal data
 //   POST /panel/api/login       the credential, in the body only -> short server-side session cookie
@@ -9,6 +9,11 @@
 //   GET  /panel/api/ask/<id>    session: the stored result of that request
 //   GET  /panel/api/catalog     session: the device actions this credential may use, their closed schemas and
 //                               connection state (connection only, never proof that a device will obey)
+//   POST /panel/api/execute     session: { id, action, params } -> 202 running; one catalog action, no model
+//   GET  /panel/api/execute/<id> session: succeeded | failed | unknown | running, for that id only
+//
+// Device actions run only through execute. A device sentence sent to ask ("תדליק את האורות") is refused there and
+// runs nothing: one path, one gate, one lock (src/device-lock.js).
 //
 // Anything else on this port is 404, so a proxy that forwards too much still reaches nothing of the settings site,
 // /dash, /face or /bridge/*. Those live on the settings port (src/ui.js) and are never served here.
@@ -21,7 +26,7 @@ import path from 'node:path'
 import http from 'node:http'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { cleanKind, cleanScopes, deviceGate, KNOWN_SCOPES, DEVICE_ACTIONS } from './panel-scopes.js'
-import { PANEL_ACTIONS, publicSchema } from './panel-actions.js'
+import { PANEL_ACTIONS, publicSchema, findAction, checkParams } from './panel-actions.js'
 
 export const PANEL_ROUTES = Object.freeze([
   ['GET', '/panel'],
@@ -31,6 +36,8 @@ export const PANEL_ROUTES = Object.freeze([
   ['POST', '/panel/api/ask'],
   ['GET', '/panel/api/ask/<id>'],
   ['GET', '/panel/api/catalog'],
+  ['POST', '/panel/api/execute'],
+  ['GET', '/panel/api/execute/<id>'],
 ])
 
 const PAGE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'panel.html')
@@ -44,6 +51,8 @@ const REQUEST_KEEP = 500
 const REQUEST_DAYS = 14
 
 export const DEFAULT_SETTINGS = Object.freeze({ askPerHour: 30, statusPerHour: 120, loginPerMinute: 10, dailyCap: 200 })
+
+const DEVICE_VIA_EXECUTE = 'פעולות מכשיר מהפאנל רק דרך execute (פעולה מהקטלוג עם חדר מפורש)'
 
 const sha = (s) => createHash('sha256').update(String(s)).digest('hex')
 const sameHex = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
@@ -72,6 +81,8 @@ function loadStore(file) {
   const store = {
     credentials: Array.isArray(data.credentials) ? data.credentials : [],
     requests: data.requests && typeof data.requests === 'object' ? data.requests : {},
+    // execute's records, apart from ask's: the same id in both never meets. Key: exec:<credential>:<id>.
+    executions: data.executions && typeof data.executions === 'object' ? data.executions : {},
     histories: data.histories && typeof data.histories === 'object' ? data.histories : {},
     daily: data.daily && typeof data.daily === 'object' ? data.daily : { date: '', count: 0, alerted: false },
     settings: { ...DEFAULT_SETTINGS, ...(data.settings || {}) },
@@ -83,6 +94,8 @@ function loadStore(file) {
   }
   // A request that was running when the process stopped has an unknown outcome. It is never run again by itself.
   for (const r of Object.values(store.requests)) if (r.state === 'running') Object.assign(r, { state: 'unknown', note: 'check audit' })
+  // The same for a device action: it may have reached the device. Unknown, and never run again by itself.
+  for (const r of Object.values(store.executions)) if (r.state === 'running') Object.assign(r, { state: 'unknown', reason: 'restart', detail: 'השרת הופעל מחדש באמצע הפעולה. לא ידוע אם התבצעה. לבדוק את מצב המכשיר לפני כל ניסיון נוסף.' })
   return store
 }
 
@@ -135,7 +148,8 @@ function pageWithCsp(html) {
 //   status()             { queueBusy, computerMode, pcBridgeConnected, pendingApprovals }
 //   devices()            { lights, tv } -> 'connected' | 'disconnected' | 'unknown' (connection state only)
 //   notify(text)         a WhatsApp message to the owner
-//   fast                 { action(text) -> id|null, run(text) -> { reply } } (src/fast-commands.js)
+//   fast                 { action(text) -> id|null } (src/fast-commands.js): only to recognise a device sentence in ask
+//   execute(action, params, { actor }) -> { state, detail, reason } (src/panel-execute.js)
 //   audit(entry)         src/audit.js record
 //   origin               the public https origin, e.g. https://panel.example.com; local loopback is allowed besides
 //   port, trustProxy, now, waitMs, runTimeoutMs, log
@@ -148,6 +162,7 @@ export function createPanel(deps) {
     notify = () => {},
     fast = { action: () => null, run: async () => null },
     audit = () => {},
+    execute = async () => ({ state: 'failed', detail: 'ביצוע לא מוגדר', reason: 'not_configured' }),
     origin = '',
     port = 3214,
     trustProxy = false,
@@ -288,18 +303,22 @@ export function createPanel(deps) {
   const view = (r) => {
     if (r.state === 'done') return [200, { reply: r.reply, id: r.id }]
     if (r.state === 'running') return [202, { state: 'running', id: r.id, ...(r.waiting ? { note: 'מחכה לאישור בוואטסאפ' } : {}) }]
-    if (r.state === 'denied') return [403, { error: 'לא מורשה', id: r.id }]
+    if (r.state === 'denied') return [403, { error: r.reason === 'device_via_execute' ? DEVICE_VIA_EXECUTE : 'לא מורשה', id: r.id }]
     return [200, { state: 'unknown', note: 'check audit', id: r.id }]
   }
+  const execView = (r) => {
+    const body = { id: r.id, action: r.action, state: r.state, ...(r.detail ? { detail: r.detail } : {}), ...(r.reason ? { reason: r.reason } : {}) }
+    return [r.state === 'running' ? 202 : 200, body]
+  }
 
-  function trim() {
-    const keys = Object.keys(store.requests)
+  function trim(box = store.requests) {
+    const keys = Object.keys(box)
     const old = now() - REQUEST_DAYS * 86400000
-    for (const k of keys) if (store.requests[k].state !== 'running' && Date.parse(store.requests[k].at) < old) delete store.requests[k]
-    const left = Object.entries(store.requests).sort((a, b) => Date.parse(a[1].at) - Date.parse(b[1].at))
+    for (const k of keys) if (box[k].state !== 'running' && Date.parse(box[k].at) < old) delete box[k]
+    const left = Object.entries(box).sort((a, b) => Date.parse(a[1].at) - Date.parse(b[1].at))
     while (left.length > REQUEST_KEEP) {
       const [k, r] = left.shift()
-      if (r.state !== 'running') delete store.requests[k]
+      if (r.state !== 'running') delete box[k]
     }
   }
 
@@ -313,10 +332,10 @@ export function createPanel(deps) {
     const action = fast.action(text)
     let work
     if (action) {
-      // A device command: the scope decides, before anything runs. No model, no "slow" fallback.
-      const why = deviceGate(cred.scopes, action)
-      audit({ tool: `fast:${action}`, args: {}, source: `panel:${actor}`, approval: why ? 'denied' : 'none', ok: !why, error: why || '' })
-      work = why ? Promise.resolve({ denied: [action] }) : Promise.resolve(fast.run(text)).then((q) => ({ reply: q?.reply || 'בוצע', denied: [] }))
+      // A device sentence. From the panel, devices move only through execute (a catalog action, a closed room, the
+      // device lock). Here nothing runs, not the device and not the model.
+      audit({ tool: `fast:${action}`, args: {}, source: `panel:${actor}`, approval: 'denied', ok: false, error: 'device actions only through execute' })
+      work = Promise.resolve({ denied: [action], reason: 'device_via_execute' })
     } else {
       const history = Array.isArray(store.histories[actor]) ? store.histories[actor] : []
       work = Promise.resolve(
@@ -335,7 +354,7 @@ export function createPanel(deps) {
     const p = Promise.race([work, timeout])
       .then((out) => {
         if (out?.timedOut) return finish({ state: 'unknown', note: 'check audit' })
-        if (out?.denied?.length) return finish({ state: 'denied', reply: '' })
+        if (out?.denied?.length) return finish({ state: 'denied', reply: '', ...(out.reason ? { reason: out.reason } : {}) })
         if (out?.history) {
           // Only what was said is kept for next time: his text and the final answers, not tool output.
           store.histories[actor] = out.history.filter((m) => m.role === 'user' || (m.role === 'assistant' && !m.tool_calls && m.content)).map((m) => ({ role: m.role, content: String(typeof m.content === 'string' ? m.content : '').slice(0, 4000) })).slice(-HISTORY_KEEP)
@@ -353,6 +372,68 @@ export function createPanel(deps) {
       })
     running.set(key, p)
     return p
+  }
+
+  // POST /panel/api/execute: one catalog action, no model at any step. Order: catalog -> schema -> switch ->
+  // same id? -> limits -> record saved (running) -> the device, in the background. The answer is 202 at once.
+  async function executeRoute(req, cred) {
+    const body = await readJson(req)
+    if (body.source !== undefined && body.source !== 'panel') {
+      log(`[panel] rejected source label cred=${cred.id}`)
+      audit({ tool: 'panel_execute', args: {}, source: `panel:${cred.id}`, approval: 'denied', ok: false, error: 'source label of another client' })
+      return [403, { error: 'source לא מורשה' }, {}, cred.id]
+    }
+    for (const k of Object.keys(body)) if (!['id', 'action', 'params', 'source'].includes(k)) return [400, { state: 'failed', reason: 'invalid', error: `שדה לא מוכר: ${String(k).slice(0, 40)}` }, {}, cred.id]
+    const id = String(body.id || '')
+    if (!ID_RE.test(id)) return [400, { state: 'failed', reason: 'invalid', error: 'צריך id (8-80 תווים: אותיות, ספרות, - או _)' }, {}, cred.id]
+    const action = findAction(body.action)
+    if (!action) return [400, { state: 'failed', reason: 'invalid', error: 'פעולה לא בקטלוג', id }, {}, cred.id]
+    const chk = checkParams(action.id, body.params)
+    if (!chk.ok) return [400, { state: 'failed', reason: 'invalid', error: chk.error, id }, {}, cred.id]
+    const why = deviceGate(cred.scopes, action.id)
+    if (why) {
+      audit({ tool: `panel:${action.id}`, args: chk.params, source: `panel:${cred.id}`, approval: 'denied', ok: false, error: why })
+      return [403, { state: 'failed', reason: 'denied', error: why, id }, {}, cred.id]
+    }
+    const key = `exec:${cred.id}:${id}`
+    const payloadHash = sha(JSON.stringify([action.id, Object.keys(chk.params).sort().map((k) => [k, chk.params[k]])]))
+    const known = store.executions[key]
+    if (known) {
+      // The same request again (or twice at once): its record, never a second run. Other content: 409.
+      if (known.payloadHash !== payloadHash) return [409, { error: 'אותו id עם תוכן אחר', id }, {}, cred.id]
+      const [code, out] = execView(known)
+      return [code, out, {}, cred.id]
+    }
+    const lim = rate.take(`ask:${cred.id}`, store.settings.askPerHour, 3600000)
+    if (!lim.ok) return [429, { error: 'יותר מדי בקשות', retryAfter: lim.retryAfter }, {}, cred.id]
+    if (store.daily.date !== today()) store.daily = { date: today(), count: 0, alerted: false }
+    if (store.daily.count >= store.settings.dailyCap) {
+      const midnight = new Date(today() + 'T00:00:00Z').getTime() + 86400000
+      return [429, { error: 'הפאנל הגיע לתקרה היומית', retryAfter: Math.max(1, Math.ceil((midnight - now()) / 1000)) }, {}, cred.id]
+    }
+    store.daily.count++
+    // Saved before anything is sent. From here on a crash leaves "unknown", never a silent second run.
+    const rec = { actor: cred.id, id, action: action.id, params: chk.params, payloadHash, state: 'running', detail: '', at: new Date(now()).toISOString() }
+    store.executions[key] = rec
+    trim(store.executions)
+    save()
+    const job = Promise.resolve()
+      .then(() => execute(action.id, chk.params, { actor: cred.id }))
+      .then(
+        (out) => (['succeeded', 'failed', 'unknown'].includes(out?.state) ? out : { state: 'unknown', detail: 'תוצאה לא תקינה', reason: 'bad_result' }),
+        (e) => {
+          log(`[panel] execute failed cred=${cred.id} ${String(e?.message || e).slice(0, 80)}`)
+          return { state: 'unknown', detail: 'לא ידוע אם הפעולה התבצעה. לבדוק את מצב המכשיר לפני כל ניסיון נוסף.', reason: 'error' }
+        }
+      )
+      .then((out) => {
+        Object.assign(rec, { state: out.state, detail: String(out.detail || '').slice(0, 300), reason: out.reason || '', doneAt: new Date(now()).toISOString() })
+        save()
+        audit({ tool: `panel:${action.id}`, args: chk.params, source: `panel:${cred.id}`, approval: 'none', ok: out.state === 'succeeded', error: out.state === 'succeeded' ? '' : `${out.state}${out.reason ? `:${out.reason}` : ''}` })
+      })
+      .finally(() => running.delete(key))
+    running.set(key, job)
+    return [202, { state: 'running', id, action: action.id }, {}, cred.id]
   }
 
   async function route(req, res, url) {
@@ -379,7 +460,9 @@ export function createPanel(deps) {
       return [200, { ok: true, csrf }, { 'Set-Cookie': `${SID}=${sid}; Secure; HttpOnly; SameSite=Strict; Path=/panel; Max-Age=${Math.round(sessionMaxMs / 1000)}` }, cred.id]
     }
 
-    const isApi = (method === 'POST' && (p === '/panel/api/logout' || p === '/panel/api/ask')) || (method === 'GET' && (p === '/panel/api/status' || p === '/panel/api/catalog' || /^\/panel\/api\/ask\/[^/]+$/.test(p)))
+    const isApi =
+      (method === 'POST' && (p === '/panel/api/logout' || p === '/panel/api/ask' || p === '/panel/api/execute')) ||
+      (method === 'GET' && (p === '/panel/api/status' || p === '/panel/api/catalog' || /^\/panel\/api\/(ask|execute)\/[^/]+$/.test(p)))
     if (!isApi) return [404, { error: 'not found' }]
 
     const me = who(req)
@@ -427,6 +510,15 @@ export function createPanel(deps) {
       if (session) out.csrf = session.csrf
       return [200, out, {}, cred.id]
     }
+    if (method === 'GET' && p.startsWith('/panel/api/execute/')) {
+      const id = decodeURIComponent(p.slice('/panel/api/execute/'.length))
+      // Only the credential that sent it: anyone else's id is simply not there.
+      const rec = ID_RE.test(id) && store.executions[`exec:${cred.id}:${id}`]
+      if (!rec) return [404, { error: 'לא נמצא' }, {}, cred.id]
+      const [code, body] = execView(rec)
+      return [code, body, {}, cred.id]
+    }
+    if (p === '/panel/api/execute') return executeRoute(req, cred)
     if (method === 'GET') {
       const id = decodeURIComponent(p.slice('/panel/api/ask/'.length))
       const rec = ID_RE.test(id) && store.requests[`${cred.id}:${id}`]
@@ -490,7 +582,7 @@ export function createPanel(deps) {
     let name = '-'
     try {
       const url = new URL(req.url || '/', 'http://panel.invalid')
-      name = /^\/panel\/api\/ask\/[^/]+$/.test(url.pathname) ? '/panel/api/ask/:id' : url.pathname.slice(0, 40)
+      name = /^\/panel\/api\/ask\/[^/]+$/.test(url.pathname) ? '/panel/api/ask/:id' : /^\/panel\/api\/execute\/[^/]+$/.test(url.pathname) ? '/panel/api/execute/:id' : url.pathname.slice(0, 40)
       // Nothing in the address, ever: no ?t=, no credential, no query of any kind.
       if (url.search) {
         code = 400

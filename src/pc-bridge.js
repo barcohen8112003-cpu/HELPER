@@ -32,6 +32,7 @@ const TIMEOUT_MS = {
   sessionKeepAlive: 90000,
   getHomeDevices: 30000,
   controlHomeDevice: 45000,
+  controlHomeDeviceResult: 45000,
   googleHomeKeepAlive: 60000,
 }
 
@@ -235,7 +236,8 @@ function dropHome(ws) {
 }
 
 export function remoteCall(name, args = [], opts = {}) {
-  if (!bridgeConnected()) return Promise.reject(offlineError())
+  // notSent: refused before anything left for the PC, so nothing can have run there. Device actions rely on it.
+  if (!bridgeConnected()) return Promise.reject(Object.assign(offlineError(), { notSent: true }))
   const id = randomBytes(8).toString('hex')
   const timeoutMs = opts.timeoutMs || TIMEOUT_MS[name] || 60000
   const frame = seal(secret(), { t: 'call', id, name, args: pack(args, false) })
@@ -254,7 +256,7 @@ export function remoteCall(name, args = [], opts = {}) {
     } catch {
       clearTimeout(timer)
       pending.delete(id)
-      reject(offlineError())
+      reject(Object.assign(offlineError(), { notSent: true }))
     }
   })
 }
@@ -482,6 +484,7 @@ export async function homeHandlers() {
   const home = await import('./google-home.js')
   handlers.getHomeDevices = () => home.getHomeDevices()
   handlers.controlHomeDevice = (query, action) => home.controlHomeDevice(query, action)
+  handlers.controlHomeDeviceResult = (query, action, opts) => home.controlHomeDeviceResult(query, action, { fast: Boolean(opts?.fast), strict: true })
   handlers.googleHomeKeepAlive = () => home.googleHomeKeepAlive()
   // Face render on this PC. Not a model tool: only the cloud calls these, and only when FACE_ENABLED is on.
   const facePc = await import('./face-pc.js')

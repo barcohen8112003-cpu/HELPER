@@ -13,10 +13,14 @@
 | `POST` | `/panel/api/ask` | כן. `{ "text": "...", "id": "מזהה-ייחודי" }` |
 | `GET` | `/panel/api/ask/<id>` | כן. התוצאה השמורה של אותה בקשה |
 | `GET` | `/panel/api/catalog` | כן. פעולות המכשיר שה-credential מורשה להן, עם סכמת פרמטרים סגורה ומצב חיבור (חיבור בלבד, לא הוכחת ביצוע) |
+| `POST` | `/panel/api/execute` | כן. `{ "id": "מזהה-ייחודי", "action": "lights:off", "params": { "room": "סלון" } }` → `202 {state:"running"}`. פעולה מהקטלוג בלבד, בלי מודל |
+| `GET` | `/panel/api/execute/<id>` | כן. `running` (202), או `succeeded` / `failed` / `unknown` עם `detail` |
 
 הפאנל מאזין על **פורט משלו** (`PANEL_PORT`, ברירת מחדל 3214, על `127.0.0.1`). על הפורט הזה כל נתיב אחר מחזיר 404. אתר ההגדרות, `/dash`, `/face` ו-`/bridge/*` נמצאים על 3210 ולא מוגשים כאן בכלל. כך גם proxy שמעביר יותר מדי לא מגיע לשום דבר מהם.
 
 תשובות של `ask`: `200 {reply}`, `202 {state:"running"}` (בודקים אחר כך ב-`GET /panel/api/ask/<id>`), `200 {state:"unknown", note:"check audit"}`, `403` לא מורשה, `409` אותו id עם תוכן אחר, `429` עם `retryAfter`. בקשה שהתוצאה שלה לא ידועה **לא רצה שוב לבד**.
+
+פעולות מכשיר מהפאנל רצות **רק** דרך `execute`. משפט כמו "תדליק את האורות" שנשלח ל-`ask` נדחה ולא מפעיל כלום. ב-`execute`, אורות דורשים `room` מרשימה סגורה, ו-`all` הוא בחירה מפורשת. `succeeded` אומר שהמכשיר דיווח על המצב המבוקש. `failed` אומר שבטוח ששום דבר לא נשלח (הרשאה, ולידציה, מכשיר תפוס, אין התאמה) או שהמכשיר עצמו דיווח על כישלון. `unknown` אומר שהפקודה אולי יצאה ואין אישור: היא לא רצה שוב לבד, וקודם בודקים את מצב המכשיר. כל מכשיר מחזיק נעילה אחת שמשותפת לפאנל, לפקודות המהירות בוואטסאפ ולכלים של המודל. כשמכשיר תפוס, התשובה היא `failed` עם `reason: "busy"`.
 
 **`status` הוא מצב חיבור בלבד.** `pcBridgeConnected: true` אומר שהגשר למחשב בבית מחובר. הוא **לא** אומר שפעולה על הטלוויזיה, הטלפון או Webtop תצליח. אל תבטיח פעולה על סמך הסטטוס.
 
@@ -53,7 +57,7 @@ curl -s -H "Authorization: Bearer $HELPER_PANEL_CREDENTIAL" https://panel.exampl
 
 1. `.env` בשרת: `PANEL_ENABLED=on` ו-`PANEL_PUBLIC_ORIGIN=https://panel.example.com` (הכתובת המדויקת, בלי `/` בסוף).
 2. `docker compose -f docker-compose.yml -f deploy/panel/docker-compose.panel.yml up -d --build`. הפורט מתפרסם רק על `127.0.0.1` של השרת. כל עוד `PANEL_ENABLED=on` כתוב ב-`.env`, העדכון האוטומטי (`scripts/auto-update.sh`) מוסיף את הקובץ הזה בעצמו, כך שעדכון לא סוגר את הפאנל.
-3. `PANEL_DOMAIN=panel.example.com caddy run --config deploy/panel/Caddyfile`. ה-Caddyfile מעביר רק את שבעת הנתיבים, לפי method ו-path, ומחזיר 404 לכל השאר.
+3. `PANEL_DOMAIN=panel.example.com caddy run --config deploy/panel/Caddyfile`. ה-Caddyfile מעביר רק את תשעת הנתיבים, לפי method ו-path, ומחזיר 404 לכל השאר.
 4. פתיחת 80 ו-443 בחומת האש של השרת (Caddy צריך את 80 לאימות התעודה).
 
 Tailscale Funnel הוא חלופה חינמית בלי דומיין, אבל הוא מסנן רק לפי path ולא לפי method. הוא בטוח יותר כאן רק בזכות הפורט הנפרד, ולכן הוא לא ההמלצה הראשונה.

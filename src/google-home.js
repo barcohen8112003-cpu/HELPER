@@ -271,61 +271,66 @@ export function getHomeDevices() {
   )
 }
 
-// `fast`: a voice command wants the light now, not a verified report. The press is quicker and the check afterwards
-// waits a third of a second instead of a full one.
-export function controlHomeDevice(deviceQuery, action = 'toggle', { fast = false } = {}) {
-  const q = String(deviceQuery || '').trim().toLowerCase()
-  let act = String(action || 'toggle').toLowerCase()
-  if (['on', 'הדלק', 'להדליק', 'דלוק', 'הדלקה'].includes(act)) act = 'on'
-  else if (['off', 'כבה', 'לכבות', 'כבוי', 'כיבוי'].includes(act)) act = 'off'
-  else act = 'toggle'
+const actionWord = (action) => {
+  const act = String(action || 'toggle').toLowerCase()
+  if (['on', 'הדלק', 'להדליק', 'דלוק', 'הדלקה'].includes(act)) return 'on'
+  if (['off', 'כבה', 'לכבות', 'כבוי', 'כיבוי'].includes(act)) return 'off'
+  return 'toggle'
+}
 
-  const run = async (send) => {
+// Which tiles a query means. `strict` (the panel's execute): only "all" or a device whose name matches; never the
+// old fallback where any query with "חדר" or "אור" in it became every light.
+export function pickTargets(parsed, deviceQuery, { strict = false } = {}) {
+  const q = String(deviceQuery || '').trim().toLowerCase()
+  const normalize = (s) => (s || '').toLowerCase().replace(/[^a-z0-9א-ת]/g, '')
+  const qNorm = normalize(q)
+  if (strict) {
+    if (q === 'all') return parsed.filter((p) => p.type === 'אורות')
+    if (qNorm.length < 2) return []
+  }
+
+  // Checks for room/all lights
+  const isAllRoomLights =
+    q.includes('חדר שלי') ||
+    q.includes('חדר') ||
+    q.includes('אור') ||
+    q.includes('אורות') ||
+    q.includes('lights')
+  const isAllLights = q.includes('כל האורות') || (q.includes('אורות') && (q.includes('כל') || q.length <= 6))
+  const isAll = q.includes('הכל') || q === 'all'
+
+  if (!strict && (isAllLights || isAll)) return parsed.filter((p) => (isAll ? true : p.type === 'אורות'))
+  // Check if user specifically requested a named sub-device (e.g. "mine light", "led", "floor lamp")
+  const specificMatches = parsed.filter((p) => {
+    const nNorm = normalize(p.name)
+    if (strict && p.type !== 'אורות') return false
+    if (q.includes('mine') && p.name.toLowerCase().includes('mine')) return true
+    if (q.includes('led') || q.includes('לד')) return p.name.toLowerCase().includes('led')
+    if (q.includes('floor') || q.includes('מנורת רצפה') || (q.includes('מנורה') && !q.includes('אור'))) return p.name.toLowerCase().includes('floor')
+    if (q.includes('סלון') || q.includes('living')) return p.name.toLowerCase().includes('living') || p.name.toLowerCase().includes('lounge')
+    if (q.includes('לאונג') || q.includes('lounge')) return p.name.toLowerCase().includes('lounge')
+    if (strict && nNorm.length < 2) return false
+    return nNorm.includes(qNorm) || (qNorm.length >= 3 && qNorm.includes(nNorm))
+  })
+  if (specificMatches.length > 0) return specificMatches
+  // Default when asking for "אור בחדר" or "חדר שלי Lights" -> all individual room lights!
+  if (!strict && isAllRoomLights) return parsed.filter((p) => p.type === 'אורות')
+  return []
+}
+
+// The press itself, on an open Google Home page. Returns what happened, as data. An error before the first press
+// carries notSent: nothing was clicked, so nothing can have changed.
+async function controlOnPage(send, deviceQuery, act, { fast = false, strict = false, onSend = () => {} } = {}) {
+  let sent = false
+  try {
     const all = await getParsedDevices(send)
-    if (!all.length) return 'לא זוהו מכשירים בעמוד Google Home.'
+    if (!all.length) return { found: false, matched: false, clicked: [], unchanged: [], offline: [], available: [] }
 
     const hasIndividuals = all.some((d) => !d.isGroup && d.type === 'אורות')
     const parsed = hasIndividuals ? all.filter((d) => !d.isGroup) : all
-
-    const normalize = (s) => (s || '').toLowerCase().replace(/[^a-z0-9א-ת]/g, '')
-    const qNorm = normalize(q)
-
-    // Checks for room/all lights
-    const isAllRoomLights =
-      q.includes('חדר שלי') ||
-      q.includes('חדר') ||
-      q.includes('אור') ||
-      q.includes('אורות') ||
-      q.includes('lights')
-    const isAllLights = q.includes('כל האורות') || (q.includes('אורות') && (q.includes('כל') || q.length <= 6))
-    const isAll = q.includes('הכל') || q === 'all'
-
-    let targets = []
-    if (isAllLights || isAll) {
-      targets = parsed.filter((p) => (isAll ? true : p.type === 'אורות'))
-    } else {
-      // Check if user specifically requested a named sub-device (e.g. "mine light", "led", "floor lamp")
-      const specificMatches = parsed.filter((p) => {
-        const nNorm = normalize(p.name)
-        if (q.includes('mine') && p.name.toLowerCase().includes('mine')) return true
-        if (q.includes('led') || q.includes('לד')) return p.name.toLowerCase().includes('led')
-        if (q.includes('floor') || q.includes('מנורת רצפה') || (q.includes('מנורה') && !q.includes('אור'))) return p.name.toLowerCase().includes('floor')
-        if (q.includes('סלון') || q.includes('living')) return p.name.toLowerCase().includes('living') || p.name.toLowerCase().includes('lounge')
-        if (q.includes('לאונג') || q.includes('lounge')) return p.name.toLowerCase().includes('lounge')
-        return nNorm.includes(qNorm) || (qNorm.length >= 3 && qNorm.includes(nNorm))
-      })
-
-      if (specificMatches.length > 0) {
-        targets = specificMatches
-      } else if (isAllRoomLights) {
-        // Default when asking for "אור בחדר" or "חדר שלי Lights" -> all individual room lights!
-        targets = parsed.filter((p) => p.type === 'אורות')
-      }
-    }
-
-    if (!targets.length) {
-      return `לא נמצא מכשיר מתאים עבור "${deviceQuery}".\nמכשירים זמינים:\n${parsed.map((p) => `• *${p.name}* (${p.type}): ${p.status}`).join('\n')}`
-    }
+    const available = parsed.map((p) => ({ name: p.name, type: p.type, status: p.status }))
+    const targets = pickTargets(parsed, deviceQuery, { strict })
+    if (!targets.length) return { found: true, matched: false, clicked: [], unchanged: [], offline: [], available }
 
     const clicked = []
     const unchanged = []
@@ -333,21 +338,23 @@ export function controlHomeDevice(deviceQuery, action = 'toggle', { fast = false
 
     for (const t of targets) {
       if (t.isOffline) {
-        offline.push(`• *${t.name}*: ⚠️ המכשיר אופליין ולא ניתן לשליטה כרגע`)
+        offline.push(t.name)
         continue
       }
 
       const currentlyOn = t.status === 'דלוק'
       if (act === 'on' && currentlyOn) {
-        unchanged.push(`• *${t.name}* כבר דלוק 🟢`)
+        unchanged.push({ name: t.name, status: 'דלוק' })
         continue
       }
       if (act === 'off' && !currentlyOn) {
-        unchanged.push(`• *${t.name}* כבר כבוי ⚪`)
+        unchanged.push({ name: t.name, status: 'כבוי' })
         continue
       }
 
       // Dispatch native CDP mouse events to trigger Angular Material
+      sent = true
+      onSend()
       await send('Input.dispatchMouseEvent', {
         type: 'mousePressed',
         x: t.x,
@@ -373,21 +380,62 @@ export function controlHomeDevice(deviceQuery, action = 'toggle', { fast = false
     }
 
     const afterDevices = await getParsedDevices(send)
-    const lines = []
-
-    for (const c of clicked) {
+    const after = clicked.map((c) => {
       const updated = afterDevices.find((p) => p.index === c.index) || c
-      const icon = updated.status === 'דלוק' ? '🟢 💡' : '⚪ 🔌'
-      lines.push(`• *${updated.name}* שונה בהצלחה למצב: *${updated.status}* ${icon}`)
-    }
-
-    lines.push(...unchanged)
-    lines.push(...offline)
-    return lines.join('\n')
+      return { name: updated.name, status: updated.status }
+    })
+    return { found: true, matched: true, clicked: after, unchanged, offline, available }
+  } catch (e) {
+    if (!sent && e && typeof e === 'object') e.notSent = true
+    throw e
   }
+}
+
+// The words the WhatsApp reply and the model have always had.
+function controlText(deviceQuery, r) {
+  if (!r.found) return 'לא זוהו מכשירים בעמוד Google Home.'
+  if (!r.matched) return `לא נמצא מכשיר מתאים עבור "${deviceQuery}".\nמכשירים זמינים:\n${r.available.map((p) => `• *${p.name}* (${p.type}): ${p.status}`).join('\n')}`
+  const lines = []
+  for (const u of r.clicked) {
+    const icon = u.status === 'דלוק' ? '🟢 💡' : '⚪ 🔌'
+    lines.push(`• *${u.name}* שונה בהצלחה למצב: *${u.status}* ${icon}`)
+  }
+  for (const u of r.unchanged) lines.push(u.status === 'דלוק' ? `• *${u.name}* כבר דלוק 🟢` : `• *${u.name}* כבר כבוי ⚪`)
+  for (const name of r.offline) lines.push(`• *${name}*: ⚠️ המכשיר אופליין ולא ניתן לשליטה כרגע`)
+  return lines.join('\n')
+}
+
+// `fast`: a voice command wants the light now, not a verified report. The press is quicker and the check afterwards
+// waits a third of a second instead of a full one.
+export function controlHomeDevice(deviceQuery, action = 'toggle', { fast = false } = {}) {
+  const act = actionWord(action)
   return runGoogleHome(
-    () => localCall(run),
+    async () => controlText(deviceQuery, await localCall((send) => controlOnPage(send, deviceQuery, act, { fast }))),
     () => remoteCall('controlHomeDevice', [deviceQuery, action, { fast }]),
     googleHomeTransport(),
   )
+}
+
+// The same press, for a caller that needs to know what happened (the panel's execute): the result as data, never
+// as words to match. { found, matched, clicked: [{ name, status }], unchanged, offline, available }.
+// Through the home bridge the PC must have this version too; an older PC refuses the call, and since that answer
+// comes after the call left, the caller treats it as unknown.
+export async function controlHomeDeviceResult(deviceQuery, action = 'toggle', { fast = false, strict = true } = {}) {
+  const act = actionWord(action)
+  // An error from opening the page or signing in (before controlOnPage pressed anything) is notSent as well.
+  let pressed = false
+  const local = () =>
+    localCall((send) => controlOnPage(send, deviceQuery, act, { fast, strict, onSend: () => (pressed = true) })).catch((e) => {
+      if (!pressed && e && typeof e === 'object') e.notSent = true
+      throw e
+    })
+  const home = () => remoteCall('controlHomeDeviceResult', [deviceQuery, action, { fast }])
+  // runGoogleHome's routing, except that a failure of the home fallback is not hidden: it may have pressed.
+  const route = googleHomeTransport()
+  if (route.primary === 'home') return home()
+  if (route.primary === 'local') return local()
+  return local().catch((e) => {
+    if (route.fallback === 'home' && isGoogleHomeLoginError(e)) return home()
+    throw e
+  })
 }

@@ -49,6 +49,7 @@ import { recoverTeam, teamStatus } from './team/conductor.js'
 import { allTools } from './tools.js'
 import { record as recordAudit } from './audit.js'
 import { createPanel, panelConfig, startPanelServer } from './panel.js'
+import { createExecutor } from './panel-execute.js'
 import { panelContext } from './panel-scopes.js'
 
 if (!config.llm.apiKey || !config.llm.model) {
@@ -629,7 +630,8 @@ const panel = panelCfg.enabled
         tv: tvConnected() ? 'connected' : 'disconnected',
       }),
       notify: (text) => notify(text, true),
-      fast: { action: fastAction, run: (text) => fastCommand(text) },
+      fast: { action: fastAction },
+      execute: createExecutor(),
       audit: recordAudit,
       origin: panelCfg.origin,
       port: panelCfg.port,
