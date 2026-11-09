@@ -15,7 +15,8 @@ const DIR = process.env.HELPER_DATA_DIR
 if (process.platform === 'win32') Object.defineProperty(process, 'platform', { value: 'linux' })
 
 const { createPanel, panelConfig, PANEL_ROUTES } = await import('./panel.js')
-const { toolGate, deviceGate, panelTools, panelContext, cleanScopes, PANEL_READ_TOOLS } = await import('./panel-scopes.js')
+const { toolGate, deviceGate, panelTools, panelContext, cleanScopes, cleanKind, PANEL_READ_TOOLS, DEVICE_ACTIONS, KNOWN_SCOPES } = await import('./panel-scopes.js')
+const { ACTION_CATALOG, PANEL_ACTIONS, checkParams, LIGHT_ROOMS } = await import('./panel-actions.js')
 const { fastAction, fastCommand } = await import('./fast-commands.js')
 const { runIsolated } = await import('./agent.js')
 const { tools, allTools } = await import('./tools.js')
@@ -97,11 +98,11 @@ const cookieOf = (res, name) => (res.headers['set-cookie'] || []).map((c) => c.s
 
 const logs = []
 let clock = Date.parse('2026-11-08T10:00:00Z')
-async function boot({ run = modelTurn, file = path.join(DIR, 'panel.json'), status, notify, fast, waitMs = 2000 } = {}) {
+async function boot({ run = modelTurn, file = path.join(DIR, 'panel.json'), status, devices, notify, fast, waitMs = 2000 } = {}) {
   const server = http.createServer()
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   const port = server.address().port
-  const panel = createPanel({ file, run, status, notify, fast, audit: record, origin: 'https://panel.example.test', port, now: () => clock, waitMs, log: (l) => logs.push(l) })
+  const panel = createPanel({ file, run, status, devices, notify, fast, audit: record, origin: 'https://panel.example.test', port, now: () => clock, waitMs, log: (l) => logs.push(l) })
   server.on('request', (q, s) => panel.handle(q, s))
   const ORIGIN = `http://127.0.0.1:${port}`
   // Signs in through the page, the way a browser does: GET /panel, then the form's POST with its CSRF value.
@@ -187,7 +188,7 @@ ok(!panelConfig({}).enabled && panelConfig({}).listen === '127.0.0.1' && panelCo
     const po = await req(port, 'POST', p, { headers: { Authorization: `Bearer ${a.secret}` }, body: {} })
     ok(g.status === 404 && po.status === 404, `13. not served on the panel port: ${p}`)
   }
-  ok(PANEL_ROUTES.length === 6, 'exactly six routes')
+  ok(PANEL_ROUTES.length === 7, 'exactly seven routes (six from the first panel, plus GET /panel/api/catalog)')
 
   // 7. Speaking as another client.
   const spoof = await req(port, 'POST', '/panel/api/ask', { headers: t.asSession(sa), body: { text: 'שלום', id: 'spoof000001', source: 'android_app' } })
@@ -403,12 +404,115 @@ ok(!panelConfig({}).enabled && panelConfig({}).listen === '127.0.0.1' && panelCo
   void b
 }
 
+// ── stage 2: the action catalog and credential kinds ────────────────────────
+{
+  // The catalog by itself: three actions, closed schemas, one source for the scopes.
+  ok(JSON.stringify(ACTION_CATALOG.map((a) => a.id)) === JSON.stringify(['lights:on', 'lights:off', 'tv:off']), 'C1. the catalog has exactly the three existing actions')
+  ok(Object.isFrozen(ACTION_CATALOG) && ACTION_CATALOG.every((a) => Object.isFrozen(a) && Object.isFrozen(a.params)), 'C2. the catalog is frozen')
+  ok(ACTION_CATALOG.every((a) => !('handler' in a)), 'C3. no handlers yet: nothing in the catalog can switch a device')
+  ok(JSON.stringify(DEVICE_ACTIONS) === JSON.stringify(PANEL_ACTIONS.map((a) => ({ id: a.id, label: a.label }))), 'C4. DEVICE_ACTIONS is derived from the catalog')
+  ok(JSON.stringify(KNOWN_SCOPES) === JSON.stringify(['status', 'ask:read', 'device:lights:on', 'device:lights:off', 'device:tv:off']), 'C5. the known scopes did not change')
+  ok(PANEL_ACTIONS.every((a) => a.risk !== 'high'), 'C6. no high-risk action is offered to the panel')
+  // The closed schemas.
+  ok(checkParams('lights:on', { room: 'סלון' }).ok && checkParams('lights:off', { room: 'all' }).ok, 'C7. a room from the list is accepted, "all" is an explicit choice')
+  ok(!checkParams('lights:on', {}).ok && !checkParams('lights:on').ok, 'C8. lights without a room are refused, never read as all the lights')
+  ok(!checkParams('lights:on', { room: 'מחסן' }).ok && !checkParams('lights:on', { room: 'כל האורות' }).ok, 'C9. a room outside the list is refused')
+  ok(!checkParams('lights:on', { room: 'סלון', cmd: 'rm -rf /' }).ok, 'C10. an unknown field is refused')
+  ok(!checkParams('lights:on', { room: ['סלון'] }).ok && !checkParams('lights:on', { room: 7 }).ok && !checkParams('lights:on', 'סלון').ok && !checkParams('lights:on', []).ok, 'C11. wrong types are refused')
+  ok(checkParams('tv:off', {}).ok && !checkParams('tv:off', { presses: 5 }).ok, 'C12. tv:off takes no parameters at all')
+  ok(!checkParams('shell', {}).ok && !checkParams('lights:toggle', { room: 'סלון' }).ok && !checkParams('__proto__', {}).ok, 'C13. an action that is not in the catalog is refused')
+  ok(JSON.stringify(checkParams('lights:on', { room: 'מטבח' }).params) === JSON.stringify({ room: 'מטבח' }), 'C14. only the schema fields come back')
+  ok(!checkParams('lights:on', JSON.parse('{"room":"סלון","__proto__":{"x":1}}')).ok, 'C15. a __proto__ field is refused as unknown')
+  ok(LIGHT_ROOMS.includes('all') && Object.isFrozen(LIGHT_ROOMS), 'C16. the room list is closed and frozen')
+
+  // Kinds.
+  ok(cleanKind(undefined) === 'panel' && cleanKind('producer') === 'producer' && cleanKind('consumer:tv') === 'consumer:tv', 'K1. known kinds, and no kind means panel')
+  ok(cleanKind('admin') === null && cleanKind('consumer:') === null && cleanKind('consumer:../x') === null && cleanKind('Consumer:TV') === null, 'K2. anything else is not a kind')
+  ok(cleanScopes(['ask:read', 'status', 'device:lights:on'], 'producer').length === 0 && cleanScopes(['ask:read'], 'consumer:tv').length === 0, 'K3. producer and consumer get no scopes, even when asked for ask:read')
+  ok(JSON.stringify(cleanScopes(['device:tv:off'])) === JSON.stringify(['status', 'ask:read', 'device:tv:off']), 'K4. a panel credential still gets its base scopes')
+
+  // Migration: a panel.json written before kinds existed.
+  const old = path.join(DIR, 'panel-old.json')
+  fs.rmSync(old, { force: true })
+  const t0 = await boot({ file: old })
+  const legacy = t0.panel.issue({ label: 'ישן' })
+  t0.panel.setScopes(legacy.id, ['device:lights:on'])
+  await t0.close()
+  const data = JSON.parse(fs.readFileSync(old, 'utf8'))
+  for (const c of data.credentials) delete c.kind
+  fs.writeFileSync(old, JSON.stringify(data))
+  const t1 = await boot({ file: old })
+  const migrated = t1.panel.list().find((c) => c.id === legacy.id)
+  ok(migrated.kind === 'panel' && JSON.stringify(migrated.scopes) === JSON.stringify(['status', 'ask:read', 'device:lights:on']), 'M1. an old credential loads as panel, scopes unchanged')
+  const ls = await t1.login(legacy.secret)
+  const lst = await req(t1.port, 'GET', '/panel/api/status', { headers: t1.asSession(ls) })
+  ok(ls.r.status === 200 && lst.status === 200, 'M2. an old credential still signs in and reads status')
+  await t1.close()
+
+  // The route.
+  fs.rmSync(path.join(DIR, 'panel.json'), { force: true })
+  const control = []
+  const fast = { action: fastAction, run: async () => (control.push('ran'), { reply: 'x' }) }
+  const t = await boot({ fast, devices: () => ({ lights: 'disconnected', tv: 'connected' }) })
+  const { port, panel } = t
+  const a = panel.issue({ label: 'קטלוג' })
+  const sa = await t.login(a.secret)
+  const cat = (headers) => req(port, 'GET', '/panel/api/catalog', { headers })
+  const r0 = await cat(t.asSession(sa))
+  ok(r0.status === 200 && Array.isArray(r0.json.actions) && r0.json.actions.length === 0, 'R1. no switches on: the catalog is empty')
+  panel.setScopes(a.id, ['device:lights:off', 'device:tv:off'])
+  const r1 = await cat({ Authorization: `Bearer ${a.secret}` })
+  ok(r1.status === 200 && JSON.stringify(r1.json.actions.map((x) => x.id)) === JSON.stringify(['lights:off', 'tv:off']), 'R2. only the actions whose switch is on')
+  const lo = r1.json.actions.find((x) => x.id === 'lights:off')
+  ok(lo.params.room.required === true && lo.params.room.enum.includes('all') && lo.params.room.type === 'string', 'R3. each action carries its closed schema')
+  ok(lo.connection === 'disconnected' && r1.json.actions.find((x) => x.id === 'tv:off').connection === 'connected' && /לא הוכחה/.test(r1.json.note), 'R4. connection state only, with the note that it is not proof')
+  ok(!JSON.stringify(r1.json).includes('handler') && !JSON.stringify(r1.json).includes('risk'), 'R5. nothing internal is in the answer')
+  ok(control.length === 0, 'R6. reading the catalog ran nothing')
+  const t2 = await boot({ devices: () => { throw new Error('boom') } })
+  const a2 = t2.panel.issue({ scopes: ['device:tv:off'] })
+  const r2 = await req(t2.port, 'GET', '/panel/api/catalog', { headers: { Authorization: `Bearer ${a2.secret}` } })
+  ok(r2.status === 200 && r2.json.actions[0].connection === 'unknown', 'R7. a failing connection check shows unknown, not connected')
+  await t2.close()
+  ok((await cat({})).status === 403, 'R8. no sign-in: 403')
+  ok((await req(port, 'GET', '/panel/api/catalog?all=1', { headers: { Authorization: `Bearer ${a.secret}` } })).status === 400, 'R9. a query string is refused')
+  ok((await req(port, 'POST', '/panel/api/catalog', { headers: { Authorization: `Bearer ${a.secret}` }, body: {} })).status === 404, 'R10. POST to the catalog is 404')
+
+  // Producer and consumer: nothing from any route that exists now.
+  const pr = panel.issue({ label: 'שולח', kind: 'producer', scopes: ['status', 'ask:read', 'device:tv:off'] })
+  const co = panel.issue({ label: 'טלוויזיה', kind: 'consumer:tv', scopes: ['ask:read'] })
+  ok(pr.kind === 'producer' && pr.scopes.length === 0 && co.kind === 'consumer:tv' && co.scopes.length === 0, 'P1. producer and consumer are issued with no scopes')
+  ok(panel.setScopes(pr.id, ['ask:read', 'device:lights:on']).length === 0, 'P2. switching scopes on for a producer does nothing')
+  let threw = false
+  try {
+    panel.issue({ kind: 'admin' })
+  } catch {
+    threw = true
+  }
+  ok(threw, 'P3. an unknown kind is not issued')
+  for (const c of [pr, co]) {
+    const h = { Authorization: `Bearer ${c.secret}` }
+    const st = await req(port, 'GET', '/panel/api/status', { headers: h })
+    const ct = await req(port, 'GET', '/panel/api/catalog', { headers: h })
+    const ak = await req(port, 'POST', '/panel/api/ask', { headers: h, body: { text: 'תכבה את הטלוויזיה', id: `kind${c.kind.replace(/\W/g, '')}01` } })
+    const rs = await req(port, 'GET', '/panel/api/ask/askresult01', { headers: h })
+    ok(st.status === 403 && ct.status === 403 && ak.status === 403 && rs.status === 403, `P4. ${c.kind}: 403 on status, catalog, ask and ask/:id`)
+    const lg = await t.login(c.secret)
+    ok(lg.r.status === 403 && !lg.sid, `P5. ${c.kind}: no browser session`)
+  }
+  ok(control.length === 0, 'P6. nothing ran for producer or consumer')
+  ok(panel.list().find((c) => c.id === pr.id).kind === 'producer', 'P7. the list shows each kind')
+  panel.revoke(a.id)
+  ok((await cat({ Authorization: `Bearer ${a.secret}` })).status === 403, 'R11. a revoked credential gets 403 on the catalog')
+  await t.close()
+}
+
 // ── the exposure config ships with the same allow-list ──────────────────────
 {
   const caddy = fs.readFileSync(new URL('../deploy/panel/Caddyfile', import.meta.url), 'utf8')
   ok(/@panel_page\s*\{[^}]*method GET[^}]*path \/panel\s*\n/.test(caddy), 'Caddy: GET /panel only')
   ok(/@panel_post\s*\{[^}]*method POST[^}]*path \/panel\/api\/login \/panel\/api\/logout \/panel\/api\/ask\s*\n/.test(caddy), 'Caddy: the three POST routes only')
   ok(/@panel_get\s*\{[^}]*method GET[^}]*path \/panel\/api\/status\s*\n/.test(caddy) && /path_regexp \^\/panel\/api\/ask\/\[A-Za-z0-9_-\]\{8,80\}\$/.test(caddy), 'Caddy: the two GET API routes only')
+  ok(/@panel_catalog\s*\{[^}]*method GET[^}]*path \/panel\/api\/catalog\s*\n/.test(caddy) && /handle @panel_catalog \{\s*\n\s*reverse_proxy 127\.0\.0\.1:3214/.test(caddy), 'Caddy: GET /panel/api/catalog only')
   ok(/handle \{\s*\n\s*respond 404/.test(caddy), 'Caddy: everything else is 404')
   ok(/127\.0\.0\.1:3214/.test(caddy) && !/3210/.test(caddy.replace(/#.*$/gm, '')), 'Caddy forwards to the panel port only, never to 3210')
 }

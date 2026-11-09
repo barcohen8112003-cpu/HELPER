@@ -8,6 +8,8 @@
 // "Read" here means public information only. fetch_page is not on the list: it reads signed-in sites (Webtop)
 // and addresses inside the server's own network.
 
+import { PANEL_ACTIONS } from './panel-actions.js'
+
 export const PANEL_READ_TOOLS = Object.freeze([
   'web_search',
   'get_news',
@@ -18,19 +20,31 @@ export const PANEL_READ_TOOLS = Object.freeze([
   'israel_transit',
 ])
 
-// Device actions the owner can switch on, one by one, in the settings site. All off by default. They run only
-// through the exact fast commands in src/fast-commands.js; the model's own device tools stay closed to the panel.
-export const DEVICE_ACTIONS = Object.freeze([
-  { id: 'lights:on', label: 'אורות: הדלקה' },
-  { id: 'lights:off', label: 'אורות: כיבוי' },
-  { id: 'tv:off', label: 'טלוויזיה: כיבוי' },
-])
+// Device actions the owner can switch on, one by one, in the settings site. All off by default. Derived from the
+// action catalog (src/panel-actions.js), the one place they are defined. The model's own device tools stay closed
+// to the panel.
+export const DEVICE_ACTIONS = Object.freeze(PANEL_ACTIONS.map((a) => Object.freeze({ id: a.id, label: a.label })))
 
 export const BASE_SCOPES = Object.freeze(['status', 'ask:read'])
 export const KNOWN_SCOPES = Object.freeze([...BASE_SCOPES, ...DEVICE_ACTIONS.map((a) => `device:${a.id}`)])
 
-// Only names on KNOWN_SCOPES survive, each once. status and ask:read are always there.
-export function cleanScopes(list) {
+// What kind of client a credential is. Only 'panel' (a person, or a program acting like one) gets the base scopes
+// and may hold device switches. 'producer' (sends notices) and 'consumer:<device>' (receives them on one device)
+// have no scopes yet: their routes come later, and every route that exists now refuses them.
+export const CREDENTIAL_KINDS = Object.freeze(['panel', 'producer', 'consumer'])
+const CONSUMER_RE = /^consumer:[a-z][a-z0-9-]{1,20}$/
+
+// The kind as stored, or null when it is not one. A credential saved before kinds existed is a 'panel'.
+export function cleanKind(kind) {
+  if (kind === undefined || kind === null || kind === '') return 'panel'
+  const k = String(kind)
+  return k === 'panel' || k === 'producer' || CONSUMER_RE.test(k) ? k : null
+}
+
+// Only names on KNOWN_SCOPES survive, each once. For a 'panel', status and ask:read are always there; any other
+// kind gets none of them, whatever the list asks for.
+export function cleanScopes(list, kind = 'panel') {
+  if (cleanKind(kind) !== 'panel') return []
   const want = new Set([...BASE_SCOPES, ...(Array.isArray(list) ? list : [])].map(String))
   return KNOWN_SCOPES.filter((s) => want.has(s))
 }

@@ -1,6 +1,6 @@
 # HTTPS in front of HELPER's remote panel. NOT deployed: shown for approval first (deploy/panel/README.md).
 #
-# Caddy gets and renews the certificate by itself (Let's Encrypt) for PANEL_DOMAIN. It forwards exactly the six
+# Caddy gets and renews the certificate by itself (Let's Encrypt) for PANEL_DOMAIN. It forwards exactly the seven
 # panel routes, by method and path, to the panel's own port. Everything else is 404 here, and the panel port
 # itself (src/panel.js) serves nothing else either. The settings site (3210), /dash, /face and /bridge/* are never
 # forwarded.
@@ -27,6 +27,10 @@
 		method GET
 		path_regexp ^/panel/api/ask/[A-Za-z0-9_-]{8,80}$
 	}
+	@panel_catalog {
+		method GET
+		path /panel/api/catalog
+	}
 
 	request_body {
 		max_size 20KB
@@ -49,6 +53,9 @@
 		reverse_proxy 127.0.0.1:3214
 	}
 	handle @panel_result {
+		reverse_proxy 127.0.0.1:3214
+	}
+	handle @panel_catalog {
 		reverse_proxy 127.0.0.1:3214
 	}
 	handle {
