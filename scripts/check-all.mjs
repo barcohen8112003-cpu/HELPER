@@ -49,6 +49,8 @@ const TESTS = [
   'src/proactive-selftest.js',
   'src/logs-selftest.js',
   'src/instinct-selftest.js',
+  'src/instinct-continuity-selftest.js',
+  'src/inflight-selftest.js',
   'src/claude-code-selftest.js',
   'src/gemini-spark-selftest.js',
   'src/tv-agent-selftest.js',

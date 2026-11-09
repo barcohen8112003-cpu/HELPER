@@ -8,6 +8,7 @@ import baileys, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVer
 import { DATA_DIR } from './config.js'
 import { state as store, save } from './store.js'
 import { ingestGroupMetadata, syncParticipatingGroups } from './groups.js'
+import * as inflight from './inflight.js'
 
 const CATCH_UP = 12 * 3600
 const MAX_SEEN = 500
@@ -19,6 +20,7 @@ const AUTH_DIR = path.join(DATA_DIR, 'auth')
 const QR_FILE = path.join(DATA_DIR, 'qr.png')
 const CODE_FILE = path.join(DATA_DIR, 'pair-code.txt')
 // Invisible prefix on everything the bot sends, so it never answers itself in a self-chat.
+const notConnected = () => Object.assign(new Error('וואטסאפ לא מחובר כרגע'), { notSent: true })
 const BOT_MARK = '​'
 const MAX_MEDIA = 15 * 1024 * 1024
 const logger = pino({ level: 'silent' })
@@ -54,7 +56,9 @@ export function pairingNumber(raw) {
 // onReady({ jid, lid }): the linked account's own ids, each time the connection opens.
 // onGroup({ group, id, sender, senderName, at, text, fromMe }): a text message in a group, for src/groups.js. Read only.
 // groupName(jid) / setGroupName(jid, name): the group's subject, looked up once and kept there.
-export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = null) {
+// eligible(m): no side effects. True for a message meant for the assistant (the owner's chat, Instinct), which is then
+// kept in flight (src/inflight.js, id and time only) until m.receipt() or the end of onMessage. Others are not listed.
+export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = null, eligible = () => false) {
   const bootedAt = Math.floor(Date.now() / 1000)
   // Handled message ids survive a restart, so nothing is answered twice. Messages sent while the assistant was
   // off are still picked up, as long as they are newer than the last one handled and not older than CATCH_UP.
@@ -244,7 +248,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
         if (!msg.key.fromMe && msg.pushName) learn([{ id: msg.key.senderPn || jid, notify: msg.pushName }], false)
         const sentAt = Number(msg.messageTimestamp)
         if (sentAt < since || seen.has(msg.key.id)) continue
-        remember(msg.key.id, sentAt)
+        const id = msg.key.id
         const content = normalizeMessageContent(msg.message)
         const base = () => {
           const own = ownIds()
@@ -252,12 +256,8 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
           // lateSeconds > 0: the message was written before this run started, while the assistant was off.
           return { jids, fromMe: Boolean(msg.key.fromMe), selfChat: jids.some((j) => own.includes(j)), key: msg.key, lateSeconds: Math.max(0, bootedAt - sentAt) }
         }
-        // An emoji reaction arrives as its own message; an empty one means the reaction was removed.
-        if (content?.reactionMessage) {
-          const reaction = content.reactionMessage.text
-          if (reaction) Promise.resolve(onMessage({ ...base(), text: '', reaction, getMedia: async () => null })).catch((e) => console.log(`[whatsapp] ${e.message}`))
-          continue
-        }
+        // Read what the message is before it is marked seen, without acting on it yet.
+        const reaction = content?.reactionMessage ? content.reactionMessage.text || '' : null
         // A shared 📍 or live location. Live location keeps sending updates; they arrive here the same way.
         const pin = content?.locationMessage || content?.liveLocationMessage
         const location = pin && Number.isFinite(pin.degreesLatitude) && Number.isFinite(pin.degreesLongitude)
@@ -265,7 +265,29 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
           : null
         const part = content?.imageMessage || content?.audioMessage || content?.documentMessage
         const text = content?.conversation || content?.extendedTextMessage?.text || part?.caption || pin?.comment || pin?.caption || ''
-        if ((!text && !part && !location) || text.startsWith(BOT_MARK)) continue
+        const handled = reaction !== null ? Boolean(reaction) : Boolean(text || part || location) && !text.startsWith(BOT_MARK)
+        // In flight from the same save that marks it seen, so a crash in between cannot lose it in silence.
+        let tracked = false
+        try {
+          tracked = handled && Boolean(eligible(base()))
+        } catch {}
+        if (tracked) inflight.track(store.wa, id, sentAt * 1000)
+        remember(id, sentAt)
+        // Released once onMessage gave it a durable receipt (m.receipt) or finished it. A throw keeps it listed, so the
+        // inflight sweep in index.js tells the owner later instead of it staying unknown.
+        const receipt = () => {
+          if (tracked && inflight.release(store.wa, id)) save()
+        }
+        const run = (m) =>
+          Promise.resolve(onMessage({ ...m, receipt }))
+            .then(receipt)
+            .catch((e) => console.log(`[whatsapp] ${e.message}`))
+        // An emoji reaction arrives as its own message; an empty one means the reaction was removed.
+        if (reaction !== null) {
+          if (reaction) run({ ...base(), text: '', reaction, getMedia: async () => null })
+          continue
+        }
+        if (!handled) continue
         // Downloaded lazily, so media from chats the bot ignores is never fetched.
         const getMedia = async () => {
           if (!part) return null
@@ -273,9 +295,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
           const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage })
           return { kind: content.imageMessage ? 'image' : content.audioMessage ? 'audio' : 'file', buffer, mime: part.mimetype || '', name: part.fileName || '' }
         }
-        Promise.resolve(onMessage({ ...base(), text, getMedia, ...(location && { location }) })).catch((e) =>
-          console.log(`[whatsapp] ${e.message}`)
-        )
+        run({ ...base(), text, getMedia, ...(location && { location }) })
       }
     })
   }
@@ -283,16 +303,19 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
   await connect()
 
   // Media cannot carry BOT_MARK, so its id is registered up front to keep the bot from answering itself.
+  // Returns the message id. Not connected: throws before anything is sent (err.notSent), so a caller can tell
+  // "surely did not leave" from a send that broke halfway and may have left.
   async function sendTracked(jid, content) {
-    if (!ready) throw new Error('וואטסאפ לא מחובר כרגע')
+    if (!ready) throw notConnected()
     const messageId = '3EB0' + randomBytes(9).toString('hex').toUpperCase()
     remember(messageId)
     await deliver(jid, content, { messageId })
+    return messageId
   }
 
   return {
     async send(jid, text) {
-      if (!ready) throw new Error('וואטסאפ לא מחובר כרגע')
+      if (!ready) throw notConnected()
       let last
       for (let i = 0; i < text.length; i += 3500) last = await deliver(jid, { text: BOT_MARK + text.slice(i, i + 3500) })
       // The id WhatsApp knows the message by, for anyone who needs proof that it left.
