@@ -746,6 +746,11 @@ function startHotkeys() {
 
 // ---- tray ---------------------------------------------------------------------------------------
 
+function bridgeLabel() {
+  const b = require('./src/bridge').state()
+  return { on: 'גשר למחשב: פתוח', starting: 'גשר למחשב: נפתח…', 'no-plan': 'גשר למחשב: נסגר מיד (צריך מנוי Claude פעיל ו-‎/login)', missing: 'גשר למחשב: Claude Code לא מותקן', stopped: 'גשר למחשב: סגור', off: 'גשר למחשב: כבוי' }[b] || 'גשר למחשב: ' + b
+}
+
 function trayMenu() {
   const s = store.settings()
   const claude = brain.state()
@@ -763,6 +768,8 @@ function trayMenu() {
     ] },
     { label: 'תשובות בקול של HELPER', type: 'checkbox', checked: s.speakAnswers, click: (i) => { store.saveSettings({ speakAnswers: i.checked }) } },
     { label: 'להפעיל עם Windows', type: 'checkbox', checked: s.startAtLogin, click: (i) => { store.saveSettings({ startAtLogin: i.checked }); applyLogin() } },
+    { label: 'לפתוח את הגשר למחשב עם HELPER', type: 'checkbox', checked: s.bridgeAtStart, click: (i) => { store.saveSettings({ bridgeAtStart: i.checked }); if (i.checked) require('./src/bridge').start({ exe: brain.claudeCommand(), cwd: path.join(ROOT, '..'), log }); refreshTray() } },
+    { label: bridgeLabel(), enabled: false },
     { type: 'separator' },
     { label: s.helperToken ? 'HELPER בענן: מחובר' : 'HELPER בענן: לא מחובר (connect.ps1)', enabled: false },
     { label: claude === 'signed-out' ? 'Claude Code: צריך ‎/login' : claude === 'missing' ? 'Claude Code: לא מותקן' : claude === 'ok' ? 'Claude Code: מחובר' : 'Claude Code: עוד לא נבדק', enabled: false },
@@ -902,6 +909,11 @@ app.whenReady().then(async () => {
   speech.start(ROOT, log).then(() => log('speech ready')).catch((e) => log('speech not started:', e.message))
   if (!speech.available(ROOT)) new Notification({ title: 'HELPER', body: 'מנוע הדיבור לא הורד: desktop\\vendor חסר. הכתיבה עובדת.' }).show()
 
+  // The bridge to this PC (Claude Code's Remote Control) opens with HELPER. Tray: "גשר למחשב".
+  if (store.settings().bridgeAtStart) {
+    require('./src/bridge').start({ exe: brain.claudeCommand(), cwd: path.join(ROOT, '..'), log })
+  }
+
   log('started')
   if (!askFromArgs(process.argv)) {
     answer('HELPER מוכן! לחץ PageDown (PD) או Ctrl+Alt+Q כדי לדבר')
@@ -952,4 +964,5 @@ app.on('before-quit', () => {
   try { hook && hook.uIOhook.stop() } catch { }
   speech && speech.stop()
   brain && brain.cancel()
+  try { require('./src/bridge').stop() } catch { }
 })
