@@ -51,6 +51,7 @@ import { record as recordAudit } from './audit.js'
 import { createPanel, panelConfig, startPanelServer } from './panel.js'
 import { createExecutor } from './panel-execute.js'
 import { panelContext } from './panel-scopes.js'
+import { connectInstinct, isInstinctMessage, onInstinctMessage } from './instinct.js'
 
 if (!config.llm.apiKey || !config.llm.model) {
   console.log('חסר LLM_API_KEY או LLM_MODEL. העתק את .env.example ל-.env ומלא אותם.')
@@ -172,6 +173,11 @@ const wa = await startWhatsApp(async (m) => {
     await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו אפשר לכתוב לי כאן.\n\n${HELP}`)
     tellRelease()
     return
+  }
+  // Instinct's answers in the owner's chat with Instinct (src/instinct.js). Data only: never a command or an approval.
+  if (isInstinctMessage(m)) {
+    const done = await onInstinctMessage(m).catch((e) => `error: ${e.message}`)
+    return console.log(`[instinct] ${done}`)
   }
   if (!isOwner(m)) return
   const text = m.text.trim()
@@ -346,6 +352,7 @@ const wa = await startWhatsApp(async (m) => {
     finish()
   })
 }, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m), bindSync: groups.bindGroupSync })
+connectInstinct({ send: (jid, text) => wa.sendAs(jid, text), notify: (text) => (state.owner ? wa.send(state.owner.jid, text) : null) })
 
 // Default pairing: the moment the QR is scanned, the assistant lives in the account's "message yourself" chat.
 // Skipped after /unpair, where the user picks a chat with the pairing code instead.
