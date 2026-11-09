@@ -51,7 +51,7 @@ import { record as recordAudit } from './audit.js'
 import { createPanel, panelConfig, startPanelServer } from './panel.js'
 import { createExecutor } from './panel-execute.js'
 import { panelContext } from './panel-scopes.js'
-import { connectInstinct, isInstinctMessage, onInstinctMessage } from './instinct.js'
+import { connectInstinct, isInstinctMessage, onInstinctMessage, stopInstinctChat } from './instinct.js'
 
 if (!config.llm.apiKey || !config.llm.model) {
   console.log('חסר LLM_API_KEY או LLM_MODEL. העתק את .env.example ל-.env ומלא אותם.')
@@ -235,6 +235,8 @@ const wa = await startWhatsApp(async (m) => {
     stopEpoch++
     running?.ac.abort()
     const stoppedJobs = stopJobs()
+    // The conversation with Instinct (src/instinct.js) ends too.
+    if (stopInstinctChat()) stoppedJobs.push('השיחה עם Instinct')
     if (command === 'stop') return wa.send(state.owner.jid, running || stoppedJobs.length ? `עצרתי${stoppedJobs.length ? `, כולל ${stoppedJobs.map((t) => `"${t}"`).join(', ')} שרץ ברקע` : ''}.` : 'אין מה לעצור.')
     // The stopped turn rolls its own messages back; the history is cleared only after that, never under it.
     if (running) await Promise.race([running.done, new Promise((r) => setTimeout(r, 10000))])
