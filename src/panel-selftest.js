@@ -17,6 +17,9 @@ if (process.platform === 'win32') Object.defineProperty(process, 'platform', { v
 const { createPanel, panelConfig, PANEL_ROUTES } = await import('./panel.js')
 const { toolGate, deviceGate, panelTools, panelContext, cleanScopes, cleanKind, PANEL_READ_TOOLS, DEVICE_ACTIONS, KNOWN_SCOPES } = await import('./panel-scopes.js')
 const { ACTION_CATALOG, PANEL_ACTIONS, checkParams, LIGHT_ROOMS } = await import('./panel-actions.js')
+const { createExecutor, lightsOutcome, errorOutcome, ROOM_QUERY, ROOMS_COVERED } = await import('./panel-execute.js')
+const { withDevice, deviceState, _resetDeviceLocks } = await import('./device-lock.js')
+const { pickTargets } = await import('./google-home.js')
 const { fastAction, fastCommand } = await import('./fast-commands.js')
 const { runIsolated } = await import('./agent.js')
 const { tools, allTools } = await import('./tools.js')
@@ -98,11 +101,11 @@ const cookieOf = (res, name) => (res.headers['set-cookie'] || []).map((c) => c.s
 
 const logs = []
 let clock = Date.parse('2026-11-08T10:00:00Z')
-async function boot({ run = modelTurn, file = path.join(DIR, 'panel.json'), status, devices, notify, fast, waitMs = 2000 } = {}) {
+async function boot({ run = modelTurn, file = path.join(DIR, 'panel.json'), status, devices, notify, fast, execute, waitMs = 2000 } = {}) {
   const server = http.createServer()
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   const port = server.address().port
-  const panel = createPanel({ file, run, status, devices, notify, fast, audit: record, origin: 'https://panel.example.test', port, now: () => clock, waitMs, log: (l) => logs.push(l) })
+  const panel = createPanel({ file, run, status, devices, notify, fast, execute, audit: record, origin: 'https://panel.example.test', port, now: () => clock, waitMs, log: (l) => logs.push(l) })
   server.on('request', (q, s) => panel.handle(q, s))
   const ORIGIN = `http://127.0.0.1:${port}`
   // Signs in through the page, the way a browser does: GET /panel, then the form's POST with its CSRF value.
@@ -188,7 +191,7 @@ ok(!panelConfig({}).enabled && panelConfig({}).listen === '127.0.0.1' && panelCo
     const po = await req(port, 'POST', p, { headers: { Authorization: `Bearer ${a.secret}` }, body: {} })
     ok(g.status === 404 && po.status === 404, `13. not served on the panel port: ${p}`)
   }
-  ok(PANEL_ROUTES.length === 7, 'exactly seven routes (six from the first panel, plus GET /panel/api/catalog)')
+  ok(PANEL_ROUTES.length === 9, 'exactly nine routes (six from the first panel, catalog, and execute with its result)')
 
   // 7. Speaking as another client.
   const spoof = await req(port, 'POST', '/panel/api/ask', { headers: t.asSession(sa), body: { text: 'שלום', id: 'spoof000001', source: 'android_app' } })
@@ -235,11 +238,13 @@ ok(!panelConfig({}).enabled && panelConfig({}).listen === '127.0.0.1' && panelCo
   ok(searchAudit({ tool: 'fast:lights:on' }).some((e) => e.approval === 'denied'), 'the refusal is in the audit log')
   const r1b = await ask(sa, 'תכבה את הטלוויזיה', 'device00002')
   ok(r1b.status === 403 && control.length === 0, '9. TV off without its switch is refused too')
+  // Stage 3: from the panel, devices move only through execute. With the switch on, ask still runs nothing.
   panel.setScopes(a.id, ['device:lights:on'])
+  const modelCalls = requests.length
   const r2 = await ask(sa, 'תדליק את האורות', 'device00003')
-  ok(r2.status === 200 && control.join() === 'כל האורות:on', '9. after the switch is on, the command runs (recorder)')
-  const r3 = await ask(sa, 'תכבה את האורות', 'device00004')
-  ok(r3.status === 403 && control.length === 1, '9. the switch for "on" does not open "off"')
+  ok(r2.status === 403 && /execute/.test(r2.json.error) && control.length === 0, '9. even with the switch on, a device sentence in ask is refused and nothing ran (execute only)')
+  const r3 = await ask(sa, 'תדליק את האורות בסלון', 'device00004')
+  ok(r3.status === 403 && control.length === 0 && requests.length === modelCalls, '9. a device sentence with a room is refused too, and never reaches the model')
   panel.setScopes(a.id, [])
 
   // 5 + 4. The model asks for closed tools: memory, a screenshot, a device, a tool that was never offered.
@@ -506,6 +511,206 @@ ok(!panelConfig({}).enabled && panelConfig({}).listen === '127.0.0.1' && panelCo
   await t.close()
 }
 
+// ── stage 3 (E): execute, structured results, one lock per device ───────────
+{
+  const tick = () => new Promise((r) => setTimeout(r, 5))
+  const until = async (fn, ms = 2000) => {
+    const end = Date.now() + ms
+    while (Date.now() < end) {
+      if (await fn()) return true
+      await tick()
+    }
+    return false
+  }
+  const deferred = () => {
+    let resolve, reject
+    const promise = new Promise((a, b) => ((resolve = a), (reject = b)))
+    return { promise, resolve, reject }
+  }
+  // A recorder in place of Google Home and the TV. Each call is remembered; the answer is scripted.
+  const calls = []
+  let lightsAnswer = async (q, act) => ({ found: true, matched: true, clicked: [{ name: 'Living Room', status: act === 'on' ? 'דלוק' : 'כבוי' }], unchanged: [], offline: [], available: [] })
+  let tvAnswer = async () => {}
+  const exec = createExecutor({
+    lights: (q, act, opts) => (calls.push(['lights', q, act, Boolean(opts?.strict)]), lightsAnswer(q, act)),
+    tvOff: () => (calls.push(['tv']), tvAnswer()),
+    timeoutMs: 200,
+  })
+  _resetDeviceLocks()
+
+  // The pieces by themselves.
+  ok(ROOMS_COVERED() && ROOM_QUERY.all === 'all', 'E1. every room in the catalog has an explicit query, all -> all')
+  ok(lightsOutcome({ found: true, matched: true, clicked: [{ name: 'a', status: 'דלוק' }], unchanged: [], offline: [] }, 'on').state === 'succeeded', 'E2. the device reports the asked state: succeeded')
+  ok(lightsOutcome({ found: true, matched: true, clicked: [{ name: 'a', status: 'כבוי' }], unchanged: [], offline: [] }, 'on').state === 'unknown', 'E3. pressed but not in the asked state: unknown')
+  ok(lightsOutcome({ found: true, matched: true, clicked: [], unchanged: [{ name: 'a', status: 'דלוק' }], offline: [] }, 'on').state === 'succeeded', 'E4. already in the asked state: succeeded, nothing pressed')
+  ok(lightsOutcome({ found: true, matched: false }, 'on').state === 'failed' && lightsOutcome({ found: false }, 'on').state === 'failed', 'E5. nothing matched or no devices: failed')
+  ok(lightsOutcome({ found: true, matched: true, clicked: [], unchanged: [], offline: ['x'] }, 'on').state === 'failed', 'E6. only offline lights, nothing pressed: failed')
+  ok(lightsOutcome({ found: true, matched: true, clicked: [{ name: 'a', status: 'דלוק' }], unchanged: [], offline: ['x'] }, 'on').state === 'unknown', 'E7. some pressed, some offline: not reported as success')
+  ok(lightsOutcome('שונה בהצלחה', 'on').state === 'unknown', 'E8. a reply in words decides nothing: unknown')
+  ok(errorOutcome(Object.assign(new Error('x'), { notSent: true })).state === 'failed' && errorOutcome(Object.assign(new Error('x'), { reported: true })).state === 'failed', 'E9. an error before sending, or the device saying it failed: failed')
+  ok(errorOutcome(new Error('הגשר לא ענה')).state === 'unknown' && !/id חדש/.test(errorOutcome(new Error('x')).detail), 'E10. any other error: unknown, and the text never says to just send a new id')
+  // Strict targets: a room never widens into every light.
+  const tiles = [{ name: 'Living Room', type: 'אורות' }, { name: 'mine light', type: 'אורות' }, { name: 'Speaker', type: 'רמקול' }]
+  ok(pickTargets(tiles, 'חדר שינה', { strict: true }).length === 0 && pickTargets(tiles, 'חדר שינה').length === 2, 'E11. strict: "חדר שינה" with no such light matches nothing (the old path took every light)')
+  ok(pickTargets(tiles, 'all', { strict: true }).map((t) => t.name).join() === 'Living Room,mine light', 'E12. strict "all" is every light and no speaker')
+  ok(pickTargets(tiles, 'סלון', { strict: true }).map((t) => t.name).join() === 'Living Room' && pickTargets(tiles, 'mine', { strict: true }).map((t) => t.name).join() === 'mine light', 'E13. strict: a room matches its own light only')
+
+  // The executor: checked values in, the right call out.
+  calls.length = 0
+  ok((await exec('lights:on', {})).state === 'failed' && (await exec('lights:on', { room: 'מחסן' })).state === 'failed' && (await exec('shell', {})).state === 'failed' && (await exec('tv:off', { x: 1 })).state === 'failed', 'E14. no room, a room off the list, an action off the catalog, an extra field: failed')
+  ok(calls.length === 0, 'E15. and the device recorder never ran')
+  const okAll = await exec('lights:off', { room: 'all' })
+  const okRoom = await exec('lights:on', { room: 'החדר שלי' })
+  ok(okAll.state === 'succeeded' && okRoom.state === 'succeeded', 'E16. a valid action succeeds when the device reports it')
+  ok(JSON.stringify(calls) === JSON.stringify([['lights', 'all', 'off', true], ['lights', 'mine', 'on', true]]), 'E17. the device got exactly the checked values, "all" only when asked, always strict')
+  calls.length = 0
+  tvAnswer = async () => {
+    throw new Error('הטלוויזיה לא ענתה (key)')
+  }
+  ok((await exec('tv:off', {})).state === 'unknown', 'E18. an error after the command left: unknown')
+  tvAnswer = async () => {
+    throw Object.assign(new Error('לא מחוברת'), { notSent: true })
+  }
+  ok((await exec('tv:off', {})).state === 'failed', 'E19. not connected, nothing sent: failed')
+  tvAnswer = async () => {}
+  ok((await exec('tv:off', {})).state === 'succeeded' && calls.length === 3, 'E20. tv:off succeeds when the TV confirms the press; each call ran exactly once')
+
+  // Timeout: unknown, the lock stays and the device is quarantined until the call ends. No overlap.
+  const slow = deferred()
+  calls.length = 0
+  lightsAnswer = () => slow.promise
+  const timed = await exec('lights:on', { room: 'סלון' })
+  ok(timed.state === 'unknown' && timed.reason === 'timeout', 'E21. no answer in time: unknown')
+  ok(deviceState('lights').busy && deviceState('lights').quarantined, 'E22. after the timeout the lights are still held, quarantined')
+  const during = await exec('lights:off', { room: 'סלון' })
+  ok(during.state === 'failed' && during.reason === 'quarantined' && calls.length === 1, 'E23. a second action meanwhile: failed, quarantined, and it did not run')
+  slow.resolve({ found: true, matched: true, clicked: [{ name: 'Living Room', status: 'דלוק' }], unchanged: [], offline: [] })
+  ok(await until(() => !deviceState('lights').busy), 'E24. the lock is released only when the call itself ends')
+  lightsAnswer = async (q, act) => ({ found: true, matched: true, clicked: [{ name: 'Living Room', status: act === 'on' ? 'דלוק' : 'כבוי' }], unchanged: [], offline: [] })
+
+  // One lock for every path: execute holds it, the fast command and the model's tools are refused at once.
+  const hold = deferred()
+  const held = withDevice('lights', () => hold.promise, { label: 'test' })
+  const fastControl = []
+  const fastR = await fastCommand('תדליק את האורות בסלון', { control: async (q, a) => (fastControl.push(q), 'שונה בהצלחה') })
+  ok(fastR.busy && fastControl.length === 0, 'E25. WhatsApp fast command while the lights are held: busy, nothing ran')
+  const ghTool = tools.find((t) => t.name === 'google_home_control')
+  const toolR = await ghTool.run({ device: 'סלון', action: 'on' }, {})
+  ok(/באמצע פעולה|לא הסתיימה/.test(String(toolR)), 'E26. the model tool google_home_control while held: busy, nothing ran')
+  const execR = await exec('lights:on', { room: 'סלון' })
+  ok(execR.state === 'failed' && execR.reason === 'busy', 'E27. execute while held: failed with reason busy, not a silent queue')
+  hold.resolve('x')
+  await held
+  const tvHold = deferred()
+  const tvHeld = withDevice('tv', () => tvHold.promise)
+  const keyTool = tools.find((t) => t.name === 'tv_key')
+  const fastTv = []
+  ok(/באמצע פעולה/.test(String(await keyTool.run({ key: 'sleep' }, {}))), 'E28. a TV tool (tv_key) while the TV is held: busy')
+  ok((await fastCommand('תכבה את הטלוויזיה', { screenOff: async () => fastTv.push(1) })).busy && fastTv.length === 0, 'E29. TV fast command while held: busy, nothing ran')
+  ok((await exec('tv:off', {})).reason === 'busy', 'E30. execute tv:off while held: busy')
+  tvHold.resolve()
+  await tvHeld
+  ok(!deviceState('tv').busy && !deviceState('lights').busy, 'E31. both locks are free again')
+  const fastOk = await fastCommand('תכבה את הטלוויזיה', { screenOff: async () => fastTv.push(1) })
+  ok(fastOk.reply === 'כיביתי 📺' && fastTv.length === 1, 'E32. the fast command still works as before when the device is free')
+
+  // The routes.
+  _resetDeviceLocks()
+  fs.rmSync(path.join(DIR, 'panel.json'), { force: true })
+  calls.length = 0
+  let gate = null
+  const routeExec = createExecutor({
+    lights: async (q, act, opts) => {
+      calls.push(['lights', q, act])
+      if (gate) await gate.promise
+      return lightsAnswer(q, act, opts)
+    },
+    tvOff: async () => (calls.push(['tv']), undefined),
+    timeoutMs: 1000,
+  })
+  const t = await boot({ execute: routeExec, fast: { action: fastAction } })
+  const { port, panel } = t
+  const a = panel.issue({ label: 'מבצע' })
+  const b = panel.issue({ label: 'אחר' })
+  const sa = await t.login(a.secret)
+  const sb = await t.login(b.secret)
+  const ex = (s, body) => req(port, 'POST', '/panel/api/execute', { headers: t.asSession(s), body })
+  const res = (s, id) => req(port, 'GET', `/panel/api/execute/${id}`, { headers: t.asSession(s) })
+
+  const noScope = await ex(sa, { id: 'exec0000001', action: 'lights:on', params: { room: 'סלון' } })
+  ok(noScope.status === 403 && noScope.json.state === 'failed' && calls.length === 0, 'E33. execute without the switch: 403 failed, the device recorder did not run')
+  panel.setScopes(a.id, ['device:lights:on', 'device:tv:off'])
+  const bad = [
+    await ex(sa, { id: 'exec0000002', action: 'lights:toggle', params: { room: 'סלון' } }),
+    await ex(sa, { id: 'exec0000003', action: 'lights:on', params: {} }),
+    await ex(sa, { id: 'exec0000004', action: 'lights:on', params: { room: 'סלון', cmd: 'x' } }),
+    await ex(sa, { id: 'exec0000005', action: 'lights:on', params: { room: 'סלון' }, text: 'תדליק' }),
+    await ex(sa, { id: 'short', action: 'tv:off', params: {} }),
+  ]
+  ok(bad.every((r) => r.status === 400 && r.json.state === 'failed') && calls.length === 0, 'E34. not in the catalog, no room, unknown field, extra body field, bad id: 400 failed, nothing ran')
+  ok((await ex(sa, { id: 'exec0000006', action: 'lights:off', params: { room: 'סלון' } })).status === 403 && calls.length === 0, 'E35. the "on" switch does not open "off"')
+
+  // Saved before sending; two at once with the same id run once; GET while running does not run again.
+  gate = deferred()
+  const body1 = { id: 'execsame001', action: 'lights:on', params: { room: 'all' } }
+  const [p1, p2] = await Promise.all([ex(sa, body1), ex(sa, body1)])
+  ok(p1.status === 202 && p2.status === 202 && p1.json.state === 'running' && p2.json.state === 'running', 'E36. both answers are 202 running')
+  const onDisk = JSON.parse(fs.readFileSync(path.join(DIR, 'panel.json'), 'utf8'))
+  ok(onDisk.executions[`exec:${a.id}:execsame001`]?.state === 'running', 'E37. the record is on disk, running, before the device answered')
+  const g1 = await res(sa, 'execsame001')
+  ok(g1.status === 202 && g1.json.state === 'running', 'E38. GET while running: 202')
+  ok(calls.length === 1, 'E39. two requests with the same id and a GET: the device ran once')
+  ok((await ex(sa, { id: 'execsame001', action: 'lights:on', params: { room: 'סלון' } })).status === 409, 'E40. same id, other content: 409')
+  gate.resolve()
+  ok(await until(async () => (await res(sa, 'execsame001')).json?.state === 'succeeded'), 'E41. the result comes in: succeeded')
+  gate = null
+  const replay = await ex(sa, body1)
+  ok(replay.status === 200 && replay.json.state === 'succeeded' && calls.length === 1, 'E42. a replay of a finished id returns the saved result and runs nothing')
+  ok((await res(sb, 'execsame001')).status === 404, 'E43. another credential does not see this id')
+  ok(searchAudit({ tool: 'panel:lights:on' }).some((e) => e.source === `panel:${a.id}` && e.ok), 'E44. the audit log has the actor, the action and the outcome')
+
+  // Same id in ask and execute: two separate records.
+  const askSame = await req(port, 'POST', '/panel/api/ask', { headers: t.asSession(sa), body: { text: 'מה השעה', id: 'execsame001' } })
+  ok(askSame.status !== 409 && (await res(sa, 'execsame001')).json.state === 'succeeded', 'E45. the same id in ask does not meet the execute record')
+
+  // Producer and consumer: nothing.
+  for (const kind of ['producer', 'consumer:tv']) {
+    const c = panel.issue({ kind })
+    const r = await req(port, 'POST', '/panel/api/execute', { headers: { Authorization: `Bearer ${c.secret}` }, body: { id: 'kindexec001', action: 'tv:off', params: {} } })
+    ok(r.status === 403, `E46. ${kind}: execute is 403`)
+  }
+  ok(calls.filter((c) => c[0] === 'tv').length === 0, 'E47. and the TV never ran')
+  ok((await req(port, 'POST', '/panel/api/execute', { body: { id: 'anonexec01', action: 'tv:off', params: {} } })).status === 403, 'E48. no sign-in: 403')
+  const noCsrf = await req(port, 'POST', '/panel/api/execute', { headers: { Origin: t.ORIGIN, Cookie: `hpn_sid=${sa.sid}` }, body: { id: 'csrfexec01', action: 'tv:off', params: {} } })
+  ok(noCsrf.status === 403, 'E49. a cookie POST without the CSRF token is 403')
+
+  // A device sentence in ask: refused even with the switch on.
+  const askDev = await req(port, 'POST', '/panel/api/ask', { headers: t.asSession(sa), body: { text: 'תדליק את האורות', id: 'askdevice01' } })
+  ok(askDev.status === 403 && calls.length === 1, 'E50. regression: "תדליק את האורות" in ask runs nothing, with the switch on')
+  await t.close()
+
+  // Restart in the middle: unknown, and nothing runs again by itself.
+  const file = path.join(DIR, 'panel-restart.json')
+  fs.rmSync(file, { force: true })
+  const hang = deferred()
+  const restartCalls = []
+  const t1 = await boot({ file, execute: createExecutor({ tvOff: () => (restartCalls.push(1), hang.promise), timeoutMs: 60000 }) })
+  const c1 = t1.panel.issue({ scopes: ['device:tv:off'] })
+  const r1 = await req(t1.port, 'POST', '/panel/api/execute', { headers: { Authorization: `Bearer ${c1.secret}` }, body: { id: 'restart0001', action: 'tv:off', params: {} } })
+  ok(r1.status === 202 && restartCalls.length === 1, 'E51. a TV action is running')
+  await t1.close()
+  _resetDeviceLocks()
+  const again = []
+  const t2 = await boot({ file, execute: createExecutor({ tvOff: () => again.push(1) }) })
+  const g2 = await req(t2.port, 'GET', '/panel/api/execute/restart0001', { headers: { Authorization: `Bearer ${c1.secret}` } })
+  ok(g2.status === 200 && g2.json.state === 'unknown' && g2.json.reason === 'restart', 'E52. after a restart it is unknown')
+  const replay2 = await req(t2.port, 'POST', '/panel/api/execute', { headers: { Authorization: `Bearer ${c1.secret}` }, body: { id: 'restart0001', action: 'tv:off', params: {} } })
+  ok(replay2.json.state === 'unknown' && again.length === 0, 'E53. and sending it again returns unknown, nothing ran')
+  await t2.close()
+  hang.resolve()
+  _resetDeviceLocks()
+}
+
 // ── the exposure config ships with the same allow-list ──────────────────────
 {
   const caddy = fs.readFileSync(new URL('../deploy/panel/Caddyfile', import.meta.url), 'utf8')
@@ -513,6 +718,10 @@ ok(!panelConfig({}).enabled && panelConfig({}).listen === '127.0.0.1' && panelCo
   ok(/@panel_post\s*\{[^}]*method POST[^}]*path \/panel\/api\/login \/panel\/api\/logout \/panel\/api\/ask\s*\n/.test(caddy), 'Caddy: the three POST routes only')
   ok(/@panel_get\s*\{[^}]*method GET[^}]*path \/panel\/api\/status\s*\n/.test(caddy) && /path_regexp \^\/panel\/api\/ask\/\[A-Za-z0-9_-\]\{8,80\}\$/.test(caddy), 'Caddy: the two GET API routes only')
   ok(/@panel_catalog\s*\{[^}]*method GET[^}]*path \/panel\/api\/catalog\s*\n/.test(caddy) && /handle @panel_catalog \{\s*\n\s*reverse_proxy 127\.0\.0\.1:3214/.test(caddy), 'Caddy: GET /panel/api/catalog only')
+  ok(/@panel_execute\s*\{[^}]*method POST[^}]*path \/panel\/api\/execute\s*\n/.test(caddy) && /handle @panel_execute \{\s*\n\s*reverse_proxy 127\.0\.0\.1:3214/.test(caddy), 'E54. Caddy: POST /panel/api/execute only')
+  ok(/@panel_execute_result\s*\{[^}]*method GET[^}]*path_regexp \^\/panel\/api\/execute\/\[A-Za-z0-9_-\]\{8,80\}\$/.test(caddy) && /handle @panel_execute_result \{\s*\n\s*reverse_proxy 127\.0\.0\.1:3214/.test(caddy), 'E55. Caddy: GET /panel/api/execute/<id> only')
+  const readme = fs.readFileSync(new URL('../deploy/panel/README.md', import.meta.url), 'utf8')
+  ok(PANEL_ROUTES.every(([m, p]) => readme.includes(`| \`${m}\` | \`${p}\``)), 'E56. every route in PANEL_ROUTES is in the README table')
   ok(/handle \{\s*\n\s*respond 404/.test(caddy), 'Caddy: everything else is 404')
   ok(/127\.0\.0\.1:3214/.test(caddy) && !/3210/.test(caddy.replace(/#.*$/gm, '')), 'Caddy forwards to the panel port only, never to 3210')
 }

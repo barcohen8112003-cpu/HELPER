@@ -35,6 +35,17 @@ import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
 import { tvTools } from './tv-tools.js'
+import { withDevice, busyText } from './device-lock.js'
+
+// A tool's run, inside the shared device lock (src/device-lock.js). A busy device is a plain answer, not an error.
+function lockedRun(device, run) {
+  return async (args, ctx) => {
+    const r = await withDevice(device, () => run(args, ctx), { label: 'tool' })
+    if (r.busy) return busyText(r)
+    if (!r.ok) throw r.error
+    return r.value
+  }
+}
 import { routed, searchDomains, DOMAINS, domainLabel } from './domains.js'
 import { flightTools } from './flights.js'
 import { stayTools } from './stays.js'
@@ -616,9 +627,8 @@ ${await askGemini(question)}`
       },
       ['device', 'action']
     ),
-    async run({ device, action }) {
-      return googleHome.controlHomeDevice(device, action)
-    },
+    // Through the device lock, like the panel and the WhatsApp fast commands.
+    run: lockedRun('lights', ({ device, action }) => googleHome.controlHomeDevice(device, action)),
   },
   {
     name: 'use_computer',
@@ -721,7 +731,9 @@ tools.push(...pcTools)
 tools.push(...memoryTools, ...skillTools, ...builderTools, ...auditTools)
 setCoreNameCheck(() => tools.map((t) => t.name))
 tools.push(...phoneTools)
-tools.push(...tvTools)
+// Every TV tool that does something on the TV goes through the TV's lock; the two that only read do not.
+const TV_READS = new Set(['tv_status', 'tv_list_apps'])
+tools.push(...tvTools.map((t) => (TV_READS.has(t.name) ? t : { ...t, run: lockedRun('tv', (args, ctx) => t.run(args, ctx)) })))
 // The agent's plan for a goal of several stages (src/planner.js). Always there, in every mode.
 tools.push(planTool)
 // Helper's notebook of what he left open, so it can come back to it (src/proactive.js).

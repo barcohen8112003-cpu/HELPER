@@ -6,6 +6,10 @@
 // את האורות ותשים מוזיקה") goes to the model as before, which is the one that can work out what was meant.
 import { controlHomeDevice } from './google-home.js'
 import { tvPowerOff } from './tv-tools.js'
+import { withDevice, busyText } from './device-lock.js'
+
+// How long a fast command waits before saying it does not know. The device stays held until the call really ends.
+const FAST_WAIT_MS = 60000
 
 const ON = new Set(['תדליק', 'תדליקי', 'הדלק', 'הדליקי', 'להדליק', 'תפעיל'])
 const OFF = new Set(['תכבה', 'תכבי', 'כבה', 'כבי', 'לכבות'])
@@ -67,20 +71,21 @@ export function fastAction(text) {
 }
 
 // -> { reply } when the message was one of these commands and has been carried out (or failed, plainly), else null.
-export async function fastCommand(text, { control = controlHomeDevice, screenOff = tvPowerOff } = {}) {
+// Every press goes through the device lock (src/device-lock.js), the same one the panel and the model's tools use:
+// a device that is busy answers so at once, and nothing runs on it.
+export async function fastCommand(text, { control = controlHomeDevice, screenOff = tvPowerOff, waitMs = FAST_WAIT_MS } = {}) {
   if (parseScreenOff(text)) {
-    try {
-      await screenOff()
-      return { reply: 'כיביתי 📺', fast: true }
-    } catch (e) {
-      return { reply: e.message || 'לא הצלחתי להגיע לטלוויזיה', fast: true }
-    }
+    const r = await withDevice('tv', () => screenOff(), { timeoutMs: waitMs, label: 'fast:tv:off' })
+    if (r.busy) return { reply: busyText(r), fast: true, busy: true }
+    if (r.timedOut) return { reply: 'הטלוויזיה לא ענתה בזמן. לא ידוע אם כבתה.', fast: true }
+    if (!r.ok) return { reply: r.error?.message || 'לא הצלחתי להגיע לטלוויזיה', fast: true }
+    return { reply: 'כיביתי 📺', fast: true }
   }
   const lights = parseLights(text)
   if (!lights) return null
-  try {
-    return { reply: shortReply(await control(lights.query, lights.action, { fast: true }), lights.action), fast: true }
-  } catch (e) {
-    return { reply: e.hint || e.message || 'לא הצלחתי להגיע לבית החכם', fast: true }
-  }
+  const r = await withDevice('lights', () => control(lights.query, lights.action, { fast: true }), { timeoutMs: waitMs, label: `fast:lights:${lights.action}` })
+  if (r.busy) return { reply: busyText(r), fast: true, busy: true }
+  if (r.timedOut) return { reply: 'הבית החכם לא ענה בזמן. לא ידוע אם האור השתנה.', fast: true }
+  if (!r.ok) return { reply: r.error?.hint || r.error?.message || 'לא הצלחתי להגיע לבית החכם', fast: true }
+  return { reply: shortReply(r.value, lights.action), fast: true }
 }
