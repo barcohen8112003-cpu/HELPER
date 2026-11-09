@@ -21,6 +21,8 @@ import { status } from './status.js'
 import { maskSettingsUrl, startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
 import { startPcBridgeServer, bridgeLabel, bridgeConnected } from './pc-bridge.js'
+import { googleHomeTransport } from './google-home.js'
+import { tvConnected } from './tv-app.js'
 import { closeCloudBrowsers, cloudGoogleHomeOn, cloudWebtopOn, ensureCloudBrowser, ensureCloudWebtop, errandCloudOn } from './webtop-browser.js'
 import { startCloudDesktop } from './cloud-desktop.js'
 import { startVoice } from './voice.js'
@@ -620,6 +622,12 @@ const panel = panelCfg.enabled
       file: path.join(DATA_DIR, 'panel.json'),
       run: panelTurn,
       status: () => ({ queueBusy: Boolean(activeTurn) || panelBusy > 0, computerMode: config.computerMode, pcBridgeConnected: bridgeConnected(), pendingApprovals: pendingConfirm ? 1 : 0 }),
+      // Connection only. The lights are known only when they go through the home bridge; the cloud browser's
+      // Google Home session is not checked without trying, so it is 'unknown'.
+      devices: () => ({
+        lights: googleHomeTransport().primary === 'home' ? (bridgeConnected() ? 'connected' : 'disconnected') : 'unknown',
+        tv: tvConnected() ? 'connected' : 'disconnected',
+      }),
       notify: (text) => notify(text, true),
       fast: { action: fastAction, run: (text) => fastCommand(text) },
       audit: recordAudit,

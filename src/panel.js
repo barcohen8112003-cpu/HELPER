@@ -1,5 +1,5 @@
 // The remote panel: one small HTTPS page (behind a reverse proxy) where the owner, or a client he allows, types a
-// request and gets HELPER's answer. It is its own listener, on its own port, and it knows exactly six routes:
+// request and gets HELPER's answer. It is its own listener, on its own port, and it knows exactly seven routes:
 //
 //   GET  /panel                 static sign-in page, the same for every visitor, no personal data
 //   POST /panel/api/login       the credential, in the body only -> short server-side session cookie
@@ -7,6 +7,8 @@
 //   GET  /panel/api/status      session: connection state only
 //   POST /panel/api/ask         session: { text, id } -> reply, or 202 running, or unknown
 //   GET  /panel/api/ask/<id>    session: the stored result of that request
+//   GET  /panel/api/catalog     session: the device actions this credential may use, their closed schemas and
+//                               connection state (connection only, never proof that a device will obey)
 //
 // Anything else on this port is 404, so a proxy that forwards too much still reaches nothing of the settings site,
 // /dash, /face or /bridge/*. Those live on the settings port (src/ui.js) and are never served here.
@@ -18,7 +20,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { cleanScopes, deviceGate, KNOWN_SCOPES, DEVICE_ACTIONS } from './panel-scopes.js'
+import { cleanKind, cleanScopes, deviceGate, KNOWN_SCOPES, DEVICE_ACTIONS } from './panel-scopes.js'
+import { PANEL_ACTIONS, publicSchema } from './panel-actions.js'
 
 export const PANEL_ROUTES = Object.freeze([
   ['GET', '/panel'],
@@ -27,6 +30,7 @@ export const PANEL_ROUTES = Object.freeze([
   ['GET', '/panel/api/status'],
   ['POST', '/panel/api/ask'],
   ['GET', '/panel/api/ask/<id>'],
+  ['GET', '/panel/api/catalog'],
 ])
 
 const PAGE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'panel.html')
@@ -71,6 +75,11 @@ function loadStore(file) {
     histories: data.histories && typeof data.histories === 'object' ? data.histories : {},
     daily: data.daily && typeof data.daily === 'object' ? data.daily : { date: '', count: 0, alerted: false },
     settings: { ...DEFAULT_SETTINGS, ...(data.settings || {}) },
+  }
+  // Credentials saved before kinds existed are panel credentials, unchanged. A non-panel kind never keeps a scope.
+  for (const c of store.credentials) {
+    if (c.kind === undefined) c.kind = 'panel'
+    else if (cleanKind(c.kind) && cleanKind(c.kind) !== 'panel') c.scopes = []
   }
   // A request that was running when the process stopped has an unknown outcome. It is never run again by itself.
   for (const r of Object.values(store.requests)) if (r.state === 'running') Object.assign(r, { state: 'unknown', note: 'check audit' })
@@ -124,6 +133,7 @@ function pageWithCsp(html) {
 //   file                 path of panel.json
 //   run(text, ctx)       the model turn, in HELPER's queue: ctx { actor, scopes, history, onWaiting } -> { reply, denied, history }
 //   status()             { queueBusy, computerMode, pcBridgeConnected, pendingApprovals }
+//   devices()            { lights, tv } -> 'connected' | 'disconnected' | 'unknown' (connection state only)
 //   notify(text)         a WhatsApp message to the owner
 //   fast                 { action(text) -> id|null, run(text) -> { reply } } (src/fast-commands.js)
 //   audit(entry)         src/audit.js record
@@ -134,6 +144,7 @@ export function createPanel(deps) {
     file,
     run,
     status = () => ({}),
+    devices = () => ({}),
     notify = () => {},
     fast = { action: () => null, run: async () => null },
     audit = () => {},
@@ -158,14 +169,16 @@ export function createPanel(deps) {
   const hosts = origins.map((o) => o.replace(/^https?:\/\//, ''))
 
   // ── credentials ───────────────────────────────────────────────────────────
-  function issue({ label = '', scopes = [] } = {}) {
+  function issue({ label = '', scopes = [], kind = 'panel' } = {}) {
+    const k = cleanKind(kind)
+    if (!k) throw new Error('סוג credential לא מוכר')
     const id = randomBytes(5).toString('hex')
     const secret = `hpn_${id}_${token(32)}`
-    const cred = { id, label: String(label || 'פאנל').slice(0, 40), hash: sha(secret), scopes: cleanScopes(scopes), createdAt: new Date(now()).toISOString(), revokedAt: null }
+    const cred = { id, label: String(label || 'פאנל').slice(0, 40), kind: k, hash: sha(secret), scopes: cleanScopes(scopes, k), createdAt: new Date(now()).toISOString(), revokedAt: null }
     store.credentials.push(cred)
     save()
-    log(`[panel] credential issued id=${id}`)
-    return { id, secret, scopes: cred.scopes }
+    log(`[panel] credential issued id=${id} kind=${k}`)
+    return { id, secret, kind: k, scopes: cred.scopes }
   }
   function revoke(id) {
     const cred = store.credentials.find((c) => c.id === String(id))
@@ -180,7 +193,7 @@ export function createPanel(deps) {
   function setScopes(id, scopes) {
     const cred = store.credentials.find((c) => c.id === String(id) && !c.revokedAt)
     if (!cred) return null
-    cred.scopes = cleanScopes(scopes)
+    cred.scopes = cleanScopes(scopes, cred.kind)
     save()
     return cred.scopes
   }
@@ -192,7 +205,7 @@ export function createPanel(deps) {
     save()
     return { ...store.settings }
   }
-  const list = () => store.credentials.map(({ id, label, scopes, createdAt, revokedAt }) => ({ id, label, scopes, createdAt, revokedAt, active: !revokedAt }))
+  const list = () => store.credentials.map(({ id, label, kind, scopes, createdAt, revokedAt }) => ({ id, label, kind, scopes, createdAt, revokedAt, active: !revokedAt }))
   const today = () => new Date(now()).toISOString().slice(0, 10)
   const usage = () => ({ date: store.daily.date, count: store.daily.date === today() ? store.daily.count : 0, cap: store.settings.dailyCap })
 
@@ -200,7 +213,7 @@ export function createPanel(deps) {
     const m = /^hpn_([0-9a-f]{10})_[A-Za-z0-9_-]{20,}$/.exec(String(secret || ''))
     if (!m) return null
     const cred = store.credentials.find((c) => c.id === m[1])
-    if (!cred || cred.revokedAt || !sameHex(cred.hash, sha(secret))) return null
+    if (!cred || cred.revokedAt || !cleanKind(cred.kind) || !sameHex(cred.hash, sha(secret))) return null
     return cred
   }
   const activeCred = (id) => store.credentials.find((c) => c.id === id && !c.revokedAt) || null
@@ -358,13 +371,15 @@ export function createPanel(deps) {
       const body = await readJson(req)
       const cred = verify(body.credential)
       if (!cred) return [403, { error: 'credential לא תקף' }]
+      // A browser session is for panel credentials only. Producers and device consumers are programs.
+      if (cred.kind !== 'panel') return [403, { error: 'credential לא מסוג פאנל' }, {}, cred.id]
       const sid = token(32)
       const csrf = token(24)
       sessions.set(sid, { credId: cred.id, csrf, created: now(), seen: now() })
       return [200, { ok: true, csrf }, { 'Set-Cookie': `${SID}=${sid}; Secure; HttpOnly; SameSite=Strict; Path=/panel; Max-Age=${Math.round(sessionMaxMs / 1000)}` }, cred.id]
     }
 
-    const isApi = (method === 'POST' && (p === '/panel/api/logout' || p === '/panel/api/ask')) || (method === 'GET' && (p === '/panel/api/status' || /^\/panel\/api\/ask\/[^/]+$/.test(p)))
+    const isApi = (method === 'POST' && (p === '/panel/api/logout' || p === '/panel/api/ask')) || (method === 'GET' && (p === '/panel/api/status' || p === '/panel/api/catalog' || /^\/panel\/api\/ask\/[^/]+$/.test(p)))
     if (!isApi) return [404, { error: 'not found' }]
 
     const me = who(req)
@@ -380,6 +395,21 @@ export function createPanel(deps) {
     if (p === '/panel/api/logout') {
       if (me.sid) sessions.delete(me.sid)
       return [200, { ok: true }, { 'Set-Cookie': `${SID}=; Secure; HttpOnly; SameSite=Strict; Path=/panel; Max-Age=0` }, cred.id]
+    }
+    // Every other route here is for panel credentials. A producer or a device consumer gets nothing from them.
+    if (cred.kind !== 'panel') return [403, { error: 'לא מורשה' }, {}, cred.id]
+    if (p === '/panel/api/catalog') {
+      if (!cred.scopes.includes('status')) return [403, { error: 'לא מורשה' }, {}, cred.id]
+      const lim = rate.take(`status:${cred.id}`, store.settings.statusPerHour, 3600000)
+      if (!lim.ok) return [429, { error: 'יותר מדי בקשות', retryAfter: lim.retryAfter }, {}, cred.id]
+      let conn = {}
+      try {
+        conn = devices() || {}
+      } catch {}
+      const state = (d) => (['connected', 'disconnected'].includes(conn[d]) ? conn[d] : 'unknown')
+      // Only the actions this credential's switches allow. Nothing here runs anything.
+      const actions = PANEL_ACTIONS.filter((a) => !deviceGate(cred.scopes, a.id)).map((a) => ({ id: a.id, label: a.label, device: a.device, kind: a.kind, params: publicSchema(a), connection: state(a.device) }))
+      return [200, { ok: true, actions, note: 'מחובר = חיבור בלבד, לא הוכחה שהפעולה תתבצע' }, {}, cred.id]
     }
     if (p === '/panel/api/status') {
       if (!cred.scopes.includes('status')) return [403, { error: 'לא מורשה' }, {}, cred.id]
