@@ -100,8 +100,8 @@ export const DOMAINS = [
   {
     id: 'people',
     label: 'הודעות לאחרים, דיסקורד, מייל יוצא וקול',
-    has: named('send_whatsapp_to', 'send_discord', 'gmail_send', 'voice_mode'),
-    words: /תשלח ל|תשלח הודעה|תכתוב ל|תגיד ל|תענה ל|הודעה ל|דיסקורד|discord|מייל ל|תשלח מייל|קולי|בקול|תדבר|הקלטה/i,
+    has: named('send_whatsapp_to', 'send_discord', 'gmail_send', 'voice_mode', 'ask_instinct'),
+    words: /instinct|אינסטינקט|תשלח ל|תשלח הודעה|תכתוב ל|תגיד ל|תענה ל|הודעה ל|דיסקורד|discord|מייל ל|תשלח מייל|קולי|בקול|תדבר|הקלטה/i,
   },
   {
     id: 'groups',
