@@ -396,11 +396,13 @@ async function ask(prompt, extra = {}, onEvent = () => {}) {
     return { ok: false, text: 'חסר מפתח LLM_API_KEY בקובץ .env' }
   }
 
-  const models = [
+  // The model from .env (LLM_MODEL) first, then the usual fallbacks.
+  const models = [...new Set([
+    config.llmModel,
     'openai/gpt-4o-mini',
     'deepseek/deepseek-chat',
     'meta-llama/llama-3.3-70b-instruct'
-  ]
+  ].filter(Boolean))]
 
   let userContent = prompt
   if (extra.screenshot && extra.screenshot.path) {

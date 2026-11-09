@@ -16,6 +16,7 @@ const DEFAULTS = {
   dictationKey: 'rightctrl',   // hold to dictate
   pointKey: 'ctrl+alt+p',
   startAtLogin: true,
+  bridgeAtStart: true,         // open the bridge to this PC (Claude Code's Remote Control) when HELPER starts
 }
 
 function init(dataDir) {

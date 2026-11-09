@@ -58,6 +58,16 @@ HELPER רואה את הכפתורים, השדות, הקישורים והטאבי
 
 ---
 
+## 🔑 בלי מנוי Claude
+
+‏המוח של HELPER על המחשב מנסה קודם את Claude Code (שעובד על מנוי Claude Pro/Max). כשאין מנוי, הוא עובר למפתח `LLM_API_KEY` מ-`.env` (למשל OpenRouter) עם המודל ב-`LLM_MODEL`. כדי לדלג על Claude Code לגמרי (יותר מהיר בלי מנוי): `HELPER_BRAIN=api` ב-`.env`.
+
+## 🌉 הגשר למחשב
+
+‏HELPER פותח עם עלייתו את הגשר למחשב (Remote Control של Claude Code, `claude remote-control`) בתיקיית HELPER, ברקע, וסוגר אותו ביציאה. כיבוי/הדלקה: בתפריט של HELPER במגש, "לפתוח את הגשר למחשב עם HELPER". הגשר דורש מנוי Claude פעיל ו-`/login` ב-Claude Code; בלי זה הוא נסגר מיד, נכתב ב-app.log, ו-HELPER ממשיך לעבוד רגיל.
+
+---
+
 ## 🏃‍♂️ הפעלה מהירה
 
 - **התקנה מלאה בפקודה אחת:** `helper onboard` (או `setup.bat` בשורש הפרויקט): מתקין, מוריד את מנוע הדיבור, מחבר לענן ומפעיל. פרטים ב-README הראשי.

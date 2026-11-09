@@ -7,6 +7,11 @@ const path = require('path')
 const { spawn } = require('child_process')
 const store = require('./store')
 const directLlm = require('./direct-llm')
+const config = require('./config')
+
+// Claude Code answers only while the user's Claude plan is active. These are its replies when it is not
+// (signed out, plan ended, no access): from then on every ask goes straight to the API brain.
+const NO_PLAN = /not logged in|please run \/login|invalid api key|authentication|subscription|does not have access|no longer has access|credit balance|upgrade (your|to)|plan (has )?(ended|expired)|billing/i
 
 const HANDS = path.join(__dirname, '..', 'bin', 'hands.mjs').replace(/\\/g, '/')
 const CONTINUE_MS = 3 * 60 * 1000   // a new ask this soon after the last one continues the same conversation
@@ -201,7 +206,7 @@ function askClaude(text, extra, onEvent) {
         }
         clearTimeout(early)
         lastText = tool ? null : text || null
-        if (lastText && !/not logged in|please run \/login|invalid api key/i.test(lastText)) {
+        if (lastText && !NO_PLAN.test(lastText)) {
           const answer = lastText
           early = setTimeout(() => {
             if (lastText !== answer) return
@@ -233,7 +238,7 @@ function askClaude(text, extra, onEvent) {
       if (running === child) running = null
       if (out.trim()) onLine(out.trim())
       const resultText = final ? String(final.result || '') : ''
-      if (/not logged in|please run \/login|invalid api key|authentication/i.test(resultText + err)) {
+      if (NO_PLAN.test(resultText + err)) {
         claudeState = 'signed-out'
         return resolve({ ok: false, signedOut: true, text: '' })
       }
@@ -295,7 +300,10 @@ async function voiceOf(text) {
  * Unified smart ask: tries Claude Code if available and valid, but falls back seamlessly to direct LLM with full tools & vision.
  */
 async function ask(text, extra, onEvent) {
-  const exe = claudeCommand()
+  // HELPER_BRAIN=api in .env (or "brain": "api" in settings.json): skip Claude Code and use LLM_API_KEY
+  // (OpenRouter etc.) only. For a PC without a Claude plan.
+  const apiOnly = /^api$/i.test(config.get('HELPER_BRAIN') || store.settings().brain || '')
+  const exe = apiOnly ? null : claudeCommand()
   if (exe && claudeState !== 'signed-out') {
     try {
       const res = await askClaude(text, extra, onEvent)
@@ -307,4 +315,4 @@ async function ask(text, extra, onEvent) {
   return await directLlm.ask(text, extra, onEvent)
 }
 
-module.exports = { ask, askClaude, askHelper, voiceOf, cancel, state: () => claudeState, HANDS }
+module.exports = { ask, askClaude, askHelper, voiceOf, cancel, claudeCommand, state: () => claudeState, HANDS }
