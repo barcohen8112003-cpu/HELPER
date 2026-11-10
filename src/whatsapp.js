@@ -271,7 +271,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
         try {
           tracked = handled && Boolean(eligible(base()))
         } catch {}
-        if (tracked) inflight.track(store.wa, id, sentAt * 1000, Date.now(), store.outbox)
+        if (tracked) inflight.track(store.wa, id, sentAt * 1000, Date.now())
         remember(id, sentAt)
         // Released once onMessage gave it a durable receipt (m.receipt) or finished it. A throw keeps it listed, so the
         // inflight sweep in index.js tells the owner later instead of it staying unknown.

@@ -52,7 +52,7 @@ import { record as recordAudit } from './audit.js'
 import { createPanel, panelConfig, startPanelServer } from './panel.js'
 import { createExecutor } from './panel-execute.js'
 import { panelContext } from './panel-scopes.js'
-import { connectInstinct, isInstinctMessage, onInstinctMessage, stopInstinctChat, recoverInstinct, flushInstinctRecovery, instinctRecoveryPending } from './instinct.js'
+import { connectInstinct, isInstinctMessage, onInstinctMessage, stopInstinctChat, recoverInstinct, flushInstinctRecovery, instinctRecoveryPending, reconcileInstinctRecovery } from './instinct.js'
 
 if (!config.llm.apiKey || !config.llm.model) {
   console.log('חסר LLM_API_KEY או LLM_MODEL. העתק את .env.example ל-.env ומלא אותם.')
@@ -169,7 +169,7 @@ const isOwner = (m) =>
 // below, once notify and everything it touches exist). Nothing is answered again. Unanswered inbox entries from the
 // last run are marked: an answer may have left before the stop, so the watchdog says "maybe", not "I did not answer".
 state.wa ||= { seen: [], lastAt: 0 }
-const strandedAtBoot = inflight.strand(state.wa, { inbox: state.inbox || [], outbox: state.outbox, all: true })
+const strandedAtBoot = inflight.strand(state.wa, { inbox: state.inbox || [], all: true })
 for (const e of state.inbox || []) if (!e.answered) e.restarted = true
 save()
 // The same for an Instinct conversation the stop cut off (src/instinct.js): metadata only, nothing sent again. Its
@@ -562,6 +562,7 @@ startScheduler(notify, scheduledTask, monitoring)
 // Called only from here on: notify reaches monitoring and the outbox, which do not exist earlier in this file.
 // A notice stays open until notify accepted it (src/recovery-notice.js); the watchdog below tries again each minute.
 function tellRecovery() {
+  if (inflight.reconcile(state.wa) | reconcileInstinctRecovery()) save()
   inflight.flushRecovery(state.wa, notify, save)
   flushInstinctRecovery(notify)
 }
@@ -578,8 +579,9 @@ const UNANSWERED_ALERT_MIN = process.env.UNANSWERED_ALERT_MIN === undefined || p
 setInterval(() => {
   // A message stuck in flight in this run (onMessage threw before its receipt) is not left unknown forever.
   // Also drains incidents from an overflow, or a notice that was attempted but not accepted, with nothing new stranded.
-  if (inflight.strand(state.wa, { inbox: state.inbox || [], outbox: state.outbox })) save()
-  if (inflight.pendingNotices(state.wa) || instinctRecoveryPending()) tellRecovery()
+  if (inflight.strand(state.wa, { inbox: state.inbox || [] })) save()
+  // A handed notice counts only once the outbox recorded it as sent; one it pushed out unsent is opened again.
+  tellRecovery()
   if (!state.owner || !state.inbox?.length || !wa.connectedSince()) return
   // Waiting on his 👍 is waiting on him, not a stuck message.
   if (pendingConfirm) return

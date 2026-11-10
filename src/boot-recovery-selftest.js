@@ -5,6 +5,7 @@
 //   quiet    -> quiet hours: it waits in the brief notes (monitoring.addNote)
 //   budget   -> the daily budget is used up: brief notes
 //   batch    -> notice learning moved the kind to "next brief": brief notes
+//   evicted  -> normal, plus a notice from an earlier run that the full outbox pushed out unsent: resent
 // Each run must boot without an error, hand both recovery notices over exactly once, quote no message text, and
 // send nothing to Instinct. Nothing here reaches the network: no WhatsApp, no model call is made at boot.
 import { spawn } from 'node:child_process'
@@ -42,6 +43,11 @@ function crashedState(mode) {
     instinct: { trusted: true, sent: [], lastAskAt: 0, lateUntil: 0, generation: 3, chat: { active: true, gen: 3, learn: false, started: now - 60_000, turns: 2, paused: false }, ops: [{ op: 'op-boot', kind: 'chat', gen: 3, at: now - 5000 }] },
   }
   if (mode === 'budget') s.metrics = { turns: [], proactive: { day: today(), count: 1 } }
+  // A notice from an earlier run that the full outbox pushed out unsent: at boot it is opened again and resent.
+  if (mode === 'evicted') {
+    s.wa.recovery = [{ incident: 'boot-1-1', state: 'handed', route: 'outbox', handedKey: 'inflight-recovery-boot-1-1-t1', count: 1, firstSentAt: now - 90_000, lastSentAt: now - 90_000, items: [{ id: 'MSG-EARLIER', sentAt: now - 90_000, receivedAt: now - 90_000 }], archived: 0, attempts: 1 }]
+    s.outboxEvicted = ['inflight-recovery-boot-1-1-t1']
+  }
   if (mode === 'batch') s.notices = { kinds: { recovery: { sent: 6, answered: 0, streak: 4, lastAt: now - 60_000 } }, pending: [], muted: [] }
   return s
 }
@@ -102,13 +108,22 @@ async function boot(mode) {
   return { out, early, end, state, log, notes }
 }
 
-for (const mode of ['normal', 'quiet', 'budget', 'batch']) {
+for (const mode of ['normal', 'quiet', 'budget', 'batch', 'evicted']) {
   const r = await boot(mode)
   const crashed = /ReferenceError|before initialization|TypeError/.test(r.out)
   ok(!r.early && !crashed, `${mode}: boots and keeps running${crashed || r.early ? `\n${r.out.split('\n').filter((l) => /Error|at /.test(l)).slice(0, 6).join('\n')}` : ''}`)
   const recovery = r.state.wa?.recovery || []
-  ok(recovery.length === 1 && recovery[0].state === 'handed' && recovery[0].count === 1, `${mode}: the stranded message's notice was handed over`)
-  ok((r.state.instinct?.recovery || []).length === 1 && r.state.instinct.recovery[0].state === 'handed', `${mode}: the Instinct notice was handed over`)
+  // Normal: queued in the outbox and sent by the fake WhatsApp, so the outbox recorded it as sent (positive evidence);
+  // the watchdog marks it delivered on its next minute. Other routes: kept for the brief, which counts as delivered.
+  const sentKeys = r.state.outboxSent || []
+  const settledOk = (x) => (mode === 'normal' || mode === 'evicted' ? x?.state === 'handed' && x.route === 'outbox' && sentKeys.includes(x.handedKey) : x?.state === 'delivered' && x.route === 'noted')
+  const fresh = recovery.filter((x) => x.incident !== 'boot-1-1')
+  ok(fresh.length === 1 && fresh[0].count === 1 && settledOk(fresh[0]), `${mode}: the stranded message's notice was handed over (${fresh[0]?.state}/${fresh[0]?.route})`)
+  if (mode === 'evicted') {
+    const old = recovery.find((x) => x.incident === 'boot-1-1')
+    ok(old && settledOk(old) && /-t2$/.test(old.handedKey) && old.lastLoss === 'evicted', 'evicted: the pushed-out notice was opened again and resent as attempt 2')
+  }
+  ok((r.state.instinct?.recovery || []).length === 1 && settledOk(r.state.instinct.recovery[0]), `${mode}: the Instinct notice was handed over`)
   ok(!r.state.instinct?.chat && !(r.state.instinct?.ops || []).length && r.state.instinct?.lastSend?.status === 'uncertain', `${mode}: Instinct conversation ended, in-flight send uncertain`)
   ok(!r.log.some((e) => e.type === 'sendAs'), `${mode}: nothing sent to Instinct`)
   const sends = r.log.filter((e) => e.type === 'send').map((e) => e.text)
@@ -116,9 +131,9 @@ for (const mode of ['normal', 'quiet', 'budget', 'batch']) {
   const everywhere = [...sends, ...outboxText, r.notes].join('\n')
   const inflightTold = (everywhere.match(/באמצע טיפול/g) || []).length
   const instinctTold = (everywhere.match(/עם Instinct נקטעה/g) || []).length
-  ok(inflightTold === 1 && instinctTold === 1, `${mode}: each notice exists exactly once (inflight ${inflightTold}, instinct ${instinctTold})`)
+  ok(inflightTold === (mode === 'evicted' ? 2 : 1) && instinctTold === 1, `${mode}: each notice exists exactly once (inflight ${inflightTold}, instinct ${instinctTold})`)
   ok(!everywhere.includes(SECRET), `${mode}: no message text quoted`)
-  if (mode === 'normal') ok(sends.some((t) => /באמצע טיפול/.test(t)) && sends.some((t) => /Instinct נקטעה/.test(t)), 'normal: both notices went out through the outbox')
+  if (mode === 'normal' || mode === 'evicted') ok(sends.some((t) => /באמצע טיפול/.test(t)) && sends.some((t) => /Instinct נקטעה/.test(t)), 'normal: both notices went out through the outbox')
   else ok(!sends.some((t) => /באמצע טיפול|Instinct נקטעה/.test(t)) && /באמצע טיפול/.test(r.notes) && /Instinct נקטעה/.test(r.notes), `${mode}: both notices wait in the brief notes, not sent now`)
 }
 

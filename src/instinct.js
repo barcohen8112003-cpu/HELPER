@@ -31,7 +31,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { config, DATA_DIR } from './config.js'
 import { proposeSkill, confirmSkills, rejectSkills, pendingSkills, allSkills, removeSkill } from './skills.js'
-import { handOff } from './recovery-notice.js'
+import { handOff, settle, isOpen, isDelivered } from './recovery-notice.js'
 
 const PREFIX = '[HELPER] '
 const QUIET_MS = 15_000 // after Instinct's last message, how long to wait for another one before answering
@@ -463,22 +463,34 @@ export function recoverInstinct() {
   }
   if (ops.length) lines.push(ops.length === 1 ? 'ייתכן שההודעה האחרונה שלי אליו נשלחה וייתכן שלא. לא אשלח אותה שוב.' : `ייתכן ש-${ops.length} ההודעות האחרונות שלי אליו נשלחו וייתכן שלא. לא אשלח אותן שוב.`)
   const notice = { key: `instinct-recovery-${was?.gen ?? 'x'}-${ops[0]?.op || 'chat'}`, text: lines.join('\n'), state: 'needs_recovery', attempts: 0, chat: Boolean(was), uncertain: ops.length }
-  // Handed notices belong to the outbox now. Open ones are never dropped: past 5, the oldest two are merged into one.
-  b.recovery = [...(b.recovery || []).filter((r) => r.state !== 'handed'), notice]
-  while (b.recovery.length > 5) {
-    const [x, y] = b.recovery
-    b.recovery.splice(0, 2, { ...y, text: [...new Set([...x.text.split('\n'), ...y.text.split('\n')])].join('\n'), attempts: 0 })
+  // Only delivered notices are dropped (the last 5 are kept). Open ones are never dropped: past 5, the oldest two are
+  // merged into one. A handed one waits for delivery evidence (reconcileInstinctRecovery).
+  const all = [...(b.recovery || []), notice]
+  const done = all.filter(isDelivered).slice(-5)
+  const rest = all.filter((r) => !isDelivered(r))
+  while (rest.filter(isOpen).length > 5) {
+    const [x, y] = rest.filter(isOpen)
+    rest.splice(rest.indexOf(x), 1)
+    rest[rest.indexOf(y)] = { ...y, text: [...new Set([...x.text.split('\n'), ...y.text.split('\n')])].join('\n') }
   }
+  b.recovery = [...done, ...rest]
   save()
   return notice
 }
 
-export const instinctRecoveryPending = () => (state.instinct?.recovery || []).some((r) => r.state !== 'handed')
+export const instinctRecoveryPending = () => (state.instinct?.recovery || []).some(isOpen)
+
+// A handed notice is delivered only once the outbox recorded it as sent; pushed out unsent, it is opened again.
+export function reconcileInstinctRecovery() {
+  let changed = false
+  for (const r of state.instinct?.recovery || []) if (settle(r)) changed = true
+  return changed
+}
 
 // Hands each waiting Instinct recovery notice to notify. A handed notice is then the outbox's (or the brief's).
 export function flushInstinctRecovery(notify) {
   let handed = 0
-  for (const r of (state.instinct?.recovery || []).filter((x) => x.state !== 'handed')) if (handOff(r, r.key, r.text, notify, save)) handed++
+  for (const r of (state.instinct?.recovery || []).filter(isOpen)) if (handOff(r, r.key, r.text, notify, save)) handed++
   return handed
 }
 
