@@ -45,6 +45,7 @@ const TESTS = [
   'src/approval-selftest.js',
   'src/agent-selftest.js',
   'src/continuity-selftest.js',
+  'scripts/converse-eval-selftest.mjs',
   'src/routing-selftest.js',
   'src/flights-selftest.js',
   'src/stays-selftest.js',
