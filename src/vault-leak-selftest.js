@@ -64,7 +64,7 @@ if (!binary) {
 <form><input id=u autocomplete=username style="width:300px;height:40px"><br>
 <input id=p type=password name=p style="width:300px;height:40px;font-size:20px"><br>
 <button type=button id=show onclick="p.type = p.type === 'password' ? 'text' : 'password'">הצג סיסמה</button>
-<button type=button id=echo style="width:300px;height:40px;font-size:16px">${echoText}</button>
+<button type=button id=echo style="display:block;box-sizing:border-box;width:300px;height:40px;font-size:16px;white-space:nowrap;overflow:hidden">${echoText}</button>
 <button type=submit id=go>כניסה</button></form>`
   const LOGIN = `${form()}<script>p.addEventListener('input', () => { echo.innerText = p.value })</script>`
   // A same-origin frame that the page writes the password into.
@@ -91,7 +91,8 @@ if (!binary) {
   try {
     const { call, navigate, evaluate } = chrome
     const rect = async (id) => evaluate(`(() => { const r = document.getElementById('${id}').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, left: r.x, top: r.y, width: r.width, height: r.height } })()`)
-    const crop = async (r) => (await call('Page.captureScreenshot', { format: 'png', clip: { x: r.left, y: r.top, width: r.width, height: r.height, scale: 1 } })).data
+    // Whole CSS pixels, so two crops of the same box always have the same size.
+    const crop = async (r) => (await call('Page.captureScreenshot', { format: 'png', clip: { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height), scale: 1 } })).data
     const save = (name, b64) => evidenceDir && fs.writeFileSync(path.join(evidenceDir, name), Buffer.from(b64, 'base64'))
     if (evidenceDir) fs.mkdirSync(evidenceDir, { recursive: true })
     // Every model request, whole: text and image parts as sent, nothing stripped.
@@ -148,15 +149,17 @@ if (!binary) {
       const load = (b) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + b })
       const [a, b] = await Promise.all([load(${JSON.stringify(x)}), load(${JSON.stringify(y)})])
       const read = (i) => { const c = document.createElement('canvas'); c.width = i.width; c.height = i.height; const g = c.getContext('2d'); g.drawImage(i, 0, 0); return g.getImageData(0, 0, i.width, i.height).data }
+      const size = a.width + 'x' + a.height + ' / ' + b.width + 'x' + b.height
+      if (a.width !== b.width || a.height !== b.height) return { off: -1, total: a.width * a.height, same: false, size }
       const p = read(a), q = read(b)
       let off = 0
       for (let k = 0; k < p.length; k += 4) if (Math.max(Math.abs(p[k] - q[k]), Math.abs(p[k + 1] - q[k + 1]), Math.abs(p[k + 2] - q[k + 2])) > 8) off++
-      return { off, total: p.length / 4, same: a.width === b.width && a.height === b.height }
+      return { off, total: p.length / 4, same: true, size }
     })()`)
     const vsSecret = await pixels(oldEcho, refSecret)
     const vsOther = await pixels(oldEcho, refOther)
-    ok(vsSecret.same && vsSecret.off === 0 && vsSecret.total > 1000, `pixels: on the old path (mask, then screenshot) the echo button draws the password: 0 of ${vsSecret.total} pixels differ from a button that reads it (${await sha(oldEcho)} vs ${await sha(refSecret)})`)
-    ok(vsOther.off > 200, `pixels: the comparison tells texts apart: ${vsOther.off} of ${vsOther.total} pixels differ from a button with other text`)
+    ok(vsSecret.same && vsSecret.off === 0 && vsSecret.total > 1000, `pixels: on the old path (mask, then screenshot) the echo button draws the password: 0 of ${vsSecret.total} pixels differ from a button that reads it (${vsSecret.size}; ${await sha(oldEcho)} vs ${await sha(refSecret)})`)
+    ok(vsOther.same && vsOther.off > 200, `pixels: the comparison tells texts apart: ${vsOther.off} of ${vsOther.total} pixels differ from a button with other text`)
 
     // 3. The fix: the production capture after a fill takes no picture at all.
     await navigate(`${site}/login`)
