@@ -3,7 +3,8 @@
 // what "done" looks like), works through it with its tools, keeps the plan current as steps finish or get stuck,
 // and before it answers it checks the result against "done". The answer is the practical outcome: what was done,
 // what was found, links, and what is still open. A plan left open (out of steps, waiting for him) is kept for a
-// day, so "תמשיך" picks it up where it stopped.
+// day, so "תמשיך" picks it up where it stopped. At most two unfinished goals are held; a third is refused, never
+// swapped in over one of them.
 import { config } from './config.js'
 import { state, save } from './store.js'
 
@@ -97,18 +98,28 @@ export const planTool = {
   },
   run(args, ctx) {
     if (!ctx) return 'אין הקשר לתוכנית'
+    // Two unfinished goals are held between messages: the one being worked on and one set aside ("wait, first do
+    // X", then "back to the first one"). A plan for a third is refused while both are open: taking it would mean
+    // dropping one of them without anyone having said so. The saved slots belong to his chat; a background task or
+    // a scheduled check has a plan of its own and never touches them.
+    const kept = keepsSaved(ctx)
+    const aside = kept ? asidePlan() : null
+    const live = ctx.plan?.steps?.length && !isFinished(ctx.plan) ? ctx.plan : null
+    const whose = ownerOf(args, ctx.plan, aside)
+    const other = !!live && whose !== 'current'
+    if (other && whose === 'new' && aside) return saturated(live, aside)
     // Shown once per goal: a plan picked up from an earlier message was already shown then.
-    // A plan for another goal while one is still open (he said "wait, first do X"): the open one is set aside,
-    // not overwritten, so "back to the first one" finds where it stopped. One slot, same lifetime as a plan.
-    const other = isOtherGoal(ctx.plan, args)
     const first = !ctx.plan || other
-    const plan = normalizePlan(args, other ? undefined : ctx.plan)
+    const plan = normalizePlan(args, whose === 'current' ? ctx.plan : whose === 'aside' ? aside : undefined)
     if (!plan.steps.length) return 'תוכנית ריקה: צריך לפחות שלב אחד'
-    if (other) {
-      const { resumed, ...aside } = ctx.plan
-      void resumed
-      state.planAside = aside
-    } else if (state.planAside && !isOtherGoal(state.planAside, args)) delete state.planAside
+    if (kept && (other || whose === 'aside')) {
+      // Who holds what changes here: both slots are written in the same step and saved at once, so a turn that
+      // fails later, or a restart, finds each unfinished goal in exactly one of them.
+      if (live) state.planAside = bare(live)
+      else delete state.planAside
+      state.plan = bare(plan)
+      save()
+    }
     ctx.plan = plan
     ctx.planTouched = true
     ctx.setStep?.(progressLine(plan))
@@ -124,16 +135,38 @@ export const planTool = {
   },
 }
 
-// Is this update_plan call about a different goal than `plan`, which still has work in it? Only when both the goal
-// and every step are new: the same goal reworded keeps at least a step, and a plan that grew keeps its goal.
-function isOtherGoal(plan, args) {
-  if (!plan?.steps?.length || isFinished(plan)) return false
-  const goal = clip(args?.goal, 200)
-  if (!goal || goal === plan.goal) return false
-  const had = new Set(plan.steps.map((s) => s.text))
-  const steps = (Array.isArray(args?.steps) ? args.steps : []).map((s) => clip(typeof s === 'string' ? s : s?.text, 160)).filter(Boolean)
-  return steps.length > 0 && !steps.some((t) => had.has(t))
+const bare = (plan) => {
+  const { resumed, ...rest } = plan
+  void resumed
+  return rest
 }
+
+// Only a turn of his own chat reads and writes the plans kept between messages.
+const keepsSaved = (ctx) => !ctx?.isolated && !['job', 'task'].includes(ctx?.source)
+
+const stepTexts = (args) => (Array.isArray(args?.steps) ? args.steps : []).map((s) => clip(typeof s === 'string' ? s : s?.text, 160)).filter(Boolean)
+// The same goal as `plan`, reworded: it still carries one of its steps.
+const sharesStep = (plan, args) => {
+  const had = new Set((plan?.steps || []).map((s) => s.text))
+  return stepTexts(args).some((t) => had.has(t))
+}
+
+// Which plan an update_plan call is about: the one in hand, the one set aside, or a goal nobody holds yet. The
+// goal as written decides first, so an update to the plan in hand that happens to share a step with the one set
+// aside is not taken for it.
+function ownerOf(args, current, aside) {
+  const goal = clip(args?.goal, 200)
+  const has = (p) => !!p?.steps?.length
+  if (has(current) && (!goal || goal === current.goal)) return 'current'
+  if (has(aside) && goal === aside.goal) return 'aside'
+  if (has(current) && (!stepTexts(args).length || sharesStep(current, args))) return 'current'
+  if (has(aside) && sharesStep(aside, args)) return 'aside'
+  return 'new'
+}
+
+// Said to the model when a third unfinished goal arrives. Nothing was changed, and nothing is called finished.
+const saturated = (current, aside) =>
+  `לא נשמר, ושום דבר לא השתנה: כבר יש שתי מטרות שלא הושלמו, "${current.goal}" (בעבודה) ו-"${aside.goal}" (בצד), ואין מקום לשלישית בלי לוותר על אחת מהן. שתיהן נשארו בדיוק כמו שהיו. את מה שהוא ביקש עכשיו אפשר לבצע בלי תוכנית. אמור לו בשורה אחת ששתי אלה עדיין פתוחות, ואל תציג אף אחת מהן כאילו טופלה. רק אם הוא עצמו מוותר על אחת, קרא ל-update_plan עם המטרה שלה כשהשלבים הפתוחים והחסומים שלה מסומנים skipped, ואז אפשר לפתוח תוכנית חדשה.`
 
 // The plan set aside for another goal, while it is still worth offering back.
 function asidePlan() {
@@ -221,11 +254,8 @@ export function savedPlan() {
 }
 
 export function keepPlan(plan) {
-  if (plan?.steps?.length && !isFinished(plan)) {
-    const { resumed, ...rest } = plan
-    void resumed
-    state.plan = rest
-  } else delete state.plan
+  if (plan?.steps?.length && !isFinished(plan)) state.plan = bare(plan)
+  else delete state.plan
   save()
 }
 
