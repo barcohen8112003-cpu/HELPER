@@ -111,7 +111,7 @@ export const isDefinitive = (e) => Number.isInteger(e?.status) && e.status >= 40
 // The one path every mutation takes. Returns an outcome(); never throws for a refusal.
 //   tool:     the tool's name (part of what is approved)
 //   account:  which identity acts (an email, "github:<login>", "local") — part of what is approved
-//   prepare:  async () => ({ op, fingerprint, question }) | outcome(...) to stop early. Read-only.
+//   prepare:  async () => ({ op, fingerprint, question, account? }) | outcome(...) to stop early. Read-only.
 //   recheck:  async (op) => fingerprint now. Must equal the one approved.
 //   execute:  async (op) => ({ ref, text, confirmed }) — `confirmed` is true only when the service returned the
 //             created/changed object. Without it the result says the change is not confirmed.
@@ -125,6 +125,8 @@ export async function boundMutation(ctx, { tool, account, prepare, recheck, exec
   }
   if (prepared?.status) return prepared
   const { op, fingerprint = null, question } = prepared
+  // The account is often known only once prepare has resolved it.
+  account = prepared.account ?? account
   deepFreeze(op)
   const digest = digestOf({ tool, account, op, fingerprint })
   const seen = ledgerEntry(digest)
