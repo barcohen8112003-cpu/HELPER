@@ -42,8 +42,18 @@ export function prepareWhatsAppSpeech(value) {
 // attached text must never be sent before that text has actually landed.
 export async function deliverWhatsAppSpeech({ reply, delivery, audio, sendText, sendVoice, onVoiceError = () => {} }) {
   let textSent = false
+  const sendConfirmedText = async () => {
+    // wa.send resolves to its last chunk's WhatsApp ID, or null when unverified.
+    // Resolution alone is not evidence. Do not retry an ambiguous partial send.
+    const id = await sendText(reply)
+    if (typeof id !== 'string' || !id.trim()) {
+      const error = new Error('WhatsApp text delivery could not be confirmed')
+      error.deliveryUncertain = true
+      throw error
+    }
+  }
   if (reply && (!audio || delivery.companion)) {
-    await sendText(reply)
+    await sendConfirmedText()
     textSent = true
   }
   if (!audio) return { textSent, voiceSent: false }
@@ -54,7 +64,7 @@ export async function deliverWhatsAppSpeech({ reply, delivery, audio, sendText, 
     // Logging must not prevent the answer from reaching him.
     try { onVoiceError(error) } catch {}
     if (!textSent && reply) {
-      await sendText(reply)
+      await sendConfirmedText()
       textSent = true
     }
     return { textSent, voiceSent: false }

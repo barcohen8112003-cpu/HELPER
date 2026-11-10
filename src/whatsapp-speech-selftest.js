@@ -63,7 +63,7 @@ for (const companion of [false, true]) {
   const events = []
   const reply = 'המחיר 50 ₪, אבל עדיין לא אושר.'
   const result = await deliverWhatsAppSpeech({ reply, delivery: { companion }, audio: Buffer.from('audio'),
-    sendText: async (value) => events.push(['text', value]),
+    sendText: async (value) => { events.push(['text', value]); return 'synthetic-text-id' },
     sendVoice: async () => { events.push(['voice']); throw new Error('offline voice rejection') },
     onVoiceError: () => { throw new Error('logging failure must not hide answer') },
   })
@@ -86,7 +86,7 @@ for (const companion of [false, true]) {
 {
   const events = []
   const result = await deliverWhatsAppSpeech({ reply: plain, delivery: { companion: true }, audio: Buffer.from('audio'),
-    sendText: async (value) => events.push(['text', value]), sendVoice: async () => events.push(['voice']),
+    sendText: async (value) => { events.push(['text', value]); return 'synthetic-text-id' }, sendVoice: async () => { events.push(['voice']); return 'synthetic-voice-id' },
   })
   check('successful companion lands before voice notice', () => {
     assert.deepEqual(result, { textSent: true, voiceSent: true })
@@ -96,7 +96,7 @@ for (const companion of [false, true]) {
 {
   const events = []
   const result = await deliverWhatsAppSpeech({ reply: plain, delivery: { companion: false }, audio: null,
-    sendText: async (value) => events.push(value), sendVoice: async () => { throw new Error('must not attempt audio') },
+    sendText: async (value) => { events.push(value); return 'synthetic-text-id' }, sendVoice: async () => { throw new Error('must not attempt audio') },
   })
   check('synthesis unavailable falls back to complete original text', () => {
     assert.deepEqual(result, { textSent: true, voiceSent: false })
@@ -112,6 +112,20 @@ for (const companion of [false, true]) {
   check('double transport failure propagates instead of claiming delivery', () => assert.equal(attempts, 1))
 }
 
+for (const unconfirmed of [null, undefined, '', '   ']) {
+  for (const companion of [true, false]) {
+    const events = []
+    await assert.rejects(deliverWhatsAppSpeech({ reply: plain, delivery: { companion }, audio: Buffer.from('audio'),
+      sendText: async () => { events.push('text'); return unconfirmed },
+      sendVoice: async () => { events.push('voice'); throw new Error('synthetic voice rejection') },
+    }), error => error.deliveryUncertain === true)
+    check(`unconfirmed text suppresses notice and never retries original (${String(unconfirmed)}, companion=${companion})`, () => {
+      assert.equal(events.filter(kind => kind === 'text').length, 1)
+      assert.deepEqual(events, companion ? ['text'] : ['voice', 'text'])
+    })
+  }
+}
+
 // Execute the exact production delivery block with inert transports, not the server.
 // This catches disconnects between the tested helper and the actual WhatsApp call site.
 {
@@ -121,16 +135,16 @@ for (const companion of [false, true]) {
   assert(start >= 0 && end > start, 'production delivery block located')
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
   const deliver = new AsyncFunction('reply', 'spokenReply', 'wantsVoice', 'speak', 'wa', 'state', 'presentSpeech', 'prepareWhatsAppSpeech', 'deliverWhatsAppSpeech', source.slice(start, end))
-  for (const scenario of ['ok', 'synthesis-null', 'synthesis-reject', 'voice-reject', 'text-reject']) {
+  for (const scenario of ['ok', 'synthesis-null', 'synthesis-reject', 'voice-reject', 'text-reject', 'text-null', 'text-undefined']) {
     const events = []
     let faceCalls = 0
     const reply = '```js\nconst file_name_v2 = 50\n```'
     const operation = deliver(reply, true, true,
       async () => { if (scenario === 'synthesis-reject') throw new Error('synthetic synthesis failure'); return scenario === 'synthesis-null' ? null : Buffer.from('synthetic') },
-      { send: async (_, text) => { events.push(['text', text]); if (scenario === 'text-reject') throw new Error('synthetic text failure') },
-        sendVoice: async () => { events.push(['voice']); if (scenario === 'voice-reject') throw new Error('synthetic voice failure') } },
+      { send: async (_, text) => { events.push(['text', text]); if (scenario === 'text-reject') throw new Error('synthetic text failure'); return scenario === 'text-null' ? null : scenario === 'text-undefined' ? undefined : 'synthetic-text-id' },
+        sendVoice: async () => { events.push(['voice']); if (scenario === 'voice-reject') throw new Error('synthetic voice failure'); return 'synthetic-voice-id' } },
       { owner: { jid: 'synthetic' } }, async () => { faceCalls++ }, prepareWhatsAppSpeech, deliverWhatsAppSpeech)
-    if (scenario === 'text-reject') await assert.rejects(operation, /text failure/)
+    if (scenario.startsWith('text-')) await assert.rejects(operation, /text failure|could not be confirmed/)
     else await operation
     check(`executable production delivery: ${scenario}`, () => {
       assert.equal(events[0][0], 'text')

@@ -20,7 +20,9 @@ and answers longer than the existing 1500-character speech budget get a complete
 fixed spoken notice and the full original answer in text. No partial excerpt is
 read: that could lose a later negation, condition or important qualification.
 Required companion text is sent before any voice notice referring to it. If that
-text send fails, no such notice is sent. If voice delivery fails, the full original
+text send fails or returns no usable WhatsApp message ID, no such notice is
+sent. An unconfirmed text send is not automatically retried because some chunks
+may already have landed. A returned ID is transport acceptance, not a read receipt. If voice delivery fails, the full original
 text is delivered (or kept if it already landed); no voice success is claimed. If
 synthesis fails, the original full text is delivered. No additional
 history, audio cache, recording or retention is introduced.
