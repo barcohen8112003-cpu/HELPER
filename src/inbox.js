@@ -26,6 +26,7 @@ export function answered(list, id, how = 'reply', now = Date.now()) {
 }
 
 // Messages still waiting after `minutes`, each returned once (marked alerted), with the note to send him.
+// `restarted` (set at start for entries of the last run): an answer may have left before the stop, so it says maybe.
 // `busy`: a turn is running right now, so a waiting message is in the queue behind it, not lost.
 // `active`: the id of the message that turn is answering; it is being worked on, just slowly.
 export function overdue(list, { minutes = 5, now = Date.now(), busy = false, active = null } = {}) {
@@ -39,6 +40,8 @@ export function overdue(list, { minutes = 5, now = Date.now(), busy = false, act
       id: e.id,
       text: e.id === active
         ? `עוד עובד על זה, לוקח יותר זמן מהרגיל. אני כאן.`
+        : e.restarted
+        ? `ההודעה שלך מ-${hhmm(e.at)}${quote} הייתה באמצע טיפול כשהופעלתי מחדש. ייתכן שעניתי עליה וייתכן שלא. אם עדיין צריך, תשלח אותה שוב?`
         : busy
         ? `עוד עובד על משהו קודם, ההודעה שלך מ-${hhmm(e.at)}${quote} בתור ואני עונה עליה מיד אחריו.`
         : `ההודעה שלך מ-${hhmm(e.at)}${quote} נתקעה אצלי ולא עניתי עליה. תשלח אותה שוב?`,

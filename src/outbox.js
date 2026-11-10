@@ -7,6 +7,16 @@ const SENT_LOG = path.join(DATA_DIR, 'sent.log')
 const MAX_OUTBOX = 100
 const MAX_KEYS = 500
 const MAX_FILES = 30
+const MAX_LEDGER = 500
+
+// For keyed messages only, a bounded record of what happened to each one: sent (send accepted it) or evicted (the
+// queue was full and it was pushed out unsent). A caller that must know its notice really left (recovery notices,
+// src/recovery-notice.js) reads these instead of guessing from a key's absence. Nothing else changes: delivery
+// stays at-least-once, and the cap still pushes out the oldest message.
+function ledger(name, key) {
+  if (!key) return
+  state[name] = [...(state[name] || []), key].slice(-MAX_LEDGER)
+}
 
 export function inQuietHours(date = new Date()) {
   if (!config.quiet) return false
@@ -34,10 +44,16 @@ export function createOutbox(send, sendFile) {
       while (state.owner) {
         const i = state.outbox.findIndex((m) => m.urgent || !inQuietHours())
         if (i < 0) break
-        await send(state.outbox[i].text)
+        // The message itself, not its position: while send is awaited, notify can push the queue past its cap and
+        // shift everything by one, so state.outbox[i] may be another message by the time send returns.
+        const m = state.outbox[i]
+        await send(m.text)
         // A plain record of every message the assistant sent on its own initiative, and when.
-        fs.appendFileSync(SENT_LOG, `${new Date().toLocaleString('sv-SE')} ${state.outbox[i].urgent ? '[urgent] ' : ''}${state.outbox[i].text.replace(/\n/g, ' | ')}\n`)
-        state.outbox.splice(i, 1)
+        fs.appendFileSync(SENT_LOG, `${new Date().toLocaleString('sv-SE')} ${m.urgent ? '[urgent] ' : ''}${m.text.replace(/\n/g, ' | ')}\n`)
+        ledger('outboxSent', m.key)
+        // Taken out only if it is still queued; if the cap pushed it out meanwhile, it already left the queue.
+        const j = state.outbox.indexOf(m)
+        if (j >= 0) state.outbox.splice(j, 1)
         save()
       }
       state.fileOutbox ??= []
@@ -65,8 +81,9 @@ export function createOutbox(send, sendFile) {
       if (state.sentKeys.includes(key)) return Promise.resolve()
       state.sentKeys = [...state.sentKeys, key].slice(-MAX_KEYS)
     }
-    state.outbox.push({ text, urgent })
-    if (state.outbox.length > MAX_OUTBOX) state.outbox.shift()
+    // The key travels with the message, so a caller can tell whether its notice is still waiting here.
+    state.outbox.push({ text, urgent, ...(key && { key }) })
+    if (state.outbox.length > MAX_OUTBOX) ledger('outboxEvicted', state.outbox.shift().key)
     save()
     return flush()
   }
