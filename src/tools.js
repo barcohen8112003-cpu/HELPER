@@ -34,6 +34,7 @@ import { googleTools } from './google-tools.js'
 import { officeEditTools } from './office-edit.js'
 import { gmailPlusTools } from './gmail-plus.js'
 import { calendarPlusTools } from './calendar-plus.js'
+import { githubWriteTools } from './github-write.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
@@ -731,6 +732,8 @@ tools.push(...officeEditTools)
 tools.push(...gmailPlusTools)
 // Calendar find/update/delete, guests and free/busy, each change through a bound approval (src/calendar-plus.js).
 tools.push(...calendarPlusTools)
+// GitHub: open an issue, open a PR, comment. Only in repositories the owner listed, each through a bound approval.
+tools.push(...githubWriteTools)
 // WhatsApp groups: "מה פספסתי?", calendar and tasks from them, what matters to him (src/groups.js).
 tools.push(...groupTools)
 // Real flight search: cheapest dates in a range, live offers, a picture of the results (src/flights.js).

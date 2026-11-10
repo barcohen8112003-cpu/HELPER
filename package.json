@@ -79,6 +79,7 @@
     "check:office-edit": "node src/office-edit-selftest.js",
     "check:gmail-plus": "node src/gmail-plus-selftest.js",
     "check:calendar-plus": "node src/calendar-plus-selftest.js",
+    "check:github-write": "node src/github-write-selftest.js",
     "demo:team": "node scripts/team-demo.mjs"
   },
   "dependencies": {
