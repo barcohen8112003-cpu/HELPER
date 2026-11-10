@@ -16,6 +16,7 @@ import { desktopShellHtml, isDesktopPath, proxyDesktopHttp, proxyDesktopUpgrade 
 import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
 import { pairingInfo, requestPairing } from './whatsapp.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount, checkGoogleAccounts, googleAccountStatus } from './google.js'
+import { handleVaultHttp, setVaultInputBase } from './vault.js'
 import { calendarOn } from './calendar.js'
 import { canHear, canSpeak, elevenSpeakMp3, transcribeAudio } from './media.js'
 import { chatModel, llmHealth } from './llm.js'
@@ -331,6 +332,8 @@ export function startUi({ connectedSince, restart, agent, liveTurn, panel = null
     return uiPolicy(port, process.env, networkIp ? [`${networkIp}:${port}`] : [])
   }
   const origin = `http://127.0.0.1:${port}`
+  // The credential vault's input page (src/vault.js) is served on loopback unless VAULT_INPUT_HOSTS names an https host.
+  setVaultInputBase(origin)
   const oauthStates = new Set()
   setWebtopLoginUrl(() => `${policy().publicBase}/webtop?t=${token}`)
   setGoogleHomeLoginUrl(() => `${policy().publicBase}/google-home?t=${token}`)
@@ -567,6 +570,8 @@ export function startUi({ connectedSince, restart, agent, liveTurn, panel = null
       // Face page, portrait and watch socket: settings cookie, bridge bearer, or a short-lived face ticket.
       // A face ticket does not sign the visitor into the rest of the settings site.
       if (await handleFaceHttp(req, res, faceCtx)) return
+      // The credential vault's one-time input pages check sign-in, host, Origin and CSRF themselves (src/vault.js).
+      if (url.pathname.startsWith('/vault/') && (await handleVaultHttp(req, res, url, { signedIn, origins: access.origins }))) return
       if (!signedIn(req)) return send(res, 403, note('כדי להיכנס, פתח את הכתובת שמופיעה בחלון של העוזר.'))
       if (desktopEntry) {
         if (!config.desktop.enabled) return send(res, 503, note('שולחן העבודה בענן כבוי.'))

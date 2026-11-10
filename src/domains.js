@@ -50,6 +50,12 @@ export const DOMAINS = [
     words: /יומן|אירוע|פגישה|תזיז|להזיז|תדחה|תבטל את ה(פגישה|אירוע)|תמחק את ה(פגישה|אירוע)|תזמין את|מוזמנים|אורחים|פנוי|תפוס|זמינות|calendar|meeting|invite|free ?busy|reschedule/i,
   },
   {
+    id: 'logins',
+    label: 'סיסמאות והתחברות לאתרים (כספת מקומית)',
+    has: starts('credential_'),
+    words: /סיסמ|התחבר(ות)? ל|להתחבר|תתחבר|כניסה לאתר|לוגין|login|password|credential|כספת/i,
+  },
+  {
     id: 'watch',
     label: 'מעקב שקט אחרי דפים, מחירים ומלאי',
     has: named('add_watcher', 'list_watchers', 'remove_watcher'),

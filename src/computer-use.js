@@ -14,6 +14,7 @@ import { llm, chatModel, LONG_PATIENCE, Aborted } from './llm.js'
 import { screenshot, act } from './pc.js'
 import { browserScreenshot, browserAct, browserProbe } from './errand-browser.js'
 import { researchNotes } from './obscura.js'
+import { redact, redactDeep } from './secret-redact.js'
 import { phoneAgentTimeoutMs, phoneBody, phoneVisionModel, phoneVisionOn, onPhoneStop } from './phone-app.js'
 
 const IMAGE_WIDTH = 1280
@@ -169,6 +170,10 @@ const PROBED = ['click', 'double_click', 'tap', 'select', 'long_press', 'type', 
 export async function runGoal({ goal, constraints = '', body = BODIES.browser, ctx = {}, think, survey = false }) {
   const signal = ctx.signal
   think ??= (messages) => llm(messages, null, chatModel(), LONG_PATIENCE, { max_completion_tokens: 600 }, signal)
+  // Every request to the model, whatever its source (probe label, page text, a blocked-control message, the model's
+  // own echo), is scrubbed of passwords the vault filled. Images are masked when captured.
+  const model = think
+  think = (msgs, sig) => model(redactDeep(msgs), sig)
   const log = []
   // The model's own notes from the survey (candidates and their numbers), shown back to it every step.
   const found = []
@@ -178,7 +183,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   const askVerdict = async (verdict, shot) => {
     if (!verdict?.ask) return null
     const media = shot?.buffer ? { buffer: shot.buffer, mime: shot.mime } : body.capture ? await body.capture().catch(() => null) : null
-    const ok = ctx.confirm ? await ctx.confirm(verdict.ask, media?.buffer ? media : undefined) : false
+    const ok = ctx.confirm ? await ctx.confirm(redact(verdict.ask), media?.buffer ? media : undefined) : false
     if (signal?.aborted) throw new Aborted()
     if (!ok) return end('DENIED', verdict.deny || 'לא אושר, ולכן לא המשכתי.')
     verdict.allow?.()
@@ -190,10 +195,10 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       const final = await body.screenshot().catch(() => null)
       if (final?.buffer) {
         const caption = body.shotCaption ? body.shotCaption(text) : text
-        await Promise.resolve(ctx.sendMedia?.({ buffer: final.buffer, mime: final.mime, caption })).catch(() => {})
+        await Promise.resolve(ctx.sendMedia?.({ buffer: final.buffer, mime: final.mime, caption: redact(caption) })).catch(() => {})
       }
     }
-    return `${status}: ${text}\n${found.length ? `מה נבדק:\n${found.map((f) => `• ${f}`).join('\n')}\n` : ''}צעדים: ${log.length}\n${log.slice(-6).join('\n')}`
+    return redact(`${status}: ${text}\n${found.length ? `מה נבדק:\n${found.map((f) => `• ${f}`).join('\n')}\n` : ''}צעדים: ${log.length}\n${log.slice(-6).join('\n')}`)
   }
   for (let step = 1; step <= body.maxSteps; step++) {
     if (signal?.aborted) throw new Aborted()
@@ -253,7 +258,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       const card = gateCard(a)
       // A body that reads the screen as text takes the picture for the card now; the others already have one.
       const media = body.capture ? await body.capture().catch(() => null) : shot.buffer ? { buffer: shot.buffer, mime: shot.mime } : null
-      const ok = ctx.confirm ? await ctx.confirm(card, media?.buffer ? media : undefined) : false
+      const ok = ctx.confirm ? await ctx.confirm(redact(card), media?.buffer ? media : undefined) : false
       if (signal?.aborted) throw new Aborted()
       if (!ok) return `DENIED: לא אושר, ולכן לא בוצע. ${KIND[a.kind] ? `שום ${KIND[a.kind]} לא קרה.` : ''}\n${card}`
       // The approval covers this one action, on this screen. Anything after it needs a gate of its own.
