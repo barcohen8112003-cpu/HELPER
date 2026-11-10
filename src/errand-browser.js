@@ -12,7 +12,7 @@ import WebSocket from 'ws'
 import { config, DATA_DIR } from './config.js'
 import { bridgeReady, remoteActive, remoteCall } from './pc-bridge.js'
 import { ensureCloudBrowser, errandCloudOn } from './webtop-browser.js'
-import { redact } from './secret-redact.js'
+import { IMAGE_WITHHELD, imagesBlocked, redact } from './secret-redact.js'
 
 const PROFILE = path.join(DATA_DIR, 'errand-profile')
 const VIEW = { width: 1280, height: 860 }
@@ -158,14 +158,18 @@ export async function captureOn(call, pageUrl = '') {
   // The visible part of the page at one image pixel per CSS pixel, so the model's coordinates are click coordinates.
   const { cssVisualViewport: vv } = await call('Page.getLayoutMetrics')
   const width = Math.round(vv.clientWidth), height = Math.round(vv.clientHeight)
+  const { result } = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }).catch(() => ({ result: {} }))
+  // After a vault fill no picture is taken at all (fails closed): the mask below only hides the field itself, and
+  // a page can copy the password into a button, a frame or a canvas (see secret-redact.js).
+  if (imagesBlocked()) return { text: IMAGE_WITHHELD, withheld: true, width, height, scale: 1, left: 0, top: 0, url: redact(result.value || pageUrl) }
   // Masking is required: if it fails, there is no screenshot.
   await maskSecrets(call)
   const { data } = await call('Page.captureScreenshot', { format: 'jpeg', quality: 70, clip: { x: vv.pageX, y: vv.pageY, width, height, scale: 1 } })
-  const { result } = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }).catch(() => ({ result: {} }))
   return { image: `data:image/jpeg;base64,${data}`, buffer: Buffer.from(data, 'base64'), mime: 'image/jpeg', width, height, scale: 1, left: 0, top: 0, url: result.value || pageUrl }
 }
 
-// -> { image: data URL, width, height, scale: 1, left: 0, top: 0, url, title }
+// -> { image: data URL, width, height, scale: 1, left: 0, top: 0, url, title }, or { text, withheld: true, ... } and
+// no image after a vault fill.
 export function browserScreenshot() {
   if (!useCloudBrowser() && remoteActive()) return remoteCall('browserScreenshot', [])
   return withTab((call, page) => captureOn(call, page.url))
