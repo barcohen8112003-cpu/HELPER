@@ -44,6 +44,12 @@ export const DOMAINS = [
     words: /אזעק|צבע אדום|פיקוד|טיל|חבילה|משלוח|מעקב|tracking|עלי ?אקספרס|aliexpress|דואר ישראל|אוטובוס|קו \d|תחנה|רכבת|תחבורה|שבת|נרות|הבדלה|פרשה|חג|תאריך עברי|דולר|יורו|שקל|מטבע|שער|להמיר|המר/i,
   },
   {
+    id: 'logins',
+    label: 'סיסמאות והתחברות לאתרים (כספת מקומית)',
+    has: starts('credential_'),
+    words: /סיסמ|התחבר(ות)? ל|להתחבר|תתחבר|כניסה לאתר|לוגין|login|password|credential|כספת/i,
+  },
+  {
     id: 'watch',
     label: 'מעקב שקט אחרי דפים, מחירים ומלאי',
     has: named('add_watcher', 'list_watchers', 'remove_watcher'),
