@@ -52,7 +52,7 @@
 ## ריצה
 
 ```
-npm run check:continuity                      בדיקות offline (חלק מ-check:all, 53/53)
+npm run check:continuity                      בדיקות offline (חלק מ-check:all: 56/56 אחרי rebase על main עם PR67)
 npm run eval:converse -- --root ../HELPER-base השוואה offline מול צ'קאאוט של b42e2f9
 npm run eval:converse -- --real --root ../HELPER-base   מודל אמיתי מ-.env, אותו מסלול לשני הצדדים
 ```
