@@ -4,6 +4,7 @@
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fakeFetch, googleError, makeChecker, askingCtx, scriptedModel } from './testing/fake-services.js'
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-gmail-'))
@@ -62,9 +63,10 @@ const routes = [
   }],
   ['GET', new RegExp(`${GM}/drafts/([^/?]+)\\?format=(raw|minimal)`), ({ match }) => (drafts[match[1]] ? { json: { id: match[1], message: { id: `m-${match[1]}`, threadId: 't', raw: drafts[match[1]].raw } } } : googleError(404, 'notFound'))],
   ['POST', new RegExp(`${GM}/drafts/send$`), (req) => {
-    const { id } = req.json()
+    // Like Gmail: a message in the request replaces the draft's content, and that is what is sent.
+    const { id, message } = req.json()
     if (!drafts[id]) return googleError(404, 'notFound')
-    sentRaw.push({ raw: drafts[id].raw, fromDraft: id })
+    sentRaw.push({ raw: message?.raw || drafts[id].raw, fromDraft: id, draftHeld: drafts[id].raw, withMessage: Boolean(message?.raw) })
     delete drafts[id]
     return { json: { id: `sent${sentRaw.length}`, threadId: 't', labelIds: ['SENT'] } }
   }],
@@ -200,7 +202,7 @@ let draftId
   ok(no.status === 'declined' && drafts[draftId] && /friend@example\.com/.test(no.asked[0]) && /מה דעתך על שבת/.test(no.asked[0]) && /סיכום\.pdf/.test(no.asked[0]), 'draft send: the question shows the draft as Gmail holds it; a no keeps it')
   // The draft is edited (elsewhere) while the question is open: nothing is sent.
   const { ctx } = askingCtx()
-  ctx.confirm = async () => { drafts[draftId] = { raw: Buffer.from(gp.buildMime({ to: [{ name: '', email: 'someone-else@example.com' }], subject: 'x', body: 'changed' })).toString('base64url') }; return true }
+  ctx.confirm = async () => { drafts[draftId] = { raw: Buffer.from(gp.buildMime({ from: 'me@example.com', to: [{ name: '', email: 'someone-else@example.com' }], subject: 'x', body: 'changed' })).toString('base64url') }; return true }
   const sends = sentRaw.length
   const ch = await byName.get('gmail_draft_send').run({ draft_id: draftId }, ctx)
   ok(ch.status === 'changed' && sentRaw.length === sends, 'draft send: a draft changed after review is not sent')
@@ -252,6 +254,49 @@ let draftId
   model.next = [['gmail_reply', { message_id: 'msgA1aaaa', body: INJECT, reply_all: true, confirmed: true }]]
   await runTurn('תענה למורה', { source: 'whatsapp', confirm: async (q) => (asked.push(q), false), say: async () => {} })
   ok(asked.length === 1 && sentRaw.length === sends && model.toolResults().some((t) => /\[declined\]/.test(t)), 'agent loop: injected approval text and confirmed=true do not send; the owner is asked')
+}
+
+// ---- draft send reviews the exact bytes it sends (review: HTML part and alias sender were never shown) ----
+{
+  const put = (id, mime) => { drafts[id] = { raw: Buffer.from(mime, 'latin1').toString('base64url') } }
+  const attempt = async (id, mime, answer = true) => {
+    put(id, mime)
+    const before = sentRaw.length
+    const r = await run('gmail_draft_send', { draft_id: id }, [answer])
+    return { ...r, sent: sentRaw.length - before }
+  }
+  const alt = 'From: alias@example.org\r\nTo: receiver@example.org\r\nSubject: synthetic\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=synthetic\r\n\r\n--synthetic\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nReviewed benign plain text\r\n--synthetic\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>UNREVIEWED HTML CONTRACT $9000</p>\r\n--synthetic--\r\n'
+  const a = await attempt('draftalt1', alt)
+  ok(a.status === 'unsupported' && a.asked.length === 0 && a.sent === 0, `draft send: the reviewer's alias + HTML alternative draft is refused before any question, nothing sent (${a.status})`)
+  const meAlt = alt.replace('alias@example.org', 'me@example.com')
+  const b = await attempt('draftalt2', meAlt)
+  ok(b.status === 'unsupported' && b.sent === 0 && /multipart\/alternative/.test(b.text), 'draft send: an HTML alternative is refused even from the right sender')
+  const plain = (from, extra = '') => `From: ${from}\r\nTo: receiver@example.org\r\n${extra}Subject: s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nplain body\r\n`
+  const c = await attempt('draftalias', plain('Me <alias@example.org>'))
+  ok(c.status === 'unsupported' && c.sent === 0 && /alias@example\.org/.test(c.text), 'draft send: a draft from another address (alias) is refused, and says which address')
+  const d = await attempt('draftnofrom', 'To: receiver@example.org\r\nSubject: s\r\n\r\nbody\r\n')
+  ok(d.status === 'unsupported' && d.sent === 0, 'draft send: a draft without a From is refused')
+  const e = await attempt('draftdupto', plain('me@example.com', 'To: hidden@example.org\r\n'))
+  ok(e.status === 'unsupported' && e.sent === 0, 'draft send: a second To header is refused, not half shown')
+  const html = await attempt('drafthtml', 'From: me@example.com\r\nTo: r@example.org\r\nSubject: s\r\nContent-Type: text/html\r\n\r\n<b>x</b>\r\n')
+  ok(html.status === 'unsupported' && html.sent === 0, 'draft send: an HTML-only draft is refused')
+  const rel = 'From: me@example.com\r\nTo: r@example.org\r\nSubject: s\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n--b\r\nContent-Type: image/png\r\nContent-Disposition: inline\r\n\r\nAAAA\r\n--b--\r\n'
+  const f = await attempt('draftinline', rel)
+  ok(f.status === 'unsupported' && f.sent === 0, 'draft send: an inline part that is not a reviewed attachment is refused')
+  const pre = 'From: me@example.com\r\nTo: r@example.org\r\nSubject: s\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\nHIDDEN PREAMBLE\r\n--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n--b--\r\n'
+  const g = await attempt('draftpre', pre)
+  ok(g.status === 'unsupported' && g.sent === 0, 'draft send: text outside the parts is refused')
+  const hdr = await attempt('draftxhdr', plain('me@example.com', 'X-Campaign: promo-77\r\nReply-To: other@example.org\r\n'), false)
+  ok(/X-Campaign|x-campaign/.test(hdr.asked[0]) && /promo-77/.test(hdr.asked[0]) && /other@example\.org/.test(hdr.asked[0]), 'draft send: other headers and Reply-To are shown in the question')
+  const bytes = Buffer.from('%PDF-synthetic-attachment-bytes')
+  const withFile = gp.buildMime({ from: 'me@example.com', to: [{ name: '', email: 'r@example.org' }], subject: 'קובץ', body: 'מצורף', attachments: [{ name: 'דוח.pdf', mime: 'application/pdf', buffer: bytes }] })
+  const hash = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 16)
+  drafts.draftfile = { raw: Buffer.from(withFile).toString('base64url') }
+  const before = sentRaw.length
+  const h = await run('gmail_draft_send', { draft_id: 'draftfile' }, [true])
+  const last = sentRaw.at(-1)
+  ok(h.asked[0].includes(hash) && h.asked[0].includes(`${bytes.length} בתים`) && /application\/pdf/.test(h.asked[0]) && /מאת:\* me@example\.com/.test(h.asked[0]), 'draft send: each attachment is shown with type, byte size and SHA-256, and the real From is shown')
+  ok(h.status === 'done' && sentRaw.length === before + 1 && last.withMessage && last.raw === Buffer.from(withFile).toString('base64url'), 'draft send: the request carries the reviewed bytes themselves, so exactly what was shown is sent')
 }
 
 done('gmail-plus')

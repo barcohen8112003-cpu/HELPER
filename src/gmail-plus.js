@@ -7,8 +7,10 @@
 // - A reply is bound to one message id in that account: its thread id, its Message-ID/References headers and its
 //   sender. A thread id passed alongside must be that message's thread. Recipients are computed from the message and
 //   shown in full; anything added must be a plain address.
-// - Saving a draft never sends. Sending a draft shows the draft's actual content, read from Gmail, and is refused if
-//   the draft changes after the question.
+// - Saving a draft never sends. Sending a draft reads its raw bytes from Gmail, shows the real From, every recipient,
+//   the whole text, any other header and each attachment's type, size and SHA-256, and sends those same bytes (not
+//   whatever the draft holds later). Shapes that cannot be shown whole (HTML or alternative parts, inline parts,
+//   nested multiparts) and a From other than the account are refused. A draft changed after the question is not sent.
 // - Labels are resolved from the account's own label list by name; an unknown name is refused, never guessed or
 //   created. Trash and spam are not offered here.
 // - Attachments to send come from Drive (by id, same account) or from one local folder (HELPER_ATTACH_DIR, default
@@ -331,8 +333,81 @@ export async function saveDraft(ctx, args) {
   })
 }
 
-// The draft as Gmail holds it now: its bytes' hash and what a person needs to see to approve sending it.
-async function readDraft(email, draftId) {
+// Invisible and direction-changing characters in what is reviewed are shown, so nothing in it is hidden.
+const visible = (t) => String(t).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, (c) => `[U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}]`)
+
+// One MIME entity: its headers (unfolded, in order) and its body, from the raw bytes as latin1.
+function entity(str) {
+  const m = str.match(/\r?\n\r?\n/)
+  const head = m ? str.slice(0, m.index) : str
+  const body = m ? str.slice(m.index + m[0].length) : ''
+  const headers = []
+  for (const line of head.split(/\r?\n/)) {
+    if (/^[ \t]/.test(line) && headers.length) headers[headers.length - 1].value += ` ${line.trim()}`
+    else {
+      const h = line.match(/^([!-9;-~]+):[ \t]*(.*)$/)
+      if (!h) throw fail('בטיוטה יש שורת כותרת לא תקינה, אז אי אפשר להציג אותה במלואה. לא שולח.', 'unsupported')
+      headers.push({ name: h[1].toLowerCase(), value: h[2] })
+    }
+  }
+  return { headers, body }
+}
+const headerAll = (e, name) => e.headers.filter((h) => h.name === name).map((h) => h.value)
+function contentType(e) {
+  const v = headerAll(e, 'content-type')[0] || 'text/plain'
+  return { type: v.split(';')[0].trim().toLowerCase(), boundary: v.match(/boundary\s*=\s*(?:"([^"]+)"|([^\s;]+))/i)?.slice(1).find(Boolean) }
+}
+const disposition = (e) => (headerAll(e, 'content-disposition')[0] || '').split(';')[0].trim().toLowerCase()
+
+// The only shapes a draft may have here: one text/plain part, or multipart/mixed with one text/plain part first and
+// then files marked as attachments. Anything a mail program could show that is not reviewed here (an HTML or
+// alternative part, inline or related parts, nested multiparts, text outside the parts) is refused, not sent unseen.
+export function draftStructure(rawBuffer) {
+  const root = entity(rawBuffer.toString('latin1'))
+  const unsupported = (why) => fail(`צורת הטיוטה לא נתמכת כאן (${why}), אז אי אפשר להציג את כל מה שיישלח. לא שולח; אפשר לשלוח אותה מ-Gmail.`, 'unsupported')
+  const { type, boundary } = contentType(root)
+  if (type === 'text/plain') return { root, files: 0 }
+  if (type !== 'multipart/mixed' || !boundary) throw unsupported(type)
+  const lines = root.body.split(/\r?\n/)
+  const parts = []
+  let cur = null
+  let closed = false
+  const outside = []
+  for (const line of lines) {
+    if (line === `--${boundary}` || line === `--${boundary}--`) {
+      if (cur) parts.push(cur.join('\r\n'))
+      if (line.endsWith('--')) {
+        closed = true
+        cur = null
+        continue
+      }
+      cur = closed ? null : []
+      continue
+    }
+    if (cur) cur.push(line)
+    else outside.push(line)
+  }
+  if (!closed) throw unsupported('אין סוף לחלקים')
+  if (outside.some((l) => l.trim())) throw unsupported('טקסט מחוץ לחלקים')
+  if (!parts.length) throw unsupported('אין חלקים')
+  const ents = parts.map(entity)
+  const first = contentType(ents[0])
+  if (first.type !== 'text/plain' || disposition(ents[0]) === 'attachment') throw unsupported(`החלק הראשון הוא ${first.type}`)
+  for (const e of ents.slice(1)) {
+    const t = contentType(e).type
+    if (t.startsWith('multipart/')) throw unsupported('חלקים מקוננים')
+    if (disposition(e) !== 'attachment') throw unsupported(`חלק ${t} שאינו קובץ מצורף`)
+  }
+  return { root, files: ents.length - 1 }
+}
+
+// Headers a draft may carry that are shown or are pure transport. Any other header is shown to the owner as is.
+const KNOWN = new Set(['from', 'to', 'cc', 'bcc', 'subject', 'date', 'message-id', 'mime-version', 'content-type', 'content-transfer-encoding', 'in-reply-to', 'references', 'reply-to'])
+
+// The draft as Gmail holds it now, frozen: the exact bytes that will be sent, their hash, and everything a person
+// needs to see to approve sending them: the real From, every recipient, the whole text, every other header, and
+// each attachment's name, type, size and SHA-256.
+export async function readDraft(email, draftId) {
   let d
   try {
     d = await google.gcall(email, 'GET', `${GMAIL}/drafts/${encodeURIComponent(draftId)}?format=raw`)
@@ -342,7 +417,55 @@ async function readDraft(email, draftId) {
   }
   const raw = d.message?.raw
   if (!raw) throw fail('Gmail לא החזיר את תוכן הטיוטה.')
-  return { raw, hash: sha(Buffer.from(raw, 'base64url')), messageId: d.message.id, threadId: d.message.threadId }
+  const bytes = Buffer.from(raw, 'base64url')
+  return { raw, bytes, hash: sha(bytes), messageId: d.message.id, threadId: d.message.threadId || null }
+}
+
+export async function reviewDraft(email, d) {
+  const { root, files } = draftStructure(d.bytes)
+  const one = (name) => {
+    const v = headerAll(root, name)
+    if (v.length > 1) throw fail(`בטיוטה יש יותר מכותרת ${name} אחת. לא שולח.`, 'unsupported')
+    return v[0]
+  }
+  for (const n of ['to', 'cc', 'bcc', 'subject', 'reply-to', 'content-type']) one(n)
+  const parsed = await simpleParser(d.bytes)
+  const fromList = (parsed.from?.value || []).filter((a) => a.address)
+  if (headerAll(root, 'from').length !== 1 || fromList.length !== 1) throw fail('לטיוטה אין שולח אחד ברור (From). לא שולח.', 'unsupported')
+  const from = fromList[0].address
+  if (from.toLowerCase() !== email.toLowerCase()) throw fail(`הטיוטה נשלחת מ-${from}, לא מהחשבון ${email}. שליחה מכתובת אחרת (alias) לא נתמכת כאן. לא שולח.`, 'unsupported')
+  if (headerAll(root, 'sender').length) throw fail('לטיוטה יש כותרת Sender. לא נתמך כאן. לא שולח.', 'unsupported')
+  const list = (field) => (parsed[field]?.value || []).map((a) => ({ name: visible(a.name || ''), email: a.address || '' }))
+  const to = list('to')
+  const cc = list('cc')
+  const bcc = list('bcc')
+  const replyTo = list('replyTo')
+  if (!to.length && !cc.length && !bcc.length) throw fail('בטיוטה אין נמענים.')
+  if (to.length + cc.length + bcc.length > MAX_RECIPIENTS) throw fail(`יותר מדי נמענים בטיוטה (מקסימום ${MAX_RECIPIENTS}).`)
+  if (parsed.html) throw fail('לטיוטה יש גרסת HTML, שאי אפשר להציג כאן במלואה. לא שולח; אפשר לשלוח אותה מ-Gmail.', 'unsupported')
+  const body = parsed.text || ''
+  if (body.length > MAX_BODY) throw fail(`הטיוטה ארוכה מכדי להציג אותה במלואה לאישור (${body.length} תווים).`)
+  const atts = parsed.attachments || []
+  if (atts.length !== files) throw fail('מספר הקבצים המצורפים בטיוטה לא ברור. לא שולח.', 'unsupported')
+  const fileLines = atts.map((a) => `  ${safeFileName(a.filename)} · ${a.contentType} · ${a.content.length} בתים · SHA-256 ${sha(a.content).slice(0, 16)}`)
+  const extra = root.headers.filter((h) => !KNOWN.has(h.name)).map((h) => `  ${h.name}: ${visible(h.value)}`)
+  const question = [
+    'לשלוח את הטיוטה הזאת כמו שהיא?',
+    `*מאת:* ${from}`,
+    `*אל:* ${shown(to) || '(אין)'}`,
+    cc.length && `*עותק:* ${shown(cc)}`,
+    bcc.length && `*עותק נסתר:* ${shown(bcc)}`,
+    replyTo.length && `*תשובות יגיעו אל:* ${shown(replyTo)}`,
+    `*נושא:* ${visible(parsed.subject || '')}`,
+    d.threadId && `*בשרשור:* ${d.threadId}`,
+    fileLines.length && `*קבצים מצורפים (${fileLines.length}):*\n${fileLines.join('\n')}`,
+    extra.length && `*כותרות נוספות:*\n${extra.join('\n')}`,
+    '',
+    visible(body),
+    '',
+    'בדיוק הגרסה הזאת תישלח. אם הטיוטה תשתנה לפני השליחה, לא אשלח.',
+  ].filter((x) => x !== 0 && x !== false && x != null && x !== undefined).join('\n')
+  return { question, from, to, cc, bcc }
 }
 
 export async function sendDraft(ctx, args) {
@@ -352,27 +475,22 @@ export async function sendDraft(ctx, args) {
       const email = await writeAccount(args.account, GMAIL_SCOPES.draft)
       if (!ID.test(String(args.draft_id || ''))) throw fail('צריך draft_id מדויק (מ-gmail_draft_save או מהמשתמש).')
       const d = await readDraft(email, args.draft_id)
-      const parsed = await simpleParser(Buffer.from(d.raw, 'base64url'))
-      const list = (field) => (parsed[field]?.value || []).map((a) => ({ name: a.name || '', email: a.address || '' }))
-      const to = list('to')
-      const cc = list('cc')
-      const bcc = list('bcc')
-      if (!to.length && !cc.length && !bcc.length) throw fail('בטיוטה אין נמענים.')
-      const body = parsed.text || ''
-      if (body.length > MAX_BODY) throw fail(`הטיוטה ארוכה מכדי להציג אותה במלואה לאישור (${body.length} תווים).`)
-      if (!body.trim() && parsed.html) throw fail('לטיוטה יש רק גרסת HTML, שאי אפשר להציג כאן במלואה. כדאי לשלוח אותה מ-Gmail.')
-      const files = (parsed.attachments || []).map((a) => `${safeFileName(a.filename)} (${Math.max(1, Math.round(a.size / 1024))}KB)`)
+      const { question } = await reviewDraft(email, d)
       return {
         account: email,
-        op: { email, draftId: args.draft_id },
+        // The reviewed bytes themselves are what is sent (drafts.send with the message), not whatever the draft holds
+        // at that moment.
+        op: { email, draftId: args.draft_id, raw: d.raw, threadId: d.threadId },
         fingerprint: { hash: d.hash },
-        question: `לשלוח את הטיוטה הזאת כמו שהיא?\n*מאת:* ${email}\n*אל:* ${shown(to)}${cc.length ? `\n*עותק:* ${shown(cc)}` : ''}${bcc.length ? `\n*עותק נסתר:* ${shown(bcc)}` : ''}\n*נושא:* ${parsed.subject || ''}${files.length ? `\n*קבצים מצורפים:* ${files.join(', ')}` : ''}\n\n${body}\n\nאם הטיוטה תשתנה לפני השליחה, לא אשלח.`,
+        question,
       }
     },
     recheck: async (op) => ({ hash: (await readDraft(op.email, op.draftId)).hash }),
     async execute(op) {
-      const res = await google.gcall(op.email, 'POST', `${GMAIL}/drafts/send`, { json: { id: op.draftId } })
-      return { confirmed: Boolean(res.id), ref: res.id, text: `הטיוטה נשלחה (מזהה ${res.id})` }
+      const message = { raw: op.raw, ...(op.threadId && { threadId: op.threadId }) }
+      const res = await google.gcall(op.email, 'POST', `${GMAIL}/drafts/send`, { json: { id: op.draftId, message } })
+      const confirmed = Boolean(res.id) && (!op.threadId || res.threadId === op.threadId)
+      return { confirmed, ref: res.id, text: confirmed ? `הטיוטה נשלחה (מזהה ${res.id})` : `Gmail החזיר ${res.id ? `מזהה ${res.id} בשרשור אחר` : 'תשובה בלי מזהה'}` }
     },
   })
 }
