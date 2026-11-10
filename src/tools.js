@@ -32,6 +32,7 @@ import { downloadSessionFile } from './session.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
 import { officeEditTools } from './office-edit.js'
+import { gmailPlusTools } from './gmail-plus.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
@@ -725,6 +726,8 @@ const isOn = (t) => !t.enabled || t.enabled()
 tools.push(...googleTools)
 // Native edits to an existing Docs/Sheets/Slides file, each bound to the revision the user approved (src/office-edit.js).
 tools.push(...officeEditTools)
+// Gmail replies in the thread, attachments, drafts and labels, each through a bound approval (src/gmail-plus.js).
+tools.push(...gmailPlusTools)
 // WhatsApp groups: "מה פספסתי?", calendar and tasks from them, what matters to him (src/groups.js).
 tools.push(...groupTools)
 // Real flight search: cheapest dates in a range, live offers, a picture of the results (src/flights.js).
