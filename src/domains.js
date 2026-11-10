@@ -48,6 +48,8 @@ export const DOMAINS = [
     label: 'יומן: לשנות, להזיז, למחוק, להזמין ולבדוק מתי פנוי',
     has: named('calendar_find', 'calendar_update', 'calendar_delete', 'calendar_freebusy'),
     words: /יומן|אירוע|פגישה|תזיז|להזיז|תדחה|תבטל את ה(פגישה|אירוע)|תמחק את ה(פגישה|אירוע)|תזמין את|מוזמנים|אורחים|פנוי|תפוס|זמינות|calendar|meeting|invite|free ?busy|reschedule/i,
+  },
+  {
     id: 'logins',
     label: 'סיסמאות והתחברות לאתרים (כספת מקומית)',
     has: starts('credential_'),
