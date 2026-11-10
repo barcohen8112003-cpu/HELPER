@@ -22,7 +22,9 @@ read: that could lose a later negation, condition or important qualification.
 Required companion text is sent before any voice notice referring to it. If that
 text send fails or returns no usable WhatsApp message ID, no such notice is
 sent. An unconfirmed text send is not automatically retried because some chunks
-may already have landed. A returned ID is transport acceptance, not a read receipt. If voice delivery fails, the full original
+may already have landed. The scoped outer error notice describes only answer
+delivery uncertainty, never asks to repeat the whole task, and is itself counted
+as accepted only when its send returns a usable message ID. A returned ID is transport acceptance, not a read receipt. If voice delivery fails, the full original
 text is delivered (or kept if it already landed); no voice success is claimed. If
 synthesis fails, the original full text is delivered. No additional
 history, audio cache, recording or retention is introduced.

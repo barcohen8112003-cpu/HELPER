@@ -370,6 +370,12 @@ const wa = await startWhatsApp(async (m) => {
       if (e instanceof Aborted || ac.signal.aborted) {
         console.log('[agent] הופסק על ידי המשתמש')
         settle('stopped')
+      } else if (config.whatsappSpokenReplies && e.deliveryUncertain === true) {
+        // The work may already be complete. Only answer delivery is unconfirmed.
+        // Do not invite repeating the task or automatically resend its original answer.
+        console.log('[voice] answer text delivery unconfirmed')
+        const noticeId = await wa.send(state.owner.jid, 'לא הצלחתי לאשר שהתשובה הגיעה אליך במלואה. זה לא אומר שהפעולות שביקשת לא בוצעו. לא אבצע אותן שוב אוטומטית.').catch(() => null)
+        if (typeof noticeId === 'string' && noticeId.trim()) settle('error')
       } else {
         console.log(`[agent] ${e.message}`)
         const told = await wa.send(state.owner.jid, humanError(e)).then(() => true, () => false)

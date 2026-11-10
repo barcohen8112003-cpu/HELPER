@@ -45,7 +45,12 @@ export async function deliverWhatsAppSpeech({ reply, delivery, audio, sendText, 
   const sendConfirmedText = async () => {
     // wa.send resolves to its last chunk's WhatsApp ID, or null when unverified.
     // Resolution alone is not evidence. Do not retry an ambiguous partial send.
-    const id = await sendText(reply)
+    let id
+    try { id = await sendText(reply) } catch (cause) {
+      const error = new Error(cause?.message || 'WhatsApp text delivery failed', { cause })
+      error.deliveryUncertain = true
+      throw error
+    }
     if (typeof id !== 'string' || !id.trim()) {
       const error = new Error('WhatsApp text delivery could not be confirmed')
       error.deliveryUncertain = true

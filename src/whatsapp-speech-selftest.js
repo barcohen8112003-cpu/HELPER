@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { humanError } from './style.js'
 import { MAX_WHATSAPP_SPEECH, TEXT_ONLY_SPEECH, WHATSAPP_SPOKEN_NOTE, prepareWhatsAppSpeech, spokenReplySystem, deliverWhatsAppSpeech } from './whatsapp-speech.js'
 
 let passed = 0
@@ -159,6 +160,42 @@ for (const unconfirmed of [null, undefined, '', '   ']) {
     { send: async () => legacy.push('text'), sendVoice: async () => legacy.push('voice') },
     { owner: { jid: 'synthetic' } }, async () => {}, prepareWhatsAppSpeech, deliverWhatsAppSpeech)
   check('executable flag-off delivery still sends simple voice without companion', () => assert.deepEqual(legacy, ['voice']))
+}
+
+// Execute the production outer catch with the real scoped helper error and humanError.
+{
+  const source = fs.readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+  const start = source.indexOf('    } catch (e) {', source.indexOf('      const delivery = spokenReply'))
+  const end = source.indexOf('    } finally {', start)
+  const body = source.slice(start + '    } catch (e) {'.length, end)
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+  const handle = new AsyncFunction('e', 'config', 'wa', 'state', 'humanError', 'settle', 'Aborted', 'ac', body)
+  for (const noticeReturn of ['synthetic-notice-id', null, undefined]) {
+    let error
+    try {
+      await deliverWhatsAppSpeech({ reply: plain, delivery: { companion: true }, audio: Buffer.from('synthetic'),
+        sendText: async () => null, sendVoice: async () => { throw new Error('must not send notice audio') } })
+    } catch (e) { error = e }
+    const events = []
+    let genericCalls = 0
+    await handle(error, { whatsappSpokenReplies: true },
+      { send: async (_, text) => { events.push(['notice', text]); return noticeReturn } },
+      { owner: { jid: 'synthetic' } }, e => { genericCalls++; return humanError(e) },
+      how => events.push(['settle', how]), class Aborted extends Error {}, { signal: { aborted: false } })
+    check(`production outer catch keeps delivery uncertainty scoped (notice=${String(noticeReturn)})`, () => {
+      assert.equal(genericCalls, 0)
+      assert.equal(events.filter(([kind]) => kind === 'notice').length, 1)
+      assert.equal(events[0][1].includes(plain), false)
+      assert.doesNotMatch(events[0][1], /נסה שוב|תבקש שוב|תגיד לי מה ביקשת/)
+      assert.match(events[0][1], /התשובה/)
+      assert.equal(events.filter(([kind]) => kind === 'settle').length, typeof noticeReturn === 'string' ? 1 : 0)
+    })
+  }
+  let genericCalls = 0
+  await handle(new Error('generic test failure'), { whatsappSpokenReplies: false },
+    { send: async () => 'synthetic-notice-id' }, { owner: { jid: 'synthetic' } },
+    e => { genericCalls++; return humanError(e) }, () => {}, class Aborted extends Error {}, { signal: { aborted: false } })
+  check('production generic flag-off error still uses real humanError', () => assert.equal(genericCalls, 1))
 }
 
 // Set a throwaway environment before importing config. No owner .env or data is read.
