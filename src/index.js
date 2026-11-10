@@ -12,7 +12,7 @@ import { startScheduler, newsDigest, newsInBrief } from './scheduler.js'
 import * as inbox from './inbox.js'
 import * as inflight from './inflight.js'
 import { prepare, speak } from './media.js'
-import { prepareWhatsAppSpeech } from './whatsapp-speech.js'
+import { prepareWhatsAppSpeech, deliverWhatsAppSpeech } from './whatsapp-speech.js'
 import { setLocation, isLiveUpdate } from './location.js'
 import { createOutbox } from './outbox.js'
 import { chatModel, Aborted } from './llm.js'
@@ -347,11 +347,22 @@ const wa = await startWhatsApp(async (m) => {
       // The opt-in path keeps a full companion when speech cannot carry the whole answer.
       const delivery = spokenReply ? prepareWhatsAppSpeech(reply) : null
       const spoken = reply && wantsVoice ? await speak(delivery ? delivery.speech : reply, { prepared: Boolean(delivery) }).catch((e) => (console.log(`[voice] ${e.message}`), null)) : null
-      if (spoken) {
-        await wa.sendVoice(state.owner.jid, spoken)
-        presentSpeech({ text: delivery ? delivery.speech : reply, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+      if (delivery) {
+        const sent = await deliverWhatsAppSpeech({
+          reply, delivery, audio: spoken,
+          sendText: (text) => wa.send(state.owner.jid, text),
+          sendVoice: (audio) => wa.sendVoice(state.owner.jid, audio),
+          onVoiceError: (e) => console.log(`[voice] ${e.message}`),
+        })
+        if (sent.voiceSent) presentSpeech({ text: delivery.speech, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+      } else {
+        // Flag-off legacy delivery is deliberately unchanged.
+        if (spoken) {
+          await wa.sendVoice(state.owner.jid, spoken)
+          presentSpeech({ text: reply, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+        }
+        if (reply && (!spoken || /https?:\/\//.test(reply))) await wa.send(state.owner.jid, reply)
       }
-      if (reply && (!spoken || delivery?.companion || /https?:\/\//.test(reply))) await wa.send(state.owner.jid, reply)
       answered = true
       settle(reacted && !reply ? 'reaction' : 'reply')
     } catch (e) {

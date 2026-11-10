@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { MAX_WHATSAPP_SPEECH, TEXT_ONLY_SPEECH, WHATSAPP_SPOKEN_NOTE, prepareWhatsAppSpeech, spokenReplySystem } from './whatsapp-speech.js'
+import { MAX_WHATSAPP_SPEECH, TEXT_ONLY_SPEECH, WHATSAPP_SPOKEN_NOTE, prepareWhatsAppSpeech, spokenReplySystem, deliverWhatsAppSpeech } from './whatsapp-speech.js'
 
 let passed = 0
 const check = (name, test) => { test(); passed++; console.log(`ok ${name}`) }
@@ -58,6 +58,60 @@ check('spoken instructions are in the opted-in WhatsApp system context only', ()
   }
 })
 
+// Actual inert transport behavior, not source-text assertions.
+for (const companion of [false, true]) {
+  const events = []
+  const reply = 'המחיר 50 ₪, אבל עדיין לא אושר.'
+  const result = await deliverWhatsAppSpeech({ reply, delivery: { companion }, audio: Buffer.from('audio'),
+    sendText: async (value) => events.push(['text', value]),
+    sendVoice: async () => { events.push(['voice']); throw new Error('offline voice rejection') },
+    onVoiceError: () => { throw new Error('logging failure must not hide answer') },
+  })
+  check(`voice rejection keeps complete text exactly once (companion=${companion})`, () => {
+    assert.deepEqual(result, { textSent: true, voiceSent: false })
+    assert.equal(events.filter(([kind]) => kind === 'text').length, 1)
+    assert.equal(events.find(([kind]) => kind === 'text')[1], reply)
+    if (companion) assert.equal(events[0][0], 'text')
+  })
+}
+{
+  const events = []
+  const reply = 'א'.repeat(1600)
+  await assert.rejects(deliverWhatsAppSpeech({ reply, delivery: prepareWhatsAppSpeech(reply), audio: Buffer.from('audio'),
+    sendText: async () => { events.push('text-failed'); throw new Error('offline text rejection') },
+    sendVoice: async () => events.push('voice'),
+  }), /text rejection/)
+  check('failed mandatory companion prevents a false attached-text voice notice', () => assert.deepEqual(events, ['text-failed']))
+}
+{
+  const events = []
+  const result = await deliverWhatsAppSpeech({ reply: plain, delivery: { companion: true }, audio: Buffer.from('audio'),
+    sendText: async (value) => events.push(['text', value]), sendVoice: async () => events.push(['voice']),
+  })
+  check('successful companion lands before voice notice', () => {
+    assert.deepEqual(result, { textSent: true, voiceSent: true })
+    assert.deepEqual(events.map(([kind]) => kind), ['text', 'voice'])
+  })
+}
+{
+  const events = []
+  const result = await deliverWhatsAppSpeech({ reply: plain, delivery: { companion: false }, audio: null,
+    sendText: async (value) => events.push(value), sendVoice: async () => { throw new Error('must not attempt audio') },
+  })
+  check('synthesis unavailable falls back to complete original text', () => {
+    assert.deepEqual(result, { textSent: true, voiceSent: false })
+    assert.deepEqual(events, [plain])
+  })
+}
+{
+  let attempts = 0
+  await assert.rejects(deliverWhatsAppSpeech({ reply: plain, delivery: { companion: false }, audio: Buffer.from('audio'),
+    sendVoice: async () => { throw new Error('voice failed') },
+    sendText: async () => { attempts++; throw new Error('text also failed') },
+  }), /text also failed/)
+  check('double transport failure propagates instead of claiming delivery', () => assert.equal(attempts, 1))
+}
+
 // Set a throwaway environment before importing config. No owner .env or data is read.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-speech-'))
 process.env.HELPER_ENV_FILE = path.join(dir, 'empty.env')
@@ -102,8 +156,8 @@ try {
   check('WhatsApp wiring keeps full reply fallback/companion and matching face transcript', () => {
     assert.match(index, /config\.whatsappSpokenReplies && wantsVoice/)
     assert.match(index, /source: 'whatsapp', spokenReply,/)
-    assert.match(index, /!spoken \|\| delivery\?\.companion/)
-    assert.match(index, /presentSpeech\(\{ text: delivery \? delivery\.speech : reply, audio: spoken/)
+    assert.match(index, /const sent = await deliverWhatsAppSpeech/)
+    assert.match(index, /if \(sent\.voiceSent\) presentSpeech\(\{ text: delivery\.speech, audio: spoken/)
     assert.match(index, /await wa\.send\(state\.owner\.jid, reply\)/)
   })
   check('ordinary and exhausted-turn system prompts both include scoped delivery style', () => {

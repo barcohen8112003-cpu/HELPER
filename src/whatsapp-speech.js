@@ -37,3 +37,26 @@ export function prepareWhatsAppSpeech(value) {
   }
   return { speech, companion: hasLinks || speech !== text, reason: 'complete' }
 }
+
+// Opt-in WhatsApp transport, injected for offline failure tests. A notice that refers to
+// attached text must never be sent before that text has actually landed.
+export async function deliverWhatsAppSpeech({ reply, delivery, audio, sendText, sendVoice, onVoiceError = () => {} }) {
+  let textSent = false
+  if (reply && (!audio || delivery.companion)) {
+    await sendText(reply)
+    textSent = true
+  }
+  if (!audio) return { textSent, voiceSent: false }
+  try {
+    await sendVoice(audio)
+    return { textSent, voiceSent: true }
+  } catch (error) {
+    // Logging must not prevent the answer from reaching him.
+    try { onVoiceError(error) } catch {}
+    if (!textSent && reply) {
+      await sendText(reply)
+      textSent = true
+    }
+    return { textSent, voiceSent: false }
+  }
+}

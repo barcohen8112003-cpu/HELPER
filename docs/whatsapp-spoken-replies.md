@@ -19,7 +19,10 @@ The full unmodified answer accompanies changed formatting or links. Code, tables
 and answers longer than the existing 1500-character speech budget get a complete
 fixed spoken notice and the full original answer in text. No partial excerpt is
 read: that could lose a later negation, condition or important qualification.
-If synthesis fails, the original full text still follows as before. No additional
+Required companion text is sent before any voice notice referring to it. If that
+text send fails, no such notice is sent. If voice delivery fails, the full original
+text is delivered (or kept if it already landed); no voice success is claimed. If
+synthesis fails, the original full text is delivered. No additional
 history, audio cache, recording or retention is introduced.
 
 The feature does not validate model-generated facts. The prompt asks the model to
