@@ -7,6 +7,7 @@ import path from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import { config } from './config.js'
 import { remoteActive, remoteCall } from './pc-bridge.js'
+import { imagesBlocked } from './secret-redact.js'
 
 // On the cloud, the same functions run on the home PC. On Windows they stay local.
 export const pcEnabled = () => process.platform === 'win32' || (remoteActive() && config.computerMode !== 'off')
@@ -97,6 +98,8 @@ export async function media(action, level) {
 // Returns { file, width, height, scale, left, top } where scale converts image pixels back to screen pixels.
 export async function screenshot(maxWidth = 0) {
   if (remoteActive()) return remoteCall('screenshot', [maxWidth])
+  // This machine's screen can show the errand browser, where the vault filled a password: no picture after a fill.
+  if (imagesBlocked()) throw Object.assign(new Error('צילום המסך חסום מאז שמולאה סיסמה שמורה בדפדפן במחשב הזה. הפעלה מחדש של העוזר מחזירה אותו.'), { code: 'withheld' })
   const file = path.join(os.tmpdir(), `helper-screen-${Date.now()}.png`)
   const out = await ps(`${INPUT}
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

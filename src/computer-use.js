@@ -14,7 +14,7 @@ import { llm, chatModel, LONG_PATIENCE, Aborted } from './llm.js'
 import { screenshot, act } from './pc.js'
 import { browserScreenshot, browserAct, browserProbe } from './errand-browser.js'
 import { researchNotes } from './obscura.js'
-import { redact, redactDeep } from './secret-redact.js'
+import { IMAGE_WITHHELD, imagesBlocked, redact, redactDeep } from './secret-redact.js'
 import { phoneAgentTimeoutMs, phoneBody, phoneVisionModel, phoneVisionOn, onPhoneStop } from './phone-app.js'
 
 const IMAGE_WIDTH = 1280
@@ -171,9 +171,13 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   const signal = ctx.signal
   think ??= (messages) => llm(messages, null, chatModel(), LONG_PATIENCE, { max_completion_tokens: 600 }, signal)
   // Every request to the model, whatever its source (probe label, page text, a blocked-control message, the model's
-  // own echo), is scrubbed of passwords the vault filled. Images are masked when captured.
+  // own echo), is scrubbed of passwords the vault filled. After a fill, no picture of this machine's browser or screen
+  // goes to the model or to a chat at all (fails closed, secret-redact.js); only a body that cannot show them (the
+  // phone, the TV: vaultView false) keeps its pictures.
+  const pictures = () => body.vaultView === false || !imagesBlocked()
   const model = think
-  think = (msgs, sig) => model(redactDeep(msgs), sig)
+  think = (msgs, sig) => model(redactDeep(msgs, { keepImages: body.vaultView === false }), sig)
+  if (body === BODIES.desktop && !pictures()) return redact(`FAIL: ${IMAGE_WITHHELD}`)
   const log = []
   // The model's own notes from the survey (candidates and their numbers), shown back to it every step.
   const found = []
@@ -182,7 +186,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   let gates = 0
   const askVerdict = async (verdict, shot) => {
     if (!verdict?.ask) return null
-    const media = shot?.buffer ? { buffer: shot.buffer, mime: shot.mime } : body.capture ? await body.capture().catch(() => null) : null
+    const media = !pictures() ? null : shot?.buffer ? { buffer: shot.buffer, mime: shot.mime } : body.capture ? await body.capture().catch(() => null) : null
     const ok = ctx.confirm ? await ctx.confirm(redact(verdict.ask), media?.buffer ? media : undefined) : false
     if (signal?.aborted) throw new Aborted()
     if (!ok) return end('DENIED', verdict.deny || 'לא אושר, ולכן לא המשכתי.')
@@ -191,7 +195,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   }
   const end = async (status, text) => {
     body.finish?.(text)
-    if (body.finalShot) {
+    if (body.finalShot && pictures()) {
       const final = await body.screenshot().catch(() => null)
       if (final?.buffer) {
         const caption = body.shotCaption ? body.shotCaption(text) : text
@@ -202,7 +206,9 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   }
   for (let step = 1; step <= body.maxSteps; step++) {
     if (signal?.aborted) throw new Aborted()
-    const shot = await body.screenshot()
+    let shot = await body.screenshot()
+    // Whatever the body returned, a picture taken after a vault fill does not go on (captureOn already takes none).
+    if (!pictures() && (shot.image || shot.buffer)) shot = { ...shot, image: undefined, buffer: undefined, withheld: true, text: shot.text ? `${shot.text}\n${IMAGE_WITHHELD}` : IMAGE_WITHHELD }
     if (body.guardScreen) {
       const verdict = await Promise.resolve()
         .then(() => body.guardScreen())
@@ -218,7 +224,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
     const seen = shot.text ? `Step ${step}.\n${shot.text}${shot.image ? '\nA screenshot is attached.' : ''}` : `Step ${step}. Screenshot ${shot.width}x${shot.height}.${shot.url ? ` Address: ${shot.url}` : ''}`
     // The same screen three steps running means the last actions did nothing: say so instead of letting it loop.
     screens.push(shot.text || '')
-    const stuck = shot.text && screens.length >= 4 && screens.slice(-4).every((s) => s === shot.text)
+    const stuck = shot.text && !shot.withheld && screens.length >= 4 && screens.slice(-4).every((s) => s === shot.text)
     messages.push({ role: 'user', content: [{ type: 'text', text: `${head}${seen}${stuck ? '\nThe screen has not changed for 3 steps. That way is not working: take a different one (another element, back, an intent, search).' : ''}` }, ...(shot.image ? [{ type: 'image_url', image_url: { url: shot.image } }] : [])] })
     const reply = await think(messages, signal)
     if (signal?.aborted) throw new Aborted()
@@ -257,7 +263,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       if (++gates > MAX_GATES) return end('FAIL', 'יותר מדי בקשות אישור בסידור אחד, עצרתי.')
       const card = gateCard(a)
       // A body that reads the screen as text takes the picture for the card now; the others already have one.
-      const media = body.capture ? await body.capture().catch(() => null) : shot.buffer ? { buffer: shot.buffer, mime: shot.mime } : null
+      const media = !pictures() ? null : body.capture ? await body.capture().catch(() => null) : shot.buffer ? { buffer: shot.buffer, mime: shot.mime } : null
       const ok = ctx.confirm ? await ctx.confirm(redact(card), media?.buffer ? media : undefined) : false
       if (signal?.aborted) throw new Aborted()
       if (!ok) return `DENIED: לא אושר, ולכן לא בוצע. ${KIND[a.kind] ? `שום ${KIND[a.kind]} לא קרה.` : ''}\n${card}`

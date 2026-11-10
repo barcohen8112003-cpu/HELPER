@@ -108,7 +108,7 @@ export const vaultTools = [
             // A refusal from the page check is a definite "not filled", so it is not left as unknown.
             throw Object.assign(new Error(e.message), { status: 409 })
           }
-          return { confirmed: done.filled === true, ref: op.origin, text: `מולא ב-${op.origin}${done.user ? ' (שם משתמש וסיסמה)' : ' (סיסמה בלבד; לא נמצא שדה שם משתמש)'}. עוד לא נלחץ "התחבר".` }
+          return { confirmed: done.filled === true, ref: op.origin, text: `מולא ב-${op.origin}${done.user ? ' (שם משתמש וסיסמה)' : ' (סיסמה בלבד; לא נמצא שדה שם משתמש)'}. עוד לא נלחץ "התחבר". מעכשיו ועד הפעלה מחדש של העוזר לא נשלחות תמונות של הדפדפן או של המסך במחשב הזה, כי דף יכול להציג את הסיסמה גם מחוץ לשדה.` }
         },
       })
     },
