@@ -76,6 +76,7 @@
     "check:whatsapp-speech": "node src/whatsapp-speech-selftest.js",
     "check:live": "node src/live-voice-selftest.js",
     "check:bound": "node src/bound-actions-selftest.js",
+    "check:gmail-plus": "node src/gmail-plus-selftest.js",
     "demo:team": "node scripts/team-demo.mjs"
   },
   "dependencies": {
