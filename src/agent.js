@@ -21,7 +21,7 @@ import { locationLine } from './location.js'
 import { sessionEnabled } from './session.js'
 import { phoneRoutePrompt } from './phone.js'
 import { tvPrompt } from './tv-tools.js'
-import { memoryBlock } from './memory.js'
+import { memoryBlock, tokens } from './memory.js'
 import { learningBlock } from './learning-tools.js'
 import { record as recordAudit } from './audit.js'
 import { learnFrom } from './memory-learn.js'
@@ -34,6 +34,9 @@ const MAX_HISTORY = 60
 // In light mode the whole request has to fit a few thousand tokens, so history is folded much sooner.
 const COMPACT_AT = config.llm.light ? 12 : 40
 const KEEP_RECENT = config.llm.light ? 6 : 16
+// However many tool messages they brought, his last few messages and the answers to them stay word for word when
+// history is folded: a correction or "the first one" one message back must not hang on the summary.
+const KEEP_TURNS = config.llm.light ? 3 : 8
 const TOOL_RESULT_CHARS = config.llm.light ? 2500 : 12000
 const OLD_RESULT_CHARS = config.llm.light ? 700 : 3000
 const MAX_STEPS = config.llm.light ? 6 : 12
@@ -204,23 +207,60 @@ function trimHistory() {
 // Folds the older half of a long history into state.summary, so old context fades instead of vanishing.
 // Call between turns. On failure the history is left alone and trimHistory remains the backstop.
 // With `force` (the /compact command) everything but the last exchange is folded, however short the history.
+// Otherwise his last KEEP_TURNS messages and their answers stay. Turns the old rule (the last KEEP_RECENT messages)
+// would have folded keep only his message and the final answer, so the request stays about as big as before.
 export async function compact(force = false) {
   if (state.history.length < (force ? 4 : COMPACT_AT)) return false
-  let cut = force ? state.history.findLastIndex((m) => m.role === 'user') : state.history.length - KEEP_RECENT
-  while (cut < state.history.length && state.history[cut].role !== 'user') cut++
+  const plan = force ? { cut: state.history.findLastIndex((m) => m.role === 'user'), thin: [] } : foldPlan(state.history)
+  const { cut } = plan
   if (cut <= 0 || cut >= state.history.length) return false
   const old = state.history
     .slice(0, cut)
     .filter((m) => m.role !== 'tool' && m.content)
-    .map((m) => `${m.role === 'user' ? 'משתמש' : 'עוזר'}: ${String(m.content).slice(0, 600)}`)
+    .map((m) => `${m.role === 'user' ? 'משתמש' : 'עוזר'}: ${clipMiddle(String(m.content), 600)}`)
     .join('\n')
-  state.summary = await ask(
-    'אתה מתחזק סיכום רץ של שיחה בין משתמש לעוזר האישי שלו. מזג את הסיכום הקודם עם ההודעות החדשות לסיכום אחד בעברית, עד 200 מילים. שמור החלטות, בקשות פתוחות, דברים שהמשתמש מחכה להם והקשר שיידרש בהמשך. השמט שיחת חולין. החזר רק את הסיכום.',
-    `סיכום קודם:\n${state.summary || '(אין)'}\n\nהודעות חדשות:\n${old}`
-  )
-  state.history.splice(0, cut)
+  state.summary = await ask(SUMMARY_PROMPT, `סיכום קודם:\n${state.summary || '(אין)'}\n\nהודעות חדשות:\n${old}`)
+  const thin = new Set(plan.thin)
+  state.history = state.history.filter((m, i) => i >= cut && !thin.has(i))
   save()
   return true
+}
+
+// What the running summary must keep. The things a short follow-up leans on come first.
+const SUMMARY_PROMPT =
+  'אתה מתחזק סיכום רץ של שיחה בין משתמש לעוזר האישי שלו. מזג את הסיכום הקודם עם ההודעות החדשות לסיכום אחד בעברית, עד 200 מילים. שמור: החלטות ובחירות שלו (איזו אפשרות בחר); תיקונים שלו (הגרסה האחרונה קובעת, ובמה היא החליפה את הקודמת); מגבלות שקבע ("בלי להזמין", "לא לגעת ב..."); על מה ועל מי מדובר (המכשיר, המסמך, הנמען); מה באמת הושלם ומה רק התחיל או מחכה; בקשות פתוחות; ואיך ביקש שיענו לו (למשל רק להקשיב, בלי עצות). השמט שיחת חולין שאין לה המשך. אל תוסיף שום דבר שלא נאמר. החזר רק את הסיכום.'
+
+// A long message keeps its start and its end, where a correction or a condition usually sits.
+function clipMiddle(text, max) {
+  if (text.length <= max) return text
+  const tail = Math.floor(max / 4)
+  return `${text.slice(0, max - tail - 3)} … ${text.slice(-tail)}`
+}
+
+// Where to fold, and which tool messages to drop from the turns that stay. Pure: tested in agent-selftest.
+// cut: the first index kept. thin: indexes, after cut, of tool calls and results to drop.
+function foldPlan(history) {
+  const starts = history.flatMap((m, i) => (m.role === 'user' ? [i] : []))
+  if (!starts.length) return { cut: 0, thin: [] }
+  // The old rule: the last KEEP_RECENT messages, from a message of his.
+  let cut = history.length - KEEP_RECENT
+  while (cut < history.length && history[cut].role !== 'user') cut++
+  const keepFrom = starts[Math.max(0, starts.length - KEEP_TURNS)]
+  if (cut <= keepFrom) return { cut, thin: [] }
+  // Those turns would have been folded: they stay, and from the oldest on, a whole turn's tool calls and results
+  // are dropped (never half of them: a result without its call is refused by the API) until the kept part is
+  // back within KEEP_RECENT messages. His message and the final answer of each turn always stay.
+  const thin = []
+  let size = history.length - keepFrom
+  for (const [n, start] of starts.entries()) {
+    // The newest turn is never thinned: it is the one he is answering now.
+    if (start < keepFrom || start >= cut || start === starts.at(-1) || size <= KEEP_RECENT) continue
+    const end = starts[n + 1] ?? history.length
+    const answer = history.slice(0, end).findLastIndex((m, i) => i > start && m.role === 'assistant' && !m.tool_calls?.length)
+    for (let i = start + 1; i < end; i++) if (i !== answer) thin.push(i)
+    size -= end - start - 1 - (answer > start ? 1 : 0)
+  }
+  return { cut: keepFrom, thin }
 }
 
 // Tool output the model has already read and acted on is cut down to its opening lines. A page it fetched three
@@ -352,11 +392,14 @@ async function work(messages, ctx, scaffold) {
   ctx.planTouched = false
   ctx.verified = false
   const query = lastUserText(messages)
+  // A short follow-up ("תמשיך", "טוב תעשה את זה") says nothing about its subject, so memory and lessons are looked
+  // up by what the conversation is about: his last messages and the last answer, as routing reads them.
+  const recall = tokens(query).length <= 3 ? routingText(messages, ctx.plan?.goal || '') : query
   // An isolated turn (the remote panel) reads none of his private context: no memory, no learned notes, no open
   // loops, no WhatsApp summary. It brings its own system prompt and its own tool list.
   const isolated = Boolean(ctx.isolated)
-  const memory = isolated ? '' : memoryBlock(query, { english: config.llm.light })
-  const learning = isolated ? '' : learningBlock(query, { english: config.llm.light })
+  const memory = isolated ? '' : memoryBlock(recall, { english: config.llm.light })
+  const learning = isolated ? '' : learningBlock(recall, { english: config.llm.light })
   // What he left open, so a message that settles one closes it. Read once per turn: open_loop answers for itself.
   const loops = isolated ? '' : loopsBlock(config.llm.light)
   // A background task is long work by definition; a scheduled check is usually one lookup.
@@ -551,4 +594,4 @@ export function resetHistory() {
 }
 
 // Exposed for the self-tests only.
-export const _test = { runsInParallel, lastUserText, approvalText, closingAnswer, systemPrompt }
+export const _test = { runsInParallel, lastUserText, approvalText, closingAnswer, systemPrompt, foldPlan, clipMiddle, KEEP_TURNS, KEEP_RECENT }
