@@ -43,6 +43,8 @@
     "check:study": "node src/study-selftest.js",
     "check:approval": "node src/approval-selftest.js",
     "check:agent": "node src/agent-selftest.js",
+    "check:continuity": "node src/continuity-selftest.js",
+    "eval:converse": "node scripts/converse-eval.mjs",
     "check:routing": "node src/routing-selftest.js",
     "check:flights": "node src/flights-selftest.js",
     "check:proactive": "node src/proactive-selftest.js",
