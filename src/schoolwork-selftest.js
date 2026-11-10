@@ -30,8 +30,20 @@ const { getDay } = await import('./day.js')
 const FILE = path.join(tmp, 'schoolwork.json')
 
 state.owner = { jid: 'owner@s.whatsapp.net' }
+// notify goes through the real outbox (src/outbox.js), so "accepted" below is the outbox's own contract: the key
+// is in state.sentKeys. `sent` records what the outbox newly accepted; WhatsApp itself is a stand-in.
+const { createOutbox } = await import('./outbox.js')
+const wire = { fail: false, sent: [] }
+const outbox = createOutbox(async (text) => {
+  if (wire.fail) throw new Error('WhatsApp not connected')
+  wire.sent.push(text)
+})
 const sent = []
-const notify = async (text, urgent = false, key, kind) => void sent.push({ text, urgent, key, kind })
+const notify = async (text, urgent = false, key, kind) => {
+  const before = Boolean(key && state.sentKeys.includes(key))
+  await outbox.notify(text, urgent, key)
+  if (!before) sent.push({ text, urgent, key, kind })
+}
 const clear = () => (sent.length = 0)
 // Wall-clock moments in Israel, given as UTC instants.
 const at = (iso) => Date.parse(iso)
@@ -171,7 +183,7 @@ const runWebtop = async (read, nowMs) => {
   groups.setModel(async () =>
     JSON.stringify({
       items: [
-        { msg: 1, type: 'homework', title: 'שיעורי בית במתמטיקה: תרגילים 1-5 עמוד 40', date: '2026-11-12', time: '', importance: 4 },
+        { msg: 1, type: 'homework', title: 'עבודת חקר על פונקציות במתמטיקה', date: '2026-11-19', time: '', importance: 4 },
         { msg: 2, type: 'homework', title: 'לקרוא פרק 3 בהיסטוריה על המהפכה הצרפתית', date: '2026-11-15', time: '', importance: 3 },
         { msg: 3, type: 'homework', title: 'דף עבודה בפיזיקה', date: '', time: '', importance: 3 },
         { msg: 4, type: 'homework', title: '50 שכיבות סמיכה לאימון', date: '2026-11-11', time: '', importance: 3 },
@@ -184,8 +196,8 @@ const runWebtop = async (read, nowMs) => {
   check('homework from a chosen school group is announced', Boolean(alert) && alert.text.includes('לקרוא פרק 3 בהיסטוריה'), JSON.stringify(sent))
   check('a group that is not on the list is not read for homework', !JSON.stringify(SW.load()).includes('שכיבות') && !sent.some((m) => m.text.includes('שכיבות')))
   const items = SW.load().items
-  const copy = items.find((i) => i.id.endsWith(':m1'))
-  check('the same assignment in Classroom and the group is one item', !alert.text.includes('תרגילים 1-5') && copy.also.some((a) => a.source === 'groups'), JSON.stringify(copy))
+  const copy = items.find((i) => i.id.endsWith(':m2'))
+  check('the same open assignment in Classroom and the group is one item', !alert.text.includes('עבודת חקר') && copy.also.some((a) => a.source === 'groups'), JSON.stringify(copy))
   check('the same homework written twice in the groups is one item', items.filter((i) => i.title.includes('היסטוריה')).length === 1 && (alert.text.match(/היסטוריה/g) || []).length === 1, alert.text)
   const unsure = items.find((i) => i.title === 'דף עבודה בפיזיקה')
   check('no date from a group: kept as unsure, without a made-up date', unsure && unsure.confidence === 'low' && unsure.due === null && alert.text.includes('בלי תאריך הגשה') && alert.text.includes('(לא בטוח)'), alert.text)
@@ -215,13 +227,19 @@ const runWebtop = async (read, nowMs) => {
     sent.push({ text, urgent, key })
   }
   await SW.fromClassroom(['student@school.example'], [fulfilled([cw('m2', 'עבודת חקר על פונקציות', '2026-11-19T21:59:00Z'), cw('m3', 'סיכום פרק 4', '2026-11-20T21:59:00Z')])], flaky, T0 + 2000000).catch(() => {})
-  const pendingKey = SW.load().pending?.key
-  check('an alert that did not go out is kept on disk', Boolean(pendingKey))
+  const pendingKey = SW.load().pending[0]?.key
+  check('an alert that did not go out is kept on disk', Boolean(pendingKey) && !SW.load().items.find((i) => i.id.endsWith(':m3')).alerted)
+  // A notify that resolves without the outbox taking it is not taken as delivered.
+  await SW.schoolworkJob(async () => {}, null, null, T0 + 2050000)
+  check('a resolved notify that the outbox never took does not clear the alert', SW.load().pending.length === 1)
+  // A second alert while the first is still waiting: both are kept.
+  await SW.fromClassroom(['student@school.example'], [fulfilled([cw('m2', 'עבודת חקר על פונקציות', '2026-11-19T21:59:00Z'), cw('m3', 'סיכום פרק 4', '2026-11-20T21:59:00Z'), cw('m4', 'שאלון 7', '2026-11-21T21:59:00Z')])], flaky, T0 + 2060000)
+  check('a second alert while the first waits does not replace it', SW.load().pending.length === 2)
   SW._reload()
   fail = false
-  await SW.schoolworkJob(flaky, null, null, T0 + 2100000)
-  check('after the restart it is sent with the same key (the outbox drops a repeat)', sent.length === 1 && sent[0].key === pendingKey && sent[0].text.includes('סיכום פרק 4'), JSON.stringify(sent))
-  check('and then it is done', SW.load().pending === null && SW.load().items.find((i) => i.id.endsWith(':m3')).alerted)
+  await SW.schoolworkJob(notify, null, null, T0 + 2100000)
+  check('after the restart both are handed over, oldest first, with their keys', sent.length === 2 && sent[0].key === pendingKey && sent[0].text.includes('סיכום פרק 4') && sent[1].text.includes('שאלון 7'), JSON.stringify(sent))
+  check('and then they are done', SW.load().pending.length === 0 && SW.load().items.find((i) => i.id.endsWith(':m3')).alerted && SW.load().items.find((i) => i.id.endsWith(':m4')).alerted)
   clear()
 }
 
@@ -242,7 +260,7 @@ const runWebtop = async (read, nowMs) => {
   check('it repeats items still open (announced before)', daily.text.includes('לקרוא פרק 3 בהיסטוריה'))
   check('turned-in work is not listed as open', !daily.text.includes('• ' + SW.load().items.find((i) => i.id.endsWith(':m1')).n + '. תרגילים'))
   check('a reported cancellation is shown as unverified', daily.text.includes('נכתב בקבוצה שבוטל או נדחה, לא מאומת'))
-  check('a source that is off is named as not checked', daily.text.includes('✗ Webtop: לא מחובר או כבוי'), daily.text)
+  check('a source that is off is named as not checked', daily.text.includes('✗ Webtop (מבחנים, מטלות והודעות): לא מחובר או כבוי') && daily.text.includes('✗ לוח שיעורי הבית ב-Webtop'), daily.text)
   check('a checked source says when', daily.text.includes('✓ Classroom: נבדק'), daily.text)
   clear()
   await SW.schoolworkJob(notify, null, null, D + 5 * 60000)
@@ -271,7 +289,7 @@ const runWebtop = async (read, nowMs) => {
   s.sources = { classroom: { lastOk: T0, baselined: true }, webtop: { lastOk: T0, baselined: true } }
   groups.load().lastExtract = T0
   const clean = await SW.summaryText(T0 + 60000)
-  check('all sources checked and empty: says which were checked', clean.includes('לא מצאתי מטלות פתוחות ב: Classroom, Webtop, קבוצות') && !clean.includes('✗'), clean)
+  check('all readable sources checked and empty: still not "no homework", the Webtop homework board is named as not read', clean.includes('זה לא אומר שאין שיעורי בית') && clean.includes('✗ לוח שיעורי הבית ב-Webtop: לא נקרא בכלל') && clean.includes('✓ Webtop (מבחנים, מטלות והודעות): נבדק') && clean.split('✗').length === 2, clean)
   const stale = await SW.summaryText(T0 + 3 * 3600000)
   check('an old read is stale, a gap', stale.includes('המידע ישן'), stale)
   process.env.SCHOOLWORK_GROUPS = 'י6,מגמת מחשבים'
@@ -294,17 +312,152 @@ const runWebtop = async (read, nowMs) => {
   check('a source that still says not turned in does not reopen what he said he finished', SW.load().items.find((i) => i.n === n).status === 'done')
   check('undo brings it back', (await tool.run({ action: 'undo', items: [n] }, {})).includes('החזרתי') && SW.load().items.find((i) => i.n === n).status === 'open')
   const status = await tool.run({ action: 'status' }, {})
-  check('status says Webtop is not real time', status.includes('אין חיבור בזמן אמת ל-Webtop') && status.includes('15:00 (Asia/Jerusalem)'), status)
+  check('status says Webtop is not real time', status.includes('שום מקור לא בזמן אמת') && status.includes('15:00 (Asia/Jerusalem)'), status)
   const day = await getDay(new Date(T0))
   check('the morning brief takes the same open list', day.homework.some((h) => h.title === 'עבודת חקר על פונקציות' && h.course.includes('Classroom')), JSON.stringify(day.homework))
   clear()
 }
 
-// ── retention ──────────────────────────────────────────────────────────────────
+// ── retention: closed items go after a week, open items never go ───────────────
 {
-  SW.prune(at('2026-12-20T10:00:00Z'))
-  check('old records go after the set time (open ones two weeks after their date)', !SW.load().items.some((i) => i.due?.day && i.due.day < '2026-12-06'))
+  const before = SW.load().items.filter((i) => i.status === 'open').length
+  SW.prune(at('2027-03-01T10:00:00Z'))
+  check('open items are never pruned for age', SW.load().items.filter((i) => i.status === 'open').length === before && before > 0)
+  check('closed items go a week after closing', !SW.load().items.some((i) => i.status !== 'open'))
   check('the homework file is not in the Drive backup list', !fs.readFileSync(new URL('./backup.js', import.meta.url), 'utf8').includes('schoolwork.json'))
+}
+
+// ── review 1: old open work is shown, not hidden or deleted; long lists say how many more ──
+{
+  SW.forget()
+  SW._setProbes({ classroom: async () => true, webtop: async () => true })
+  const now = at('2026-11-10T13:00:00Z')
+  SW.ingest('webtop', [{ sourceId: 'one', title: 'מטלה בהיסטוריה', due: { day: '2026-11-01' }, confidence: 'high' }], now)
+  const summary = await SW.summaryText(now)
+  check('work 9 days past due is still in the summary', summary.includes('מטלה בהיסטוריה') && summary.includes('עבר המועד') && summary.includes('לפני 9 ימים') && !summary.includes('לא מצאתי מטלות פתוחות'), summary)
+  SW.prune(at('2026-11-20T13:00:00Z'))
+  check('and is not deleted after two weeks either', SW.load().items.length === 1)
+  SW.ingest('webtop', Array.from({ length: 30 }, (_, k) => ({ sourceId: `many${k}`, title: `דף עבודה מספר ${k + 1} בנושא ${k}`, due: { day: '2026-11-25' }, confidence: 'medium' })), now)
+  const daily = await SW.summaryText(now, { daily: true })
+  check('the daily message lists 25 and counts the rest', (daily.match(/^• /gm) || []).length === 25 && daily.includes('ועוד 6 פתוחות') && daily.includes('פתוחות: 31'), daily)
+  check('past-due work comes first in a long list', daily.indexOf('מטלה בהיסטוריה') > 0 && daily.indexOf('מטלה בהיסטוריה') < daily.indexOf('דף עבודה מספר 1 '))
+  const full = await tools.find((t) => t.name === 'school_homework').run({ action: 'list' }, {})
+  check('the tool lists every open item', (full.match(/^• /gm) || []).length === 31 && !full.includes('ועוד'), full.slice(0, 300))
+  const brief = SW.briefHomework(now)
+  check('the morning brief says how many more', brief.length === 9 && brief[8].title === 'ועוד 23 פתוחות')
+}
+
+// ── review 2: authoritative submission at once; new work never folded into a closed record ──
+{
+  SW.forget()
+  const now = at('2026-11-10T13:00:00Z')
+  // Through the real paths: a group round first, then the Classroom round that says it was turned in.
+  process.env.SCHOOLWORK_GROUPS = 'י6'
+  groups.reset()
+  groups.setEnabled(true, now - 3600000)
+  groups.setGroupNames([{ jid: 'class@g.us', name: 'כיתה י6' }])
+  groups.capture({ group: 'class@g.us', id: 'r1', sender: 'x@s.whatsapp.net', at: Math.floor(now / 1000) - 60, text: 'שיעורי בית: תרגיל 1 במתמטיקה עד יום חמישי' })
+  groups.setModel(async () => JSON.stringify({ items: [{ msg: 1, type: 'homework', title: 'תרגיל 1 מתמטיקה', date: '2026-11-12', time: '', importance: 4 }] }))
+  await groups.tick({ notify, onFresh: SW.groupsHook(notify) }, now)
+  check('the group item is open first', SW.load().items.length === 1 && SW.load().items[0].status === 'open')
+  SW.load().sources.classroom = { baselined: true }
+  await classroomRound(notify, ['student@school.example'], [fulfilled([cw('c1', 'תרגיל 1 מתמטיקה', '2026-11-12T21:59:00Z', { submitted: true })])], now + 60000)
+  const one = SW.load().items
+  check('Classroom "turned in" for the same work closes it in the same round', one.length === 1 && one[0].status === 'submitted' && one[0].also.some((a) => a.source === 'classroom'), JSON.stringify(one))
+  const first = await SW.summaryText(now + 120000, { daily: true })
+  check('so the first summary already does not list it as open', first.includes('פתוחות: 0'), first)
+  clear()
+  // The reviewer's case: closed undated Classroom record, then a new dated Webtop item with the same title.
+  SW.forget()
+  SW.ingest('classroom', [{ sourceId: 'old', title: 'תרגיל מתמטיקה משוואות', due: null, submitted: true, confidence: 'high' }], now)
+  SW.load().sources.webtop = { baselined: true }
+  const added = SW.ingest('webtop', [{ sourceId: 'new', title: 'תרגיל מתמטיקה משוואות', due: { day: '2026-11-15' }, confidence: 'medium' }], now)
+  check('new work is not folded into a closed record', added.fresh.length === 1 && SW.load().items.filter((i) => i.status === 'open').length === 1 && SW.load().items.length === 2, JSON.stringify(SW.load().items))
+  // Open, one side dated and the other not: two items, not a guess.
+  SW.forget()
+  SW.ingest('classroom', [{ sourceId: 'u1', title: 'תרגיל מתמטיקה משוואות', due: null, confidence: 'high' }], now)
+  SW.load().sources.webtop = { baselined: true }
+  const two = SW.ingest('webtop', [{ sourceId: 'd1', title: 'תרגיל מתמטיקה משוואות', due: { day: '2026-11-15' }, confidence: 'medium' }], now)
+  check('one dated and one undated are kept apart', two.fresh.length === 1 && SW.load().items.length === 2)
+  // Two Webtop ids are two assignments, however alike.
+  const three = SW.ingest('webtop', [{ sourceId: 'd2', title: 'תרגיל מתמטיקה משוואות', due: { day: '2026-11-15' }, confidence: 'medium' }], now)
+  check('two ids from the same source stay two items', three.fresh.length === 1 && SW.load().items.length === 3)
+  clear()
+}
+
+// ── review 4: the daily summary between "it is time" and "the outbox has it" ────
+{
+  SW.forget()
+  SW._setProbes({ classroom: async () => true, webtop: async () => true })
+  SW.ingest('webtop', [{ sourceId: 'x', title: 'מטלת סיכום בספרות', due: { day: '2026-11-12' }, confidence: 'medium' }], at('2026-11-12T10:00:00Z'))
+  const D = at('2026-11-12T13:00:00Z')
+  const key = 'schoolwork-daily:2026-11-12'
+  const countQueued = () => state.outbox.filter((m) => m.key === key).length + wire.sent.filter((t) => t.includes('מטלת סיכום בספרות') && t.includes('מה פתוח')).length
+  // a. Throws before the outbox took it (the process "crashes" in notify): the day is not lost.
+  await SW.schoolworkJob(async () => {
+    throw new Error('crash before enqueue')
+  }, null, null, D)
+  check('a throw before the outbox took it keeps the day pending', SW.load().pendingDaily?.day === '2026-11-12' && SW.load().lastDaily !== '2026-11-12' && !state.sentKeys.includes(key))
+  SW._reload()
+  await SW.schoolworkJob(notify, null, null, D + 60000)
+  check('after the restart it is handed over once', sent.filter((m) => m.key === key).length === 1 && SW.load().lastDaily === '2026-11-12' && !SW.load().pendingDaily && countQueued() === 1, JSON.stringify(sent))
+  await SW.schoolworkJob(notify, null, null, D + 120000)
+  SW._reload()
+  await SW.schoolworkJob(notify, null, null, D + 180000)
+  check('and not again, also after another restart', sent.filter((m) => m.key === key).length === 1 && countQueued() === 1)
+  clear()
+  // b. The outbox took it, then the process died before the bookkeeping.
+  const D2 = at('2026-11-13T13:00:00Z')
+  const key2 = 'schoolwork-daily:2026-11-13'
+  await SW.schoolworkJob(async (text, urgent, k) => {
+    await notify(text, urgent, k)
+    throw new Error('crash after enqueue')
+  }, null, null, D2)
+  check('accepted then crashed: the outbox has it once', state.sentKeys.includes(key2) && sent.filter((m) => m.key === key2).length === 1)
+  SW._reload()
+  const s = SW.load()
+  s.lastDaily = '2026-11-12'
+  s.pendingDaily = { day: '2026-11-13', key: key2, at: D2 }
+  SW.persist()
+  SW._reload()
+  await SW.schoolworkJob(notify, null, null, D2 + 60000)
+  check('after the restart only the bookkeeping is done, nothing is handed over again', sent.filter((m) => m.key === key2).length === 1 && SW.load().lastDaily === '2026-11-13' && !SW.load().pendingDaily)
+  clear()
+  // c. An ordinary WhatsApp outage: the outbox queues it and that counts as handed over.
+  wire.fail = true
+  const D3 = at('2026-11-14T13:00:00Z')
+  const key3 = 'schoolwork-daily:2026-11-14'
+  await SW.schoolworkJob(notify, null, null, D3)
+  check('WhatsApp down: queued in the outbox, the day is done, no second copy', SW.load().lastDaily === '2026-11-14' && state.outbox.filter((m) => m.key === key3).length === 1)
+  await SW.schoolworkJob(notify, null, null, D3 + 60000)
+  check('the next round does not queue it again', state.outbox.filter((m) => m.key === key3).length === 1)
+  wire.fail = false
+  await outbox.flush()
+  check('when WhatsApp is back the queued summary goes out', !state.outbox.some((m) => m.key === key3) && state.outboxSent.includes(key3))
+  clear()
+  // d. Written as pending and the process died before notify was called at all.
+  const D4 = at('2026-11-15T13:00:00Z')
+  const s4 = SW.load()
+  s4.pendingDaily = { day: '2026-11-15', key: 'schoolwork-daily:2026-11-15', at: D4 }
+  SW.persist()
+  SW._reload()
+  await SW.schoolworkJob(notify, null, null, D4 + 30000)
+  check('pending and never handed over: sent after the restart', sent.filter((m) => m.key === 'schoolwork-daily:2026-11-15').length === 1 && SW.load().lastDaily === '2026-11-15')
+  clear()
+  // e. A pending summary from yesterday that never reached the outbox is not sent late.
+  const s5 = SW.load()
+  s5.pendingDaily = { day: '2026-11-15', key: 'schoolwork-daily:2026-11-15-lost', at: D4 }
+  s5.lastDaily = '2026-11-15'
+  SW.persist()
+  await SW.schoolworkJob(notify, null, null, at('2026-11-16T13:00:00Z'))
+  check("yesterday's lost summary is dropped, today's goes out", !SW.load().pendingDaily && sent.length === 1 && sent[0].key === 'schoolwork-daily:2026-11-16', JSON.stringify(sent))
+  clear()
+}
+
+// ── review 3: what each source really covers, and how often ────────────────────
+{
+  const status = await tools.find((t) => t.name === 'school_homework').run({ action: 'status' }, {})
+  check('status says nothing is real time and gives each cadence', status.includes('שום מקור לא בזמן אמת') && status.includes('Classroom כל 5 דקות') && status.includes('קבוצות כל 10 דקות') && status.includes('Webtop פעם ב-60 דקות') && status.includes('✗ לוח שיעורי הבית ב-Webtop'), status)
 }
 
 console.log(ok ? '\nschoolwork: all passed' : '\nschoolwork: FAILED')

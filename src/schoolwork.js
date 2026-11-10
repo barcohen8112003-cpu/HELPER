@@ -6,7 +6,8 @@
 // - Every day at SCHOOLWORK_DAILY_TIME (15:00) in SCHOOLWORK_TZ (Asia/Jerusalem) he gets what is still open,
 //   with the due date, where it came from, how sure Helper is, and which sources could not be checked.
 // - An item is closed only on evidence: Classroom says it was turned in, or he said he finished it.
-//   Disappearing from a source, an old date, or a model's guess never closes it.
+//   Disappearing from a source, an old date, or a model's guess never closes it, and an open item is never deleted
+//   or left out of the summary for being old: it stays until there is evidence, or he asks to forget it.
 // - A source that is off, failing or stale is a coverage gap in the summary, never "no homework".
 //
 // Off until SCHOOLWORK=on. While off nothing is stored and nothing is sent: every hook returns at once.
@@ -15,18 +16,20 @@
 // Nothing here writes to Classroom, Webtop, a group, a teacher or the calendar.
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { DATA_DIR, config } from './config.js'
 import { state } from './store.js'
 import * as groups from './groups.js'
 
 const FILE = () => path.join(DATA_DIR, 'schoolwork.json')
-const MAX_ITEMS = 300
+const MAX_CLOSED = 300 // closed items kept for the record; open items are never dropped for room
+const DAILY_LINES = 25 // the daily message lists this many open items, then says how many more there are
 const MAX_EVIDENCE = 6
 const DAY = 86400000
 const DAILY_WINDOW_MIN = 5 * 60 // started after 20:00: today's summary is skipped rather than sent at night
+// How long a CLOSED item (turned in, or he said he finished) stays on file. Proposed, not agreed: the retention
+// decision is still open with the owner, and the feature stays off until it is made. Open items have no limit here.
 const KEEP_CLOSED_DAYS = 7
-const KEEP_PAST_DUE_DAYS = 14
-const KEEP_UNDATED_DAYS = 21
 
 const truthy = (v) => ['on', '1', 'true', 'yes'].includes(String(v || '').trim().toLowerCase())
 export const settings = () => {
@@ -75,7 +78,8 @@ const empty = () => ({
   items: [], // see addItem
   sources: {}, // { [source]: { lastOk, lastError, lastErrorAt, baselined, note } }
   lastDaily: '', // the school-zone day the last daily summary went out
-  pending: null, // { key, text, ids, at }: an alert handed to notify and not yet confirmed
+  pending: [], // [{ key, text, ids, at }]: alerts written down and not yet accepted by the outbox (see accepted())
+  pendingDaily: null, // { day, key, at }: today's summary, until the outbox accepted it
   nextNum: 1,
 })
 let cache = null
@@ -92,6 +96,9 @@ export function load() {
     }
   }
   cache = { ...empty(), ...saved }
+  // A file from the first draft held one pending alert, not a list.
+  if (cache.pending && !Array.isArray(cache.pending)) cache.pending = [cache.pending]
+  cache.pending ||= []
   return cache
 }
 // Written at once, every time: a restart must never announce the same assignment twice.
@@ -163,21 +170,38 @@ function addItem(s, source, e, nowMs) {
   return item
 }
 
-// The open item that a new entry from another source is a copy of: same due day (or one side has none) and
-// mostly the same words.
+// The OPEN item that a new entry from another source is a copy of. Cautious on purpose: a wrong match hides new
+// work, a missed match only repeats one line. So:
+// - only open items: new work is never folded into something already turned in or finished;
+// - the same due day on both sides, or no date on either side with nearly the same words. One side dated and the
+//   other not is two items;
+// - Classroom and Webtop ids are their own: two ids from the same one are two assignments. Group items have no such
+//   id, so the same homework written twice in the groups is matched like a copy.
 function copyOf(s, source, e) {
   let best = null
   let bestScore = 0
   for (const i of s.items) {
-    // Classroom and Webtop ids are their own: two ids there are two assignments. Group items have no such id, so the
-    // same homework written twice (two groups, two phrasings) is matched like a copy from another source.
-    if ((i.source === source && source !== 'groups') || i.id === `${source}:${e.sourceId}` || i.also.some((a) => a.source === source && a.id === e.sourceId)) continue
-    if (i.due?.day && e.due?.day && i.due.day !== e.due.day) continue
+    if (!isOpen(i)) continue
+    if ((i.source === source && source !== 'groups') || i.id === `${source}:${e.sourceId}` || i.also.some((a) => a.source === source)) continue
+    const dated = Boolean(i.due?.day) + Boolean(e.due?.day)
+    if (dated === 1 || (dated === 2 && i.due.day !== e.due.day)) continue
     const score = similarity(textOf(e), textOf(i))
-    const need = i.due?.day && e.due?.day ? 0.5 : 0.7
-    if (score >= need && score > bestScore) (best = i), (bestScore = score)
+    if (score >= (dated === 2 ? 0.5 : 0.8) && score > bestScore) (best = i), (bestScore = score)
   }
   return best
+}
+
+// Submission state from a source that knows it (Classroom), applied the moment it is read.
+function applySubmission(item, e, source, nowMs) {
+  if (e.submitted === true && item.status === 'open') {
+    item.status = 'submitted'
+    item.closedAt = nowMs
+    note(item, 'submitted', `${LABEL[source]}: הוגש`, nowMs)
+  } else if (e.submitted === false && item.status === 'submitted') {
+    item.status = 'open'
+    item.closedAt = 0
+    note(item, 'reopened', `${LABEL[source]}: מסומן שוב כלא הוגש`, nowMs)
+  }
 }
 
 // entries: [{ sourceId, title, course, due: { day, time } | null, link, submitted?, confidence, kind? }]
@@ -210,16 +234,8 @@ export function ingest(source, entries, nowMs = Date.now()) {
         item.due = { day: e.due.day, time: e.due.time || null }
         if (!first) updated.push({ item, what: 'due' })
       }
-      // Submission state only from a source that knows it (Classroom). Not seeing it any more is not evidence.
-      if (e.submitted === true && item.status === 'open') {
-        item.status = 'submitted'
-        item.closedAt = nowMs
-        note(item, 'submitted', `${LABEL[source]}: הוגש`, nowMs)
-      } else if (e.submitted === false && item.status === 'submitted') {
-        item.status = 'open'
-        item.closedAt = 0
-        note(item, 'reopened', `${LABEL[source]}: מסומן שוב כלא הוגש`, nowMs)
-      }
+      // Not seeing it any more is not evidence; only a source's own submission state is.
+      applySubmission(item, e, source, nowMs)
       continue
     }
     const copy = copyOf(s, source, e)
@@ -230,6 +246,8 @@ export function ingest(source, entries, nowMs = Date.now()) {
       if (RANK[e.confidence] > RANK[copy.confidence]) copy.confidence = e.confidence
       if (!copy.link && /^https:\/\//.test(e.link || '')) copy.link = e.link
       note(copy, 'also', `גם ב-${LABEL[source]}`, nowMs)
+      // Classroom saying "turned in" for the copy closes it now, not on the next read.
+      applySubmission(copy, e, source, nowMs)
       continue
     }
     const added = addItem(s, source, e, nowMs)
@@ -240,9 +258,17 @@ export function ingest(source, entries, nowMs = Date.now()) {
   src.baselined = true
   src.lastOk = nowMs
   src.lastError = ''
-  if (s.items.length > MAX_ITEMS) s.items = s.items.slice(-MAX_ITEMS)
+  capClosed(s)
   persist()
   return { fresh, updated }
+}
+
+// Room is made by dropping the oldest closed items only.
+function capClosed(s) {
+  const closed = s.items.filter((i) => !isOpen(i))
+  if (closed.length <= MAX_CLOSED) return
+  const drop = new Set(closed.sort((a, b) => (a.closedAt || a.lastSeen) - (b.closedAt || b.lastSeen)).slice(0, closed.length - MAX_CLOSED))
+  s.items = s.items.filter((i) => !drop.has(i))
 }
 
 export function sourceFailed(source, error, nowMs = Date.now()) {
@@ -260,8 +286,18 @@ const where = (i) => (i.source === 'groups' ? `קבוצת ${i.course || 'ווא�
 const UNSURE = { low: ' (לא בטוח)', medium: '', high: '' }
 export const itemLine = (i, nowMs = Date.now()) => `${i.n}. ${i.title} · ${dueLabel(i.due, nowMs)} · ${where(i)}${UNSURE[i.confidence] || ''}${i.also.length ? ` (גם ב-${[...new Set(i.also.map((a) => LABEL[a.source]))].join(', ')})` : ''}`
 
-// One message for a round, through notify (quiet hours and the daily budget apply). The text is written to the file
-// before notify is called and cleared after, so a crash in between resends the same key, and the outbox drops it.
+// What notify's answer means (src/index.js notify -> src/outbox.js notify). A resolved call is NOT proof of
+// anything: outbox.notify resolves after a flush that swallows send errors, and a muted kind resolves having sent
+// nothing. What is grounded is this: every path that takes a keyed notice (sent, queued in the outbox, held for
+// the brief, or dropped by his own mute) writes the key into state.sentKeys and saves state.json synchronously,
+// before notify returns. So "accepted" = the key is in state.sentKeys. Delivery after that is the outbox's
+// at-least-once queue. Not accepted (notify threw first, or the process died before that save) = safe to hand over
+// again with the same key: the outbox ignores a key it already has.
+export const accepted = (key) => Boolean(key && state.sentKeys?.includes(key))
+const digest = (parts) => createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 24)
+
+// One message for a round, through notify (quiet hours and the daily budget apply). Written to the file before
+// notify is called, and taken off only once accepted, so a crash or a throw in between hands it over again.
 async function announce(notify, fresh, updated, nowMs) {
   const s = load()
   const lines = []
@@ -278,20 +314,31 @@ async function announce(notify, fresh, updated, nowMs) {
   }
   if (!lines.length) return false
   const ids = [...fresh.map((i) => i.id), ...changes.map((u) => `${u.item.id}~${u.what}~${u.item.due?.day || ''}${u.item.due?.time || ''}~${u.item.reported?.ref || ''}`)]
-  s.pending = { key: `schoolwork-alert:${ids.join('|').slice(0, 400)}`, text: lines.join('\n'), ids: fresh.map((i) => i.id), at: nowMs }
+  s.pending.push({ key: `schoolwork-alert:${digest(ids)}`, text: lines.join('\n'), ids: fresh.map((i) => i.id), at: nowMs })
   persist()
   return flushPending(notify)
 }
 
+// Hands over what is written down, oldest first. Each is taken off only when accepted. A throw leaves it (and the
+// rest) for the next round. Returns how many were accepted.
 export async function flushPending(notify) {
   const s = load()
-  const p = s.pending
-  if (!p) return false
-  await notify(p.text, false, p.key, 'schoolwork')
-  for (const i of s.items) if (p.ids.includes(i.id)) i.alerted = true
-  s.pending = null
-  persist()
-  return true
+  let done = 0
+  for (const p of [...s.pending]) {
+    if (!accepted(p.key)) {
+      try {
+        await notify(p.text, false, p.key, 'schoolwork')
+      } catch (e) {
+        console.log(`[schoolwork] alert not handed over yet: ${e.message}`)
+      }
+    }
+    if (!accepted(p.key)) break
+    for (const i of s.items) if (p.ids.includes(i.id)) i.alerted = true
+    s.pending = s.pending.filter((x) => x !== p)
+    persist()
+    done++
+  }
+  return done
 }
 
 // ── adapters: what each existing hook hands over ──────────────────────────────────────────────────────
@@ -426,7 +473,10 @@ export async function coverage(nowMs = Date.now()) {
   }
   row('classroom', 'Classroom', 30, 'נבדק כל 5 דקות', await probes.classroom().catch(() => false))
   const webtopEvery = config.webtop.alertsMinutes
-  row('webtop', 'Webtop', webtopEvery * 2 + 15, `נבדק פעם ב-${webtopEvery} דק', לא בזמן אמת`, await probes.webtop().catch(() => false))
+  row('webtop', 'Webtop (מבחנים, מטלות והודעות)', webtopEvery * 2 + 15, `נבדק פעם ב-${webtopEvery} דק', לא בזמן אמת`, await probes.webtop().catch(() => false))
+  // Webtop has a homework board of its own. Helper does not read it (no reader exists for it, and adding one means a
+  // new authenticated read that was not approved), so whatever is only there is not covered. Always a gap.
+  rows.push({ source: 'webtop-homework', label: 'לוח שיעורי הבית ב-Webtop', ok: false, text: 'לוח שיעורי הבית ב-Webtop: לא נקרא בכלל, אז שיעורי בית שמופיעים רק שם לא נבדקו' })
   const wanted = settings().groups
   if (!wanted.length) rows.push({ source: 'groups', label: 'קבוצות', ok: false, text: 'קבוצות וואטסאפ: לא נבחרו קבוצות של בית הספר (SCHOOLWORK_GROUPS)' })
   else if (!groups.groupsOn()) rows.push({ source: 'groups', label: 'קבוצות', ok: false, text: 'קבוצות וואטסאפ: המעקב אחרי הקבוצות כבוי' })
@@ -445,23 +495,31 @@ export async function coverage(nowMs = Date.now()) {
 }
 
 // ── the daily summary ──────────────────────────────────────────────────────────────────────────────
-export async function summaryText(nowMs = Date.now(), { daily = false } = {}) {
+// limit: how many open items the message lists (the daily message caps it; the tool shows all). Anything past it is
+// counted, never silently left out. Every open item counts, however old.
+export async function summaryText(nowMs = Date.now(), { daily = false, limit = daily ? DAILY_LINES : Infinity } = {}) {
   const s = load()
   const now = wall(nowMs)
   const open = s.items.filter(isOpen).sort((a, b) => dueSort(a).localeCompare(dueSort(b)))
+  const late = open.filter((i) => pastDue(i, nowMs))
   const upcoming = open.filter((i) => !pastDue(i, nowMs))
-  const late = open.filter((i) => pastDue(i, nowMs) && dayNum(now.day) - dayNum(i.due.day) <= 3)
   const reported = open.filter((i) => i.reported)
   const submitted = s.items.filter((i) => i.status === 'submitted' && nowMs - (i.closedAt || 0) < 7 * DAY).length
   const cov = await coverage(nowMs)
   const gaps = cov.filter((c) => !c.ok)
   const [, m, d] = now.day.split('-').map(Number)
-  const lines = [`📚 *מה פתוח בשיעורי בית ומטלות* (יום ${DAYS[weekday(now.day)]} ${d}.${m}${daily ? `, ${now.time}` : ''})`]
-  if (upcoming.length) lines.push('', ...upcoming.slice(0, 15).map((i) => `• ${itemLine(i, nowMs)}${i.reported ? ' ❓' : ''}`))
-  if (late.length) lines.push('', '⚠️ עבר המועד ואין לי אישור שהוגש:', ...late.map((i) => `• ${itemLine(i, nowMs)}`))
+  const lines = [`📚 *מה פתוח בשיעורי בית ומטלות* (יום ${DAYS[weekday(now.day)]} ${d}.${m}${daily ? `, ${now.time}` : ''})`, `פתוחות: ${open.length}${late.length ? `, מהן ${late.length} שעבר המועד שלהן` : ''}`]
+  // Past due first: they are the ones most likely to be forgotten.
+  const shownLate = late.slice(0, limit)
+  const shownUpcoming = upcoming.slice(0, Math.max(0, limit - shownLate.length))
+  const overdueBy = (i) => dayNum(now.day) - dayNum(i.due.day)
+  if (shownLate.length) lines.push('', '⚠️ עבר המועד ואין לי אישור שהוגש:', ...shownLate.map((i) => `• ${itemLine(i, nowMs)}${overdueBy(i) > 1 ? ` (לפני ${overdueBy(i)} ימים)` : ''}`))
+  if (shownUpcoming.length) lines.push('', ...shownUpcoming.map((i) => `• ${itemLine(i, nowMs)}${i.reported ? ' ❓' : ''}`))
+  const hidden = open.length - shownLate.length - shownUpcoming.length
+  if (hidden > 0) lines.push('', `ועוד ${hidden} פתוחות שלא נכנסו להודעה. "מה פתוח בשיעורי בית?" מציג את כולן.`)
   if (reported.length) lines.push('', '❓ נכתב בקבוצה שבוטל או נדחה, לא מאומת:', ...reported.map((i) => `• ${i.title} (${i.reported.kind === 'cancel' ? 'בוטל?' : `נדחה${i.reported.due ? ` ל${dueLabel(i.reported.due, nowMs)}` : ''}?`})`))
   if (submitted) lines.push('', `✅ הוגשו לפי Classroom בשבוע האחרון: ${submitted}`)
-  if (!upcoming.length && !late.length) {
+  if (!open.length) {
     lines.push('', gaps.length ? 'לא מצאתי מטלות פתוחות במה שהצלחתי לבדוק, אבל זה לא אומר שאין שיעורי בית: חלק מהמקורות לא נבדקו (למטה).' : `לא מצאתי מטלות פתוחות ב: ${cov.map((c) => c.label).join(', ')}.`)
   }
   lines.push('', '*מה נבדק:*', ...cov.filter((c) => c.ok).map((c) => `✓ ${c.text}`))
@@ -480,42 +538,72 @@ export function dailyDue(nowMs = Date.now(), lastDaily = load().lastDaily) {
   return late >= 0 && late < DAILY_WINDOW_MIN && lastDaily !== now.day ? now.day : ''
 }
 
-// Old records go: closed ones a week after closing, open ones two weeks after their date, undated ones three weeks
-// after they were last seen. Going is not closing: nothing is marked done here.
+// Only closed items are let go (KEEP_CLOSED_DAYS after closing). An open item stays, however old, until there is
+// evidence it is done or he asks to forget; age is never a reason to drop it or to treat it as done.
 export function prune(nowMs = Date.now()) {
   const s = load()
   const before = s.items.length
-  const today = dayNum(wall(nowMs).day)
-  s.items = s.items.filter((i) => {
-    if (!isOpen(i)) return nowMs - (i.closedAt || i.lastSeen) < KEEP_CLOSED_DAYS * DAY
-    if (i.due?.day) return today - dayNum(i.due.day) <= KEEP_PAST_DUE_DAYS
-    return nowMs - i.lastSeen < KEEP_UNDATED_DAYS * DAY
-  })
+  s.items = s.items.filter((i) => isOpen(i) || nowMs - (i.closedAt || i.lastSeen) < KEEP_CLOSED_DAYS * DAY)
   if (s.items.length !== before) persist()
 }
 
-// Scheduler job: an alert left half-sent by a restart, and the daily summary. Runs after the source jobs, so a read
-// that was due this round is already in.
+// The daily summary, so a day is never lost between "it is time" and "the outbox has it":
+//   1. pendingDaily { day, key } is written first.
+//   2. notify is called. Whatever it returns or throws, the outcome is read from accepted(key) (see above).
+//   3. Accepted: lastDaily = day and pendingDaily is cleared. Not accepted: it stays, and the next round (or the
+//      first round after a restart) hands it over again with the same key. That is not a blind retry: a key the
+//      outbox already has is ignored by it, so the most that can happen is the one message, once.
+// An ordinary WhatsApp outage is not a failure here: the outbox queues the message and accepts it.
+async function sendDaily(notify, day, nowMs) {
+  const s = load()
+  const key = `schoolwork-daily:${day}`
+  if (!accepted(key)) {
+    try {
+      // He asked for this reminder at this hour, like a reminder he set: it is not held back by the daily budget.
+      await notify(await summaryText(nowMs, { daily: true }), true, key, 'schoolwork')
+    } catch (e) {
+      console.log(`[schoolwork] daily summary not handed over yet: ${e.message}`)
+    }
+  }
+  if (!accepted(key)) return false
+  s.lastDaily = day
+  s.pendingDaily = null
+  persist()
+  return true
+}
+
+// Scheduler job: alerts written down and not yet accepted, then the daily summary. Runs after the source jobs, so a
+// read that was due this round is already in.
 export async function schoolworkJob(notify, _runTask, _monitoring, nowMs = Date.now()) {
   if (!enabled() || !state.owner) return
   await flushPending(notify)
   prune(nowMs)
-  const day = dailyDue(nowMs)
-  if (!day) return
   const s = load()
-  s.lastDaily = day
-  persist()
-  // He asked for this reminder at this hour, like a reminder he set: it is not held back by the daily budget.
-  await notify(await summaryText(nowMs, { daily: true }), true, `schoolwork-daily:${day}`, 'schoolwork')
+  const today = wall(nowMs).day
+  // A summary from an earlier day that never reached the outbox is not sent late as if it were today's.
+  if (s.pendingDaily && s.pendingDaily.day !== today && !accepted(s.pendingDaily.key)) {
+    console.log(`[schoolwork] the summary for ${s.pendingDaily.day} never reached the outbox; today's replaces it`)
+    s.pendingDaily = null
+    persist()
+  }
+  // Accepted just before a crash, so only the bookkeeping is left.
+  if (s.pendingDaily && accepted(s.pendingDaily.key)) return void (await sendDaily(notify, s.pendingDaily.day, nowMs))
+  const day = s.pendingDaily?.day === today ? today : dailyDue(nowMs)
+  if (!day) return
+  if (!s.pendingDaily) {
+    s.pendingDaily = { day, key: `schoolwork-daily:${day}`, at: nowMs }
+    persist()
+  }
+  await sendDaily(notify, day, nowMs)
 }
 
 // For the morning brief (day.js): the same lines the existing homework section prints.
+// Eight lines at most, and a last line with how many more, so nothing open is silently left out.
 export function briefHomework(nowMs = Date.now()) {
-  return load()
-    .items.filter(isOpen)
-    .sort((a, b) => dueSort(a).localeCompare(dueSort(b)))
-    .slice(0, 8)
-    .map((i) => ({ title: i.title, course: where(i), due: dueLabel(i.due, nowMs) }))
+  const open = load().items.filter(isOpen).sort((a, b) => dueSort(a).localeCompare(dueSort(b)))
+  const lines = open.slice(0, 8).map((i) => ({ title: i.title, course: where(i), due: dueLabel(i.due, nowMs) }))
+  if (open.length > 8) lines.push({ title: `ועוד ${open.length - 8} פתוחות`, course: 'הרשימה המלאה: "מה פתוח בשיעורי בית?"', due: 'וגם בסיכום של אחר הצהריים' })
+  return lines
 }
 
 // He said he finished: closed here only, with his word as the evidence. Nothing is sent to the source.
@@ -548,6 +636,6 @@ export async function statusText(nowMs = Date.now()) {
     '',
     ...cov.map((c) => `${c.ok ? '✓' : '✗'} ${c.text}`),
     '',
-    'התראה על מטלה חדשה: Classroom תוך כ-5 דקות, קבוצות בכל סבב קריאה, Webtop רק בבדיקה הבאה (פעם בשעה). אין חיבור בזמן אמת ל-Webtop.',
+    `שום מקור לא בזמן אמת. מטלה חדשה מגיעה כשהמקור נקרא: Classroom כל 5 דקות, קבוצות כל ${groups.settings().everyMinutes} דקות, Webtop פעם ב-${config.webtop.alertsMinutes} דקות. לוח שיעורי הבית של Webtop לא נקרא בכלל. ההתראה עוברת בשעות השקט ובתקציב ההודעות כמו כל התראה.`,
   ].join('\n')
 }
