@@ -34,7 +34,7 @@ export function fakeFetch({ routes = [], scopes = '' } = {}) {
 
 function respond({ status = 200, json, text, headers = {} } = {}) {
   const body = json !== undefined ? JSON.stringify(json) : text ?? ''
-  return new Response(body, { status, headers: { 'content-type': json !== undefined ? 'application/json' : 'text/plain', ...headers } })
+  return new Response(status === 204 || status === 304 ? null : body, { status, headers: { 'content-type': json !== undefined ? 'application/json' : 'text/plain', ...headers } })
 }
 
 export const googleError = (status, reason, message = reason) => ({ status, json: { error: { code: status, message, errors: [{ reason }], status: reason } } })
