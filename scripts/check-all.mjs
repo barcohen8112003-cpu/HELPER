@@ -72,6 +72,7 @@ const TESTS = [
   'src/obscura-selftest.js',
   'src/team-selftest.js',
   'src/live-voice-selftest.js',
+  'src/whatsapp-speech-selftest.js',
   'src/panel-selftest.js',
   'scripts/setup-selftest.mjs',
 ]

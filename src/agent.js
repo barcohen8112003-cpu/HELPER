@@ -14,6 +14,7 @@ import { recordTurn } from './metrics.js'
 import { activeTools, allTools, toolDefs, domainIsOn } from './tools.js'
 import { pickDomains, routingText, menuLine, domainOf } from './domains.js'
 import { canSpeak } from './media.js'
+import { spokenReplySystem } from './whatsapp-speech.js'
 import { vmEnabled } from './vm.js'
 import { errandBrowserEnabled } from './errand-browser.js'
 import { pcEnabled } from './pc.js'
@@ -601,7 +602,7 @@ async function work(messages, ctx, scaffold) {
     // A scheduled run has nobody waiting on it, so it waits for the main model rather than settle for a weaker one.
     const agent = isolated ? '' : [planBlock(ctx, config.llm.light, goalHint), jobsLine(config.llm.light), loops].filter(Boolean).join('\n\n')
     const system = isolated ? ctx.systemPrompt : systemPrompt(memory, learning, agent, config.routing ? ctx.domains : undefined, outbound)
-    const msg = await llm([{ role: 'system', content: system }, ...messages], defs, undefined, ctx?.patient ? LONG_PATIENCE : undefined, undefined, signal)
+    const msg = await llm([{ role: 'system', content: spokenReplySystem(system, ctx) }, ...messages], defs, undefined, ctx?.patient ? LONG_PATIENCE : undefined, undefined, signal)
     const assistant = { role: 'assistant', content: msg.content ?? '' }
     if (msg.tool_calls?.length) assistant.tool_calls = msg.tool_calls
     messages.push(assistant)
@@ -657,7 +658,7 @@ async function closingAnswer(messages, ctx = {}, scaffold = new Set()) {
   const findings = [plan, ...notes].filter(Boolean).join('\n\n')
   const msg = await llm(
     [
-      { role: 'system', content: ctx.isolated ? ctx.systemPrompt : systemPrompt(undefined, '', '', config.routing ? ctx.domains : undefined, ctx.source === 'task' || ctx.source === 'job') },
+      { role: 'system', content: spokenReplySystem(ctx.isolated ? ctx.systemPrompt : systemPrompt(undefined, '', '', config.routing ? ctx.domains : undefined, ctx.source === 'task' || ctx.source === 'job'), ctx) },
       { role: 'user', content: `${question}\n\n---\nYou already looked into this and are out of tool calls. Below is everything you found. Answer the user now from it, with links where you have them, and say plainly what you could not check. Do not call tools.\n\n${findings}` },
     ],
     null,

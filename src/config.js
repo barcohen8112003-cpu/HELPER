@@ -140,6 +140,8 @@ const build = () => ({
   youtubeKey: env('YOUTUBE_API_KEY'),
   // Each message gets only the tools and instructions of the areas it is about (src/domains.js). off = every tool, always.
   routing: env('TOOL_ROUTING', 'on') !== 'off',
+  // Off until the existing voice has passed a listening check. WhatsApp only.
+  whatsappSpokenReplies: env('WHATSAPP_SPOKEN_REPLIES') === 'on',
   // Speech can live on a different provider than the chat model; it defaults to the same one.
   voice: {
     baseUrl: (env('VOICE_BASE_URL') || env('LLM_BASE_URL', 'https://api.openai.com/v1')).replace(/\/+$/, ''),
