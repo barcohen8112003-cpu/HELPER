@@ -112,6 +112,41 @@ for (const companion of [false, true]) {
   check('double transport failure propagates instead of claiming delivery', () => assert.equal(attempts, 1))
 }
 
+// Execute the exact production delivery block with inert transports, not the server.
+// This catches disconnects between the tested helper and the actual WhatsApp call site.
+{
+  const source = fs.readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+  const start = source.indexOf('      const delivery = spokenReply')
+  const end = source.indexOf('      answered = true', start)
+  assert(start >= 0 && end > start, 'production delivery block located')
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+  const deliver = new AsyncFunction('reply', 'spokenReply', 'wantsVoice', 'speak', 'wa', 'state', 'presentSpeech', 'prepareWhatsAppSpeech', 'deliverWhatsAppSpeech', source.slice(start, end))
+  for (const scenario of ['ok', 'synthesis-null', 'synthesis-reject', 'voice-reject', 'text-reject']) {
+    const events = []
+    let faceCalls = 0
+    const reply = '```js\nconst file_name_v2 = 50\n```'
+    const operation = deliver(reply, true, true,
+      async () => { if (scenario === 'synthesis-reject') throw new Error('synthetic synthesis failure'); return scenario === 'synthesis-null' ? null : Buffer.from('synthetic') },
+      { send: async (_, text) => { events.push(['text', text]); if (scenario === 'text-reject') throw new Error('synthetic text failure') },
+        sendVoice: async () => { events.push(['voice']); if (scenario === 'voice-reject') throw new Error('synthetic voice failure') } },
+      { owner: { jid: 'synthetic' } }, async () => { faceCalls++ }, prepareWhatsAppSpeech, deliverWhatsAppSpeech)
+    if (scenario === 'text-reject') await assert.rejects(operation, /text failure/)
+    else await operation
+    check(`executable production delivery: ${scenario}`, () => {
+      assert.equal(events[0][0], 'text')
+      assert.equal(events[0][1], reply)
+      assert.equal(events.filter(([kind]) => kind === 'text').length, 1)
+      assert.equal(faceCalls, scenario === 'ok' ? 1 : 0)
+      assert.equal(events.filter(([kind]) => kind === 'voice').length, ['ok', 'voice-reject'].includes(scenario) ? 1 : 0)
+    })
+  }
+  const legacy = []
+  await deliver(plain, false, true, async () => Buffer.from('synthetic'),
+    { send: async () => legacy.push('text'), sendVoice: async () => legacy.push('voice') },
+    { owner: { jid: 'synthetic' } }, async () => {}, prepareWhatsAppSpeech, deliverWhatsAppSpeech)
+  check('executable flag-off delivery still sends simple voice without companion', () => assert.deepEqual(legacy, ['voice']))
+}
+
 // Set a throwaway environment before importing config. No owner .env or data is read.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-speech-'))
 process.env.HELPER_ENV_FILE = path.join(dir, 'empty.env')
