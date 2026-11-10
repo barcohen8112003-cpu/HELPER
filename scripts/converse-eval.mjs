@@ -10,26 +10,38 @@
 //   npm run eval:converse -- --only chosen-option --modes light --conditions compacted --max-runs 2
 //   npm run eval:converse -- --dry-run [...]            preflight only: the planned runs and request counts. Reads no
 //                                                       .env, starts no process, sends nothing
-//   npm run eval:converse -- --real --max-requests 30 --confirm-route "<LLM_MODEL>@<host>" --only chosen-option
+//   npm run eval:converse -- --real --max-requests 30 --confirm-route "<LLM_MODEL>@<LLM_BASE_URL>" --only chosen-option
 //                                                       the model route in .env, for both checkouts alike
 //
 // Offline proves only what reaches the model (plumbing and contract), never how a real model judges. The assistant
 // lines it uses are scripted stand-ins from the cases file, and the summary is a placeholder, so anything that
 // survives only in the summary is marked as depending on the summarizer model.
 // --real talks to the model in .env. No tool really runs: each answers from the case's synthetic fixture or says it
-// is not available, every approval card is declined, and the only network the child can reach is the model's host.
-// Reports go to accept-reports/ (not in git) and hold synthetic text only.
+// is not available, and every approval card is declined. Reports go to accept-reports/ (not in git).
+//
+// The network guard is narrow: it replaces globalThis.fetch in the child, which is how Helper's model client and
+// its HTTP tools reach the network. Through it, only the one confirmed endpoint (scheme, host, port and path, exact)
+// is reachable, a redirect is never followed (the run fails at once), and every other address is refused. Modules
+// that open sockets without fetch (node:http, node:net, WebSocket, child processes) are not covered by it: this is
+// not a network sandbox, and the stubbed tools are what keep those paths from running.
 //
 // A real run is closed until all of this holds, and a key being present opens nothing:
 //   --max-requests N       a hard cap for the whole batch, at most REAL_REQUEST_CEILING. Every request to the model
 //                          is counted (tool rounds, retries, summaries), and the batch stops before request N+1.
 //   the plan fits the cap  its minimum (one request per message) is within N, so a small subset is chosen first.
-//   --confirm-route M@H    the owner types the model and host he verified as already paid for, on the command line
-//                          (no environment variable or file can stand in). It must equal the route in .env.
+//   --confirm-route M@U    the owner types the model and base URL he verified as already paid for, on the command
+//                          line (no environment variable or file can stand in). It must equal the route in .env
+//                          exactly: scheme, host, port and path. Plain http only for a loopback address.
 // Only that one route is used: fallback models, the cheap and strong models and the backup provider are left out.
 //
 // What reaches the child: a short list of system variables (PATH, HOME, temp…), the evaluation's own settings and,
 // in a real run, the model route. Nothing else of the parent's environment, and no NODE_OPTIONS of the parent.
+//
+// A run counts only when it finished whole: every message answered, no model error (a summary's included), no
+// crash. Anything else is reported as FAILED with its transcript and errors, is left out of every count of needs,
+// and makes the batch exit non-zero. With --root, only pairs that finished on every checkout are compared.
+// Exit codes: 0 every planned run finished, 1 a run failed, 2 refused before anything ran, 3 stopped at the cap,
+// 4 the model endpoint redirected (the batch stops there).
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -91,17 +103,49 @@ export function preflightText(plan, { real, cap, labels }) {
 }
 
 // Why this batch may not start, or '' when it may. Before any .env is read.
-export function refusal({ real, cap, confirm, plan }) {
+export function refusal({ real, cap, confirm, plan, missing = [] }) {
+  if (missing.length) return `not a Helper checkout (no ${CHECKOUT_FILES.join(', ')} under src/): ${missing.join(', ')}.`
   if (!plan.length) return 'no run matches the selection (--only, --modes, --conditions).'
   if (Number.isNaN(cap)) return '--max-requests takes a whole number from 1 up.'
   if (real && cap === null) return `--real needs --max-requests N (at most ${REAL_REQUEST_CEILING}): there is no unbounded real batch.`
   if (real && cap > REAL_REQUEST_CEILING) return `--max-requests ${cap} is over the ceiling for a real batch (${REAL_REQUEST_CEILING}). A larger run has not been approved.`
   if (cap !== null && planMin(plan) > cap) return `the selection needs at least ${planMin(plan)} requests and the cap is ${cap}. Choose a smaller subset with --only, --modes, --conditions or --max-runs.`
-  if (real && !confirm) return '--real needs --confirm-route "<LLM_MODEL>@<host>": the route the owner verified as already paid for, typed by him. A key in .env is not a go-ahead.'
+  if (real && !confirm) return '--real needs --confirm-route "<LLM_MODEL>@<LLM_BASE_URL>": the route the owner verified as already paid for, typed by him. A key in .env is not a go-ahead.'
   return ''
 }
 
-export const routeOf = (env) => `${env.LLM_MODEL || ''}@${hostOf(env.LLM_BASE_URL || 'https://api.openai.com/v1')}`
+// What the child imports from a checkout. A folder without them is refused before any run starts.
+const CHECKOUT_FILES = ['config.js', 'store.js', 'agent.js', 'jobs.js', 'tools.js']
+export const missingCheckout = (root) => CHECKOUT_FILES.some((f) => !fs.existsSync(path.join(root, 'src', f)))
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
+// The one address a real run may send to: scheme, host, port and path, exact, as one string. null when the base URL
+// cannot be one: not http(s), user or password in it, a query or fragment, or plain http to anything but loopback.
+export function endpointOf(baseUrl) {
+  let u
+  try {
+    u = new URL(`${String(baseUrl || '').replace(/\/+$/, '')}/chat/completions`)
+  } catch {
+    return null
+  }
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash) return null
+  if (u.protocol === 'http:' && !LOOPBACK.has(u.hostname)) return null
+  return u.origin + u.pathname
+}
+// The same for a URL a request is really sent to; null for anything with user, password, query or fragment.
+export function targetOf(url) {
+  try {
+    const u = new URL(url)
+    return u.username || u.password || u.search || u.hash ? null : u.origin + u.pathname
+  } catch {
+    return null
+  }
+}
+// "model@base URL", the string the owner types. The base URL as the endpoint sees it (no trailing slash).
+export function routeOf(env) {
+  const at = endpointOf(env.LLM_BASE_URL || 'https://api.openai.com/v1')
+  return at ? `${env.LLM_MODEL || ''}@${at.replace(/\/chat\/completions$/, '')}` : ''
+}
 
 async function main() {
   const data = loadCases()
@@ -121,17 +165,20 @@ async function main() {
   if (Number.isNaN(maxRuns)) stop('--max-runs takes a whole number from 1 up.')
   const plan = planRuns(data, { roots: roots.map((_, i) => i), only: list('only', null), modes, conditions, maxRuns })
   console.log(preflightText(plan, { real, cap, labels }))
+  const missing = roots.filter(missingCheckout).map((r) => `${labels[roots.indexOf(r)]} (${r})`)
+  if (missing.length) console.log(`  not a Helper checkout: ${missing.join(', ')}`)
   if (has('dry-run')) {
     console.log('dry run: no .env read, no process started, nothing sent.')
     return []
   }
   const confirm = has('confirm-route') ? flag('confirm-route') : ''
-  const why = refusal({ real, cap, confirm, plan })
+  const why = refusal({ real, cap, confirm, plan, missing })
   if (why) stop(why)
   const envFile = process.env.HELPER_ENV_FILE || path.join(HERE, '.env')
   if (real) {
     const env = readEnv(envFile)
     if (!env.LLM_API_KEY || !env.LLM_MODEL) stop(`--real talks to the model route in ${envFile}: LLM_API_KEY and LLM_MODEL are needed there.`)
+    if (!routeOf(env)) stop(`LLM_BASE_URL in ${envFile} is not an endpoint a real run may use (https, or http on a loopback address; no user, password, query or fragment).`)
     if (confirm !== routeOf(env)) stop(`--confirm-route does not match the route in ${envFile}, which is ${routeOf(env)}.`)
     console.log(`real model route: ${routeOf(env)} (light ${env.LLM_LIGHT || 'off'}), the same for every checkout, no other model or provider`)
   }
@@ -144,23 +191,54 @@ async function main() {
       stopped = `stopped at the request cap: ${used} of ${cap} used, the next run needs at least ${p.min}`
       break
     }
-    const r = await runChild({ root: roots[p.root], id: p.id, v: p.v, mode: p.mode, condition: p.condition, real, envFile, allowance: left })
+    const r = await runChild({ root: roots[p.root], id: p.id, v: p.v, mode: p.mode, condition: p.condition, real, envFile, allowance: left, route: real ? confirm : '' })
     used += r.modelRequests
     runs.push({ root: labels[p.root], case: p.id, variant: p.variant, heldout: p.heldout, mode: p.mode, condition: p.condition, ...r })
-    process.stdout.write(r.error ? 'x' : '.')
+    process.stdout.write(r.status === 'complete' ? '.' : 'x')
     if (r.capHit) {
       stopped = `stopped at the request cap: ${used} of ${cap} used, request ${cap + 1} was not sent`
       break
     }
+    if (r.routeViolation) {
+      stopped = `stopped: ${r.routeViolation}`
+      break
+    }
+    // A real batch does not go on sending after a failed run (a refused key, a broken checkout).
+    if (real && r.status !== 'complete') {
+      stopped = `stopped after a failed run (${p.id}, ${labels[p.root]}): ${String(r.error || '').slice(0, 200)}`
+      break
+    }
   }
   console.log('')
-  const file = writeReport(runs, { real, roots: labels, data, cap, used, stopped, planned: plan.length })
+  const status = batchStatus(runs, { planned: plan.length, roots: labels, stopped })
+  const file = writeReport(runs, { real, roots: labels, data, cap, used, stopped, planned: plan.length, status })
+  console.log(statusLine(status))
   console.log(summaryLine(runs, labels))
   console.log(`model requests: ${used}${cap === null ? '' : ` of ${cap} allowed`}, runs: ${runs.length} of ${plan.length} planned`)
   if (stopped) console.log(stopped)
   console.log(`report: ${path.relative(process.cwd(), file)}`)
-  if (stopped) process.exit(3)
+  process.exitCode = status.code
   return runs
+}
+
+// The batch as a whole. code: 0 only when every planned run ran and finished.
+export function batchStatus(runs, { planned, roots, stopped = '' }) {
+  const failed = runs.filter((r) => r.status !== 'complete' && !r.capHit)
+  const comparable = comparableKeys(runs, roots).size
+  const pairs = new Set(runs.map(keyOf)).size
+  const violation = runs.some((r) => r.routeViolation)
+  const word = violation ? 'FAILED (route)' : failed.length ? 'FAILED' : stopped ? 'STOPPED AT CAP' : runs.length < planned ? 'INCOMPLETE' : 'COMPLETE'
+  return { word, failed: failed.length, ran: runs.length, planned, comparable, pairs, compare: roots.length > 1, code: violation ? 4 : failed.length ? 1 : stopped ? 3 : runs.length < planned ? 1 : 0 }
+}
+
+export const statusLine = (s) =>
+  `status: ${s.word}. ${s.ran} of ${s.planned} planned runs ran, ${s.failed} failed${s.compare ? `; ${s.comparable} of ${s.pairs} pairs finished on every checkout and only those are compared${s.comparable < s.pairs ? ' (the comparison is incomplete)' : ''}` : ''}.${s.code ? ' Not valid evidence of a finished evaluation.' : ''}`
+
+const keyOf = (r) => `${r.case}\u0000${r.variant}\u0000${r.mode}\u0000${r.condition}`
+// Runs that count: finished whole, and with --root the same run finished on every checkout.
+export function comparableKeys(runs, roots) {
+  const keys = new Set(runs.map(keyOf))
+  return new Set([...keys].filter((k) => roots.every((root) => runs.some((r) => r.root === root && keyOf(r) === k && r.status === 'complete'))))
 }
 
 const label = (root, roots) => (root === HERE ? (roots.length > 1 ? 'candidate' : 'this') : roots.length > 2 ? `baseline-${roots.indexOf(root) + 1}` : 'baseline')
@@ -209,11 +287,11 @@ export function childProcessEnv(parent, own, platform = process.platform) {
 }
 
 // allowance: how many requests to the model this run may still send (null = offline with no cap).
-function runChild({ root, id, v, mode, condition, real, envFile, allowance }) {
+function runChild({ root, id, v, mode, condition, real, envFile, allowance, route = '' }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-converse-'))
   return new Promise((resolve) => {
     // The server stand-in is preloaded by argument, so no NODE_OPTIONS is passed on at all.
-    const proc = spawn(process.execPath, ['--require', PRELOAD, fileURLToPath(import.meta.url), '--child', id, '--variant', String(v), '--condition', condition, '--mode', mode, '--src', root, ...(allowance === null ? [] : ['--allowance', String(allowance)]), ...(real ? ['--real'] : [])], {
+    const proc = spawn(process.execPath, ['--require', PRELOAD, fileURLToPath(import.meta.url), '--child', id, '--variant', String(v), '--condition', condition, '--mode', mode, '--src', root, ...(allowance === null ? [] : ['--allowance', String(allowance)]), ...(real ? ['--real', '--route', route] : [])], {
       cwd: root,
       env: childProcessEnv(process.env, { HELPER_DATA_DIR: dir, HELPER_ENV_FILE: writeEvalEnv(dir, { real, envFile, mode }), HELPER_OFFLINE: '1' }),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -229,9 +307,16 @@ function runChild({ root, id, v, mode, condition, real, envFile, allowance }) {
       const count = fs.existsSync(path.join(dir, COUNT_FILE)) ? fs.readFileSync(path.join(dir, COUNT_FILE), 'utf8') : ''
       fs.rmSync(dir, { recursive: true, force: true })
       const line = out.split('\n').findLast((l) => l.startsWith(RESULT))
-      const result = line ? JSON.parse(line.slice(RESULT.length)) : { error: code === null ? 'timed out' : `crashed (exit ${code}): ${out.trim().split('\n').slice(-4).join(' ').slice(0, 300)}` }
+      // A crash keeps its first error line and its last lines, so the report says why.
+      const lines = out.trim().split('\n')
+      const first = lines.find((l) => /\b\w*Error\b/.test(l)) || ''
+      const result = line ? JSON.parse(line.slice(RESULT.length)) : { error: code === null ? 'timed out' : `crashed (exit ${code}): ${[first, ...lines.slice(-3).filter((l) => l !== first)].join(' ').slice(0, 500)}` }
       const counted = /^\d+/.test(count) ? parseInt(count, 10) : Number.isInteger(result.modelRequests) ? result.modelRequests : line && !result.error ? 0 : (allowance ?? 0)
-      resolve({ ...result, modelRequests: counted, capHit: Boolean(result.capHit) || / cap$/.test(count) })
+      const capHit = Boolean(result.capHit) || / cap$/.test(count)
+      // Only a child that says so finished; a crash, a timeout or the cap is not a finished run.
+      const status = capHit ? 'stopped' : !result.error && result.status === 'complete' ? 'complete' : 'failed'
+      if (!line && !result.error) result.error = 'no result'
+      resolve({ ...result, status, modelRequests: counted, capHit })
     })
   })
 }
@@ -247,27 +332,28 @@ export function verdict(need, where) {
 }
 
 export function summaryLine(runs, roots) {
+  const counted = comparableKeys(runs, roots)
   return roots
     .map((root) => {
-      const mine = runs.filter((r) => r.root === root && !r.error)
+      const mine = runs.filter((r) => r.root === root && r.status === 'complete' && counted.has(keyOf(r)))
       const needs = mine.flatMap((r) => r.needs || [])
       const count = (s) => needs.filter((n) => n.verdict === s).length
       const chars = mine.map((r) => r.requestChars || 0)
       const avg = chars.length ? Math.round(chars.reduce((a, b) => a + b, 0) / chars.length) : 0
       const invalid = mine.reduce((n, r) => n + (r.invalidRequests || 0), 0)
-      return `${root}: ${invalid ? `${invalid} requests the API would refuse (a tool result away from its call), ` : ''}${count('ok')}/${needs.length} needs in reach, ${count('summary-only')} only in the summary, ${count('missing')} missing, last request ${avg} chars on average (max ${Math.max(0, ...chars)})${runs.some((r) => r.root === root && r.error) ? `, ${runs.filter((r) => r.root === root && r.error).length} runs failed` : ''}`
+      return `${root}: ${invalid ? `${invalid} requests the API would refuse (a tool result away from its call), ` : ''}${count('ok')}/${needs.length} needs in reach, ${count('summary-only')} only in the summary, ${count('missing')} missing, last request ${avg} chars on average (max ${Math.max(0, ...chars)})${runs.some((r) => r.root === root && r.status !== 'complete') ? `, ${runs.filter((r) => r.root === root && r.status !== 'complete').length} runs failed or stopped and are not counted` : ''}`
     })
     .join('\n')
 }
 
-function writeReport(runs, { real, roots, data, cap = null, used = 0, stopped = '', planned = runs.length }) {
+function writeReport(runs, { real, roots, data, cap = null, used = 0, stopped = '', planned = runs.length, status = batchStatus(runs, { planned, roots, stopped }) }) {
   const dir = process.env.CONVERSE_REPORT_DIR || path.join(HERE, 'accept-reports')
   fs.mkdirSync(dir, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const json = path.join(dir, `converse-${real ? 'real' : 'offline'}-${stamp}.json`)
-  fs.writeFileSync(json, JSON.stringify({ real, roots, cap, requestsUsed: used, planned, stopped, runs }, null, 2))
-  const cell = (r) => (r ? (r.error ? `error: ${r.error}` : [...(r.invalidRequests ? [`✗ ${r.invalidRequests} request(s) the API would refuse`] : []), ...r.needs.map((n) => `${n.verdict === 'ok' ? '✓' : n.verdict === 'summary-only' ? '~' : '✗'} ${n.label} (${n.where})`)].join('<br>')) : '-')
-  const md = [`# Conversation evaluation, ${real ? 'real model' : 'offline (context only, no model judgment)'}, ${stamp}`, '', summaryLine(runs, roots).replace(/\n/g, '  \n'), '']
+  fs.writeFileSync(json, JSON.stringify({ status: status.word, exitCode: status.code, real, roots, cap, requestsUsed: used, planned, ran: runs.length, failed: status.failed, comparablePairs: status.comparable, stopped, runs }, null, 2))
+  const cell = (r) => (r ? (r.status !== 'complete' ? `**${r.status === 'stopped' ? 'STOPPED' : 'FAILED'}**: ${String(r.error || '').replace(/\|/g, '/')}` : [...(r.invalidRequests ? [`✗ ${r.invalidRequests} request(s) the API would refuse`] : []), ...r.needs.map((n) => `${n.verdict === 'ok' ? '✓' : n.verdict === 'summary-only' ? '~' : '✗'} ${n.label} (${n.where})`)].join('<br>')) : '-')
+  const md = [`# Conversation evaluation, ${real ? 'real model' : 'offline (context only, no model judgment)'}, ${stamp}`, '', `**${statusLine(status)}**`, '', summaryLine(runs, roots).replace(/\n/g, '  \n'), '']
   md.push(`Model requests: ${used}${cap === null ? '' : ` of ${cap} allowed`}. Runs: ${runs.length} of ${planned} planned.${stopped ? ` Batch ${stopped}.` : ''}`, '')
   md.push('✓ in reach for the model, ~ only in the running summary (depends on the summarizer model), ✗ missing.', '')
   for (const c of data.cases) {
@@ -283,8 +369,16 @@ function writeReport(runs, { real, roots, data, cap = null, used = 0, stopped = 
       md.push(`| ${variant}${held} | ${mode} | ${condition} | ${row.join(' | ')} |`)
     }
     md.push('')
+    // A failed run keeps its transcript and errors here, marked: it is a diagnostic, not conversational output.
+    for (const r of mine.filter((x) => x.status !== 'complete')) {
+      md.push(`**${r.status === 'stopped' ? 'STOPPED' : 'FAILED'}, not counted, not conversational output: ${r.root} · ${r.variant} · ${r.mode} · ${r.condition}**`, '', `> ${String(r.error || '').replace(/\n/g, ' ')}`)
+      for (const f of r.failures || []) md.push(`> message ${f.turn + 1}: ${f.error.replace(/\n/g, ' ')}`)
+      for (const e of r.modelErrors || []) md.push(`> model endpoint: ${e}`)
+      for (const t of r.turns || []) md.push(`> ${t.event ? '[fixture]' : 'נאור:'} ${t.say.replace(/\n/g, ' ')}${t.event ? '' : `  \n> Helper: ${String(t.reply).replace(/\n/g, ' ')}`}`)
+      md.push('')
+    }
     if (real) {
-      for (const r of mine.filter((x) => !x.error)) {
+      for (const r of mine.filter((x) => x.status === 'complete')) {
         md.push(`**${r.root} · ${r.variant} · ${r.mode} · ${r.condition}** (${r.route})`, '')
         for (const t of r.turns) md.push(t.event ? `> [fixture, not model output] ${t.say.replace(/\n/g, ' ')}` : `> נאור: ${t.say.replace(/\n/g, ' ')}`, `> Helper: ${String(t.reply).replace(/\n/g, ' ')}${t.tools.length ? `  \n> tools: ${t.tools.join(', ')}` : ''}${t.cards.length ? `  \n> approval asked (declined): ${t.cards.join(' / ').replace(/\n/g, ' ')}` : ''}`, '')
         if (r.effects.length) md.push(`Effect tools called (review against the hard fail): ${r.effects.join(', ')}`, '')
@@ -350,14 +444,18 @@ async function child() {
   }
   // A real run stays on the one confirmed route, whatever the checkout's own settings code would add.
   if (real) Object.assign(config.llm, { fallbackModels: [], cheapModel: '', strongModel: '', backup: { baseUrl: '', apiKey: '', model: '' } })
-  const llmHosts = new Set([hostOf(config.llm.baseUrl)].filter(Boolean))
+  // The checkout's own settings code must land on the route the owner confirmed, or nothing is sent.
+  if (real && (!routeOf({ LLM_MODEL: config.llm.model, LLM_BASE_URL: config.llm.baseUrl }) || routeOf({ LLM_MODEL: config.llm.model, LLM_BASE_URL: config.llm.baseUrl }) !== flag('route'))) end({ error: `refused: this checkout's model route is not the confirmed one (${flag('route') || 'none given'})`, modelRequests: 0 }, 2)
+  const endpoint = real ? endpointOf(config.llm.baseUrl) : `http://${OFFLINE_HOST}/chat/completions`
+  // Every model answer that was not a success, summaries included (compaction swallows its own failures).
+  const modelErrors = []
   let script = []
   // Replies a fixture dictates even in a real run (the text of a background result), used before anything else.
   const forced = []
   globalThis.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input?.url || String(input)
     const host = hostOf(url)
-    const isModel = llmHosts.has(host) && /\/chat\/completions$/.test(url)
+    const isModel = targetOf(url) === endpoint
     const body = isModel ? JSON.parse(init.body) : null
     const summarizing = body && !body.tools && /^סיכום קודם:/.test(String(body.messages?.[1]?.content || ''))
     if (summarizing) compactions.push({ instruction: body.messages[0].content, input: body.messages[1].content })
@@ -366,7 +464,21 @@ async function child() {
     if (isModel && !summarizing && forced.length) return stand({ role: 'assistant', content: forced.shift() })
     if (real && isModel && body.model === config.llm.model) {
       spend()
-      return realFetch(input, init)
+      // Never followed: a redirect would carry the conversation to an address nobody confirmed.
+      const res = await realFetch(url, { ...init, redirect: 'manual' })
+      if ((res.status >= 300 && res.status < 400) || res.type === 'opaqueredirect') {
+        let next = ''
+        try {
+          next = new URL(res.headers.get('location') || '', url).href
+        } catch {}
+        const to = targetOf(next) || 'an address that cannot be shown (query, credentials or unreadable)'
+        blocked.push(hostOf(next) || '(redirect)')
+        const why = `the model endpoint answered HTTP ${res.status} with a redirect to ${to}; it was not followed and the run ends here`
+        fs.writeFileSync(countFile, String(sent))
+        end({ error: `route violation: ${why}`, routeViolation: why, modelRequests: sent, blocked: [...new Set(blocked)], status: 'failed' }, 4)
+      }
+      if (!res.ok) modelErrors.push(`HTTP ${res.status}${summarizing ? ' (summary)' : ''}`)
+      return res
     }
     if (!real && host === OFFLINE_HOST) {
       // The stand-in counts like a real request, so the cap is checked offline on the same path.
@@ -375,6 +487,17 @@ async function child() {
       return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ choices: [{ message }] }), text: async () => '' }
     }
     blocked.push(host)
+    // Something shaped like a model request that is not the confirmed endpoint and model (another port, path, host,
+    // scheme or model): nothing was sent, and the run ends here rather than let the client try it again and again.
+    let shaped = false
+    try {
+      shaped = /\/chat\/completions$/.test(new URL(url).pathname)
+    } catch {}
+    if (real && (shaped || isModel)) {
+      const why = `a model request went to ${targetOf(url) || 'an address that cannot be shown'}${isModel ? ` for model ${body?.model}` : ''}, not the confirmed route; it was not sent and the run ends here`
+      fs.writeFileSync(countFile, String(sent))
+      end({ error: `route violation: ${why}`, routeViolation: why, modelRequests: sent, blocked: [...new Set(blocked)], status: 'failed' }, 4)
+    }
     throw new TypeError(`fetch failed: ${host} is not reachable in the conversation evaluation`)
   }
 
@@ -443,6 +566,7 @@ async function child() {
       agent.noteBackground?.(e.title, e.text, true)
     }
   }
+  const failures = []
   const VOICE_NOTE = '[שיחה קולית דרך android_app. התשובה שלך תוקרא בקול: משפט או שניים, בלי עיצוב, בלי אימוג\'י, בלי קישורים ובלי רשימות.]'
   let callId = 0
   const turns = []
@@ -466,13 +590,16 @@ async function child() {
     const ctx = { ...ctxBase }
     ctx.confirm = async (q) => (ctx.cards.push(String(q)), false)
     let reply = ''
+    let failedTurn = false
     try {
       reply = await runTurn(mode === 'voice' ? `${VOICE_NOTE}\n${turn.say}` : turn.say, mode === 'voice' ? Object.assign(ctx, { source: 'android_app' }) : ctx)
     } catch (e) {
+      failedTurn = true
+      failures.push({ turn: i, error: String(e.message).slice(0, 300) })
       reply = `(turn failed: ${e.message})`
     }
     if (isLast) last = { request: requests[before], summary: state.summary || '', domains: [...(ctx.domains || [])] }
-    turns.push({ say: turn.say, reply: real ? reply : '(offline)', tools: called.slice(calledBefore).map((t) => t.name), cards: ctx.cards })
+    turns.push({ say: turn.say, reply: real || failedTurn ? reply : '(offline)', failed: failedTurn, tools: called.slice(calledBefore).map((t) => t.name), cards: ctx.cards })
     // As index.js does after every turn.
     await compact().catch(() => false)
   }
@@ -481,7 +608,9 @@ async function child() {
   const system = textOf(last?.request?.messages?.[0] || {})
   const convo = (last?.request?.messages || []).slice(1).map(textOf).join('\n')
   const memoryLines = system.split('\n').filter((l) => /^#\d+ /.test(l)).join('\n')
-  const needs = (variant.need || []).map((need) => {
+  // A run with a failed message or a model error is a diagnostic, not a sample: nothing of it is scored.
+  const complete = !failures.length && !modelErrors.length
+  const needs = (complete ? variant.need || [] : []).map((need) => {
     const re = new RegExp(need.re)
     const folded = compactions.some((x) => re.test(x.input))
     // Offline the summary is a placeholder, so "summary" means the summarizer was shown it; real runs check the text.
@@ -501,9 +630,12 @@ async function child() {
   }).length
   const effects = called.filter((t) => (c.effects || []).includes(t.name)).map((t) => t.name)
   const result = {
+    status: complete ? 'complete' : 'failed',
+    ...(complete ? {} : { error: `${failures.length} of ${variant.turns.filter((t) => !t.event).length} messages failed${modelErrors.length ? `, model endpoint: ${[...new Set(modelErrors)].join(', ')}` : ''}`, failures, modelErrors }),
+    scored: complete,
     modelRequests: sent,
     inheritedEnv,
-    route: real ? `${config.llm.model} @ ${hostOf(config.llm.baseUrl)}${config.llm.light ? ' (light)' : ''}` : `offline stand-in${config.llm.light ? ' (light)' : ' (full)'}`,
+    route: real ? `${routeOf({ LLM_MODEL: config.llm.model, LLM_BASE_URL: config.llm.baseUrl })}${config.llm.light ? ' (light)' : ''}` : `offline stand-in${config.llm.light ? ' (light)' : ' (full)'}`,
     needs,
     invalidRequests,
     compactions: compactions.length,
