@@ -328,4 +328,36 @@ for (const n of ['office_outline', 'docs_edit', 'sheets_edit', 'slides_edit']) o
   ok(model.toolResults().some((t) => /\[done\]/.test(t)), 'agent loop: the model is told it is done only after Google returned the document')
 }
 
+// ---- the question shows every character that is written (review: a clipped preview hid a tail) ----
+{
+  const TAIL = 'UNAPPROVED_TAIL_DO_NOT_SEND'
+  const before = docState.text
+  const long = 'a'.repeat(350) + TAIL
+  const r = await run('docs_edit', { file_id: ids.doc, edits: [{ op: 'append', text: long }] }, [true])
+  const sent = fake.writes().at(-1).json().requests.map((q) => q.insertText?.text || '').join('')
+  ok(r.status === 'done' && r.asked[0].includes(long) && sent.includes(long), `docs: a 377-character append is shown whole, tail included, and exactly that is sent (${r.status})`)
+  const huge = 'b'.repeat(7000) + TAIL
+  const h = await run('docs_edit', { file_id: ids.doc, edits: [{ op: 'append', text: huge }] }, [true])
+  ok(h.status === 'refused' && /ארוך/.test(h.text) && h.asked.length === 0 && h.wrote === 0, `docs: a change too long to show whole is refused, not asked about in short (${h.status})`)
+  const rep = await run('docs_edit', { file_id: ids.doc, edits: [{ op: 'replace', find: TAIL, text: 'c'.repeat(400) + '-END' }] }, [false])
+  ok(rep.asked[0].includes('c'.repeat(400) + '-END'), 'docs: a long replacement is shown whole')
+  const hidden = await run('docs_edit', { file_id: ids.doc, edits: [{ op: 'append', text: 'visible\u200bhidden\u202eevil' }] }, [false])
+  ok(hidden.asked[0].includes('[U+200B]') && hidden.asked[0].includes('[U+202E]'), 'docs: invisible and direction-changing characters are shown, not hidden')
+  const many = await run('docs_edit', { file_id: ids.doc, edits: [1, 2, 3].map((i) => ({ op: 'append', text: String(i).repeat(3000) })) }, [true])
+  ok(many.status === 'refused' && /ארוך מכדי להציג/.test(many.text) && many.asked.length === 0 && many.wrote === 0, `docs: edits that are each allowed but together too long to show are refused whole (${many.status})`)
+  // A planner that leaves text out of the lines is caught by the final check.
+  let err = ''
+  try { office.assertAllShown('question without it', [{ insertText: { text: 'secret tail' } }]) } catch (e) { err = e.code }
+  ok(err === 'unsupported', 'a request text missing from the question is refused')
+  docState.text = before
+}
+{
+  const TAIL = 'UNAPPROVED_TAIL_DO_NOT_SEND'
+  const long = 'd'.repeat(350) + TAIL
+  const r = await run('slides_edit', { file_id: ids.slides, edits: [{ op: 'add_slide', insertion_index: 1, title: long, body: 'e'.repeat(320) + TAIL }] }, [false])
+  ok(r.asked[0].includes(long) && r.asked[0].includes('e'.repeat(320) + TAIL), 'slides: a long title and body are shown whole')
+  const h = await run('slides_edit', { file_id: ids.slides, edits: [{ op: 'replace_text', find: 'נפוליאון', text: 'f'.repeat(7000) }] }, [true])
+  ok(h.status === 'refused' && /ארוך/.test(h.text) && h.asked.length === 0 && h.wrote === 0, 'slides: a replacement too long to show is refused')
+}
+
 done('office-edit')

@@ -87,7 +87,30 @@ const clip = (s, n = 300) => {
   const t = String(s)
   return t.length > n ? `${t.slice(0, n)}…` : t
 }
-const quote = (s) => `«${String(s).replace(/\n/g, '⏎')}»`
+// What is sent is shown whole: no clipping of text that will be written (the shared length limit in bound-actions
+// then refuses a change too long to read). Line breaks, tabs and invisible or direction-changing characters are
+// made visible so nothing written is hidden in the question.
+const quote = (s) => `«${String(s).replace(/\n/g, '⏎').replace(/[\u0000-\u0009\u000b-\u001f\u007f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, (c) => `[U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}]`)}»`
+
+
+// Every text the request will write or match must be visible in the question, as shown by quote(). A planner bug
+// that shortened or left out a text would otherwise be approved unseen; this refuses instead.
+function sentTexts(requests) {
+  const out = []
+  for (const r of requests || []) {
+    if (r.insertText?.text) out.push(r.insertText.text)
+    if (r.replaceAllText) out.push(r.replaceAllText.replaceText || '', r.replaceAllText.containsText?.text || '')
+  }
+  return out
+}
+export function assertAllShown(question, requests) {
+  for (const t of sentTexts(requests)) {
+    for (const seg of String(t).split('\n')) {
+      if (seg && !question.includes(quote(seg).slice(1, -1))) throw fail(`חלק מהטקסט שיישלח לא מוצג בשאלת האישור במלואו, אז לא מבצע (${seg.length} תווים).`, 'unsupported')
+    }
+  }
+  return question
+}
 
 // ---- Docs ----
 
@@ -139,7 +162,7 @@ export function planDocEdits(doc, edits) {
       if (!insert) throw fail(`עריכה ${n + 1}: אין מה להוסיף.`)
       // The body always ends with a newline that cannot be removed; text goes in before it, as a new paragraph.
       spans.push({ n, kind: 'insert', at: Number.isInteger(bodyEnd) ? bodyEnd - 1 : null, end: true, text: `\n${insert.replace(/\n+$/, '')}` })
-      lines.push(`${n + 1}. פסקה חדשה בסוף המסמך: ${quote(clip(insert))}`)
+      lines.push(`${n + 1}. פסקה חדשה בסוף המסמך: ${quote(insert)}`)
       continue
     }
     const find = e.find ?? e.anchor
@@ -160,9 +183,9 @@ export function planDocEdits(doc, edits) {
       else throw fail(`עריכה ${n + 1}: פעולה לא מוכרת "${op}". אפשר: replace, delete, insert_after, insert_before, append.`)
     }
     const around = (offset) => clip(text.slice(Math.max(0, offset - 30), offset + find.length + 30), 200)
-    if (op === 'replace') lines.push(`${n + 1}. להחליף ${quote(clip(find))} ב-${quote(clip(insert))}${expected > 1 ? ` (${expected} מקומות)` : ''}\n   בהקשר: ${quote(around(at[0]))}`)
-    else if (op === 'delete') lines.push(`${n + 1}. למחוק ${quote(clip(find))}${expected > 1 ? ` (${expected} מקומות)` : ''}\n   בהקשר: ${quote(around(at[0]))}`)
-    else lines.push(`${n + 1}. להוסיף ${quote(clip(insert))} ${op === 'insert_after' ? 'אחרי' : 'לפני'} ${quote(clip(find, 120))}`)
+    if (op === 'replace') lines.push(`${n + 1}. להחליף ${quote(find)} ב-${quote(insert)}${expected > 1 ? ` (${expected} מקומות)` : ''}\n   בהקשר: ${quote(around(at[0]))}`)
+    else if (op === 'delete') lines.push(`${n + 1}. למחוק ${quote(find)}${expected > 1 ? ` (${expected} מקומות)` : ''}\n   בהקשר: ${quote(around(at[0]))}`)
+    else lines.push(`${n + 1}. להוסיף ${quote(insert)} ${op === 'insert_after' ? 'אחרי' : 'לפני'} ${quote(find)}`)
   }
   // Two edits may not touch the same characters, and an insert may not land inside a replaced passage.
   const ranges = spans.filter((s) => s.kind === 'replace').map((s) => [s.start, s.endEx, s.n])
@@ -261,7 +284,7 @@ export function planSlideEdits(pres, edits) {
       if (count !== expected) throw fail(`עריכה ${n + 1}: ${quote(clip(e.find, 80))} מופיע ${count} פעמים${e.slide_id ? ' בשקף' : ' במצגת'}, ציפיתי ל-${expected}.`)
       requests.push({ replaceAllText: { containsText: { text: e.find, matchCase: true }, replaceText: text, ...(e.slide_id && { pageObjectIds: [e.slide_id] }) } })
       expect.push({ at: requests.length - 1, occurrences: expected })
-      lines.push(`${n + 1}. להחליף ${quote(clip(e.find))} ב-${quote(clip(text))}${e.slide_id ? ` בשקף ${e.slide_id}` : ' בכל המצגת'} (${expected} מקומות)`)
+      lines.push(`${n + 1}. להחליף ${quote(e.find)} ב-${quote(text)}${e.slide_id ? ` בשקף ${e.slide_id}` : ' בכל המצגת'} (${expected} מקומות)`)
     } else if (e.op === 'insert_text') {
       const shape = shapes.get(e.shape_id)
       if (!shape) throw fail(`עריכה ${n + 1}: אין צורה עם טקסט בשם ${e.shape_id}. אפשר לראות מזהים עם office_outline.`)
@@ -270,7 +293,7 @@ export function planSlideEdits(pres, edits) {
       const len = shape.text.length
       const index = e.at === 'start' ? 0 : Math.max(0, shape.text.endsWith('\n') ? len - 1 : len)
       requests.push({ insertText: { objectId: e.shape_id, insertionIndex: index, text } })
-      lines.push(`${n + 1}. להוסיף ${quote(clip(text))} ${e.at === 'start' ? 'בתחילת' : 'בסוף'} התיבה ${e.shape_id} (שקף ${shape.slide})`)
+      lines.push(`${n + 1}. להוסיף ${quote(text)} ${e.at === 'start' ? 'בתחילת' : 'בסוף'} התיבה ${e.shape_id} (שקף ${shape.slide})`)
     } else if (e.op === 'add_slide') {
       const at = e.insertion_index ?? slides.length
       if (!Number.isInteger(at) || at < 0 || at > slides.length) throw fail(`עריכה ${n + 1}: מיקום שקף לא תקין (0 עד ${slides.length}).`)
@@ -282,7 +305,7 @@ export function planSlideEdits(pres, edits) {
       requests.push({ createSlide: { objectId: id, insertionIndex: at, slideLayoutReference: { predefinedLayout: layout }, ...(mappings.length && { placeholderIdMappings: mappings }) } })
       if (title) requests.push({ insertText: { objectId: title, insertionIndex: 0, text: String(e.title) } })
       if (body) requests.push({ insertText: { objectId: body, insertionIndex: 0, text: String(e.body) } })
-      lines.push(`${n + 1}. להוסיף שקף חדש במקום ${at + 1}${e.title ? `, כותרת ${quote(clip(e.title))}` : ''}${e.body ? `, תוכן ${quote(clip(e.body))}` : ''}`)
+      lines.push(`${n + 1}. להוסיף שקף חדש במקום ${at + 1}${e.title ? `, כותרת ${quote(e.title)}` : ''}${e.body ? `, תוכן ${quote(e.body)}` : ''}`)
     } else {
       throw fail(`עריכה ${n + 1}: פעולה לא מוכרת "${e?.op}". אפשר: replace_text, insert_text, add_slide.`)
     }
@@ -314,7 +337,7 @@ export async function editDoc(ctx, { account, file_id, edits }) {
         account: email,
         op: { email, id, revision: doc.revisionId, requests },
         fingerprint: { revision: doc.revisionId },
-        question: `לערוך את ${LABEL.doc} "${meta.name}"?\n*חשבון:* ${email}\n*קובץ:* ${id}\n\n${lines.join('\n')}\n\nשאר המסמך לא משתנה. אם מישהו ישנה את המסמך לפני שזה נשלח, גוגל יסרב והשינוי לא יבוצע.`,
+        question: assertAllShown(`לערוך את ${LABEL.doc} "${meta.name}"?\n*חשבון:* ${email}\n*קובץ:* ${id}\n\n${lines.join('\n')}\n\nשאר המסמך לא משתנה. אם מישהו ישנה את המסמך לפני שזה נשלח, גוגל יסרב והשינוי לא יבוצע.`, requests),
       }
     },
     recheck: async (op) => ({ revision: (await google.gcall(op.email, 'GET', `${DOCS}/${encodeURIComponent(op.id)}?fields=revisionId`)).revisionId }),
@@ -406,7 +429,7 @@ export async function editSlides(ctx, { account, file_id, edits }) {
         account: email,
         op: { email, id, revision: pres.revisionId, requests, expect },
         fingerprint: { revision: pres.revisionId },
-        question: `לערוך את ${LABEL.slides} "${meta.name}"?\n*חשבון:* ${email}\n*קובץ:* ${id}\n\n${lines.join('\n')}\n\nשאר המצגת לא משתנה. אם מישהו ישנה אותה לפני השליחה, גוגל יסרב.`,
+        question: assertAllShown(`לערוך את ${LABEL.slides} "${meta.name}"?\n*חשבון:* ${email}\n*קובץ:* ${id}\n\n${lines.join('\n')}\n\nשאר המצגת לא משתנה. אם מישהו ישנה אותה לפני השליחה, גוגל יסרב.`, requests),
       }
     },
     recheck: async (op) => ({ revision: (await google.gcall(op.email, 'GET', `${SLIDES}/${encodeURIComponent(op.id)}?fields=revisionId`)).revisionId }),
