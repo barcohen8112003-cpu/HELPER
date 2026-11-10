@@ -1,6 +1,7 @@
 import mammoth from 'mammoth'
 import { extractText, getDocumentProxy } from 'unpdf'
 import { config } from './config.js'
+import { MAX_WHATSAPP_SPEECH } from './whatsapp-speech.js'
 
 const TEXT_FILE = /\.(txt|md|csv|json|xml|html?|css|jsx?|tsx?|py|java|c|cpp|h|cs|go|rs|rb|php|sql|sh|ps1|ya?ml|ini|log)$/i
 
@@ -113,13 +114,17 @@ export const spokenText = (text) =>
     .trim()
 
 // Text to an Ogg/Opus buffer, the format WhatsApp plays as a voice note. Null when voice replies are off.
-export async function speak(text) {
-  if (!canSpeak() || !spokenText(text)) return null
-  if (config.elevenlabs.apiKey) return elevenSpeak(spokenText(text))
+export async function speak(text, { prepared = false } = {}) {
+  if (!canSpeak()) return null
+  const input = prepared ? String(text ?? '').trim() : spokenText(text)
+  // Prepared WhatsApp text must not pass through legacy markup removal or slicing again.
+  if (prepared && input.length > MAX_WHATSAPP_SPEECH) throw new Error('Prepared speech exceeds WhatsApp speech budget')
+  if (!input) return null
+  if (config.elevenlabs.apiKey) return elevenSpeak(input)
   const res = await fetch(config.voice.baseUrl + '/audio/speech', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.voice.apiKey}` },
-    body: JSON.stringify({ model: config.voice.ttsModel, voice: config.voice.ttsVoice, input: spokenText(text), response_format: 'opus' }),
+    body: JSON.stringify({ model: config.voice.ttsModel, voice: config.voice.ttsVoice, input, response_format: 'opus' }),
     signal: AbortSignal.timeout(120000),
   })
   if (!res.ok) throw new Error(`הקראה נכשלה, HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)

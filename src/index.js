@@ -12,6 +12,7 @@ import { startScheduler, newsDigest, newsInBrief } from './scheduler.js'
 import * as inbox from './inbox.js'
 import * as inflight from './inflight.js'
 import { prepare, speak } from './media.js'
+import { prepareWhatsAppSpeech, deliverWhatsAppSpeech } from './whatsapp-speech.js'
 import { setLocation, isLiveUpdate } from './location.js'
 import { createOutbox } from './outbox.js'
 import { chatModel, Aborted } from './llm.js'
@@ -333,22 +334,35 @@ const wa = await startWhatsApp(async (m) => {
       const input = await prepare({ text, media: await m.getMedia() })
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
+      const wantsVoice = input.voice || state.voiceMode === 'always'
+      const spokenReply = Boolean(config.whatsappSpokenReplies && wantsVoice)
       // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      let reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background, msgId }, input.image)
+      let reply = await runTurn(input.text, { source: 'whatsapp', spokenReply, confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background, msgId }, input.image)
       // Every message gets an answer. Nothing came back and no emoji was chosen as the answer: one short question.
       if ((!reply?.trim() || /^SKIP\b/.test(reply.trim())) && !reacted) {
         console.log('[agent] the model returned no answer; asking him instead of staying silent')
         reply = inbox.NO_ANSWER
       }
       // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
-      // The text follows only when it has links, or when speech failed.
-      const wantsVoice = input.voice || state.voiceMode === 'always'
-      const spoken = reply && wantsVoice ? await speak(reply).catch((e) => (console.log(`[voice] ${e.message}`), null)) : null
-      if (spoken) {
-        await wa.sendVoice(state.owner.jid, spoken)
-        presentSpeech({ text: reply, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+      // The opt-in path keeps a full companion when speech cannot carry the whole answer.
+      const delivery = spokenReply ? prepareWhatsAppSpeech(reply) : null
+      const spoken = reply && wantsVoice ? await speak(delivery ? delivery.speech : reply, { prepared: Boolean(delivery) }).catch((e) => (console.log(`[voice] ${e.message}`), null)) : null
+      if (delivery) {
+        const sent = await deliverWhatsAppSpeech({
+          reply, delivery, audio: spoken,
+          sendText: (text) => wa.send(state.owner.jid, text),
+          sendVoice: (audio) => wa.sendVoice(state.owner.jid, audio),
+          onVoiceError: (e) => console.log(`[voice] ${e.message}`),
+        })
+        if (sent.voiceSent) presentSpeech({ text: delivery.speech, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+      } else {
+        // Flag-off legacy delivery is deliberately unchanged.
+        if (spoken) {
+          await wa.sendVoice(state.owner.jid, spoken)
+          presentSpeech({ text: reply, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+        }
+        if (reply && (!spoken || /https?:\/\//.test(reply))) await wa.send(state.owner.jid, reply)
       }
-      if (reply && (!spoken || /https?:\/\//.test(reply))) await wa.send(state.owner.jid, reply)
       answered = true
       settle(reacted && !reply ? 'reaction' : 'reply')
     } catch (e) {
@@ -356,6 +370,12 @@ const wa = await startWhatsApp(async (m) => {
       if (e instanceof Aborted || ac.signal.aborted) {
         console.log('[agent] הופסק על ידי המשתמש')
         settle('stopped')
+      } else if (config.whatsappSpokenReplies && e.deliveryUncertain === true) {
+        // The work may already be complete. Only answer delivery is unconfirmed.
+        // Do not invite repeating the task or automatically resend its original answer.
+        console.log('[voice] answer text delivery unconfirmed')
+        const noticeId = await wa.send(state.owner.jid, 'לא הצלחתי לאשר שהתשובה הגיעה אליך במלואה. זה לא אומר שהפעולות שביקשת לא בוצעו. לא אבצע אותן שוב אוטומטית.').catch(() => null)
+        if (typeof noticeId === 'string' && noticeId.trim()) settle('error')
       } else {
         console.log(`[agent] ${e.message}`)
         const told = await wa.send(state.owner.jid, humanError(e)).then(() => true, () => false)

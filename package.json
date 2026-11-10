@@ -73,6 +73,7 @@
     "check:obscura": "node src/obscura-selftest.js",
     "check:stays": "node src/stays-selftest.js",
     "check:team": "node src/team-selftest.js",
+    "check:whatsapp-speech": "node src/whatsapp-speech-selftest.js",
     "check:live": "node src/live-voice-selftest.js",
     "demo:team": "node scripts/team-demo.mjs"
   },
