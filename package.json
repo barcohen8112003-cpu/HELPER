@@ -67,6 +67,7 @@
     "check:instinct-continuity": "node src/instinct-continuity-selftest.js",
     "check:inflight": "node src/inflight-selftest.js",
     "check:boot-recovery": "node src/boot-recovery-selftest.js",
+    "check:continuity-preserve": "node src/continuity-preserve-selftest.js",
     "check:opendata": "node src/opendata-selftest.js",
     "check:shopping": "node src/shopping-selftest.js",
     "check:obscura": "node src/obscura-selftest.js",

@@ -1702,8 +1702,12 @@
           ],
           "need": [
             {
-              "label": "the result he is rejecting",
-              "re": "דף נחיתה ירוק"
+              "label": "that the task he is rejecting ended, by its title (the result text itself is sent to him and not kept in the conversation)",
+              "re": "משימת רקע הסתיימה: דף נחיתה"
+            },
+            {
+              "label": "that the result text is not in reach, so the model is not left to guess it",
+              "re": "הטקסט שלה לא שמור"
             },
             {
               "label": "what he asked for: blue",

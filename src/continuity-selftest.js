@@ -256,11 +256,11 @@ const step = (text, status, note) => ({ text, status, ...(note ? { note } : {}) 
   globalThis.fetch = async (url, init) => (++calls === 2 ? (stop.abort(), Promise.reject(new Error('aborted'))) : inner(url, init))
   await failing.catch(() => {})
   globalThis.fetch = inner
-  ok(state.history.length === before + 2 && state.history.at(-1).content === 'מוכן: index.html', 'a result that landed during a turn that failed is not rolled back with it')
+  ok(state.history.length === before + 2 && state.history.at(-2).content === '[משימת רקע הסתיימה: דף נחיתה]' && !JSON.stringify(state.history).includes('index.html'), 'a task that ended during a turn that failed is not rolled back with it, and only its status is kept')
 
   // A failure is told to the conversation too.
   noteBackground('הכנת קובץ', 'המשימה "הכנת קובץ" לא הסתיימה: שירות חיצוני לא ענה', true)
-  ok(state.history.at(-2).content === '[משימת רקע לא הסתיימה: הכנת קובץ]', 'a failed task leaves its failure in the conversation')
+  ok(state.history.at(-2).content === '[משימת רקע לא הסתיימה: הכנת קובץ]' && !/שירות חיצוני/.test(state.history.at(-1).content), 'a failed task leaves that it failed in the conversation, without the error text')
   globalThis.fetch = scripted
 }
 
