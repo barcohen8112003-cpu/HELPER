@@ -45,6 +45,7 @@
     "check:agent": "node src/agent-selftest.js",
     "check:continuity": "node src/continuity-selftest.js",
     "eval:converse": "node scripts/converse-eval.mjs",
+    "check:converse-eval": "node scripts/converse-eval-selftest.mjs",
     "check:routing": "node src/routing-selftest.js",
     "check:flights": "node src/flights-selftest.js",
     "check:proactive": "node src/proactive-selftest.js",
