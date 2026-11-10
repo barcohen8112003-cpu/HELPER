@@ -79,6 +79,7 @@ const TESTS = [
   'src/gmail-plus-selftest.js',
   'src/calendar-plus-selftest.js',
   'src/github-write-selftest.js',
+  'src/vault-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

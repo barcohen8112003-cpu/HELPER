@@ -143,6 +143,13 @@ async function withTab(run) {
   }
 }
 
+// For the credential vault (src/vault-tools.js) only: a CDP call on the errand tab of this machine (local Chrome or
+// the cloud browser). Never over the PC bridge: a saved password is not sent to another machine.
+export function withLocalErrandTab(run) {
+  if (!useCloudBrowser() && remoteActive()) return Promise.reject(Object.assign(new Error('המילוי עובד רק בדפדפן שרץ כאן, לא דרך המחשב בבית.'), { code: 'unsupported' }))
+  return withTab((call) => run(call))
+}
+
 // -> { image: data URL, width, height, scale: 1, left: 0, top: 0, url, title }
 export function browserScreenshot() {
   if (!useCloudBrowser() && remoteActive()) return remoteCall('browserScreenshot', [])
