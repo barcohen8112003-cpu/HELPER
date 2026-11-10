@@ -173,6 +173,97 @@ const ctxWith = (answers) => {
   ok(r1.status === 'done' && r2.status === 'done' && asked.length === 2 && ran.length === 2, 'a repeatable action is asked about and run again, never skipped as already done')
 }
 
+
+// ---- duplicates: two identical requests at once, other processes, restarts ----
+{
+  // The owner's chat answers one question at a time (index.js askOnce runs serially). Two identical requests that
+  // both get a yes must still run once.
+  let writes = 0
+  let chain = Promise.resolve()
+  const ctx = { confirm: () => { const a = chain.then(() => new Promise((r) => setTimeout(() => r(true), 5))); chain = a.catch(() => {}); return a } }
+  const spec = {
+    tool: 'dup_send', account: 'synthetic',
+    prepare: async () => ({ op: { to: 'synthetic', body: 'same' }, question: 'לשלוח?' }),
+    execute: async () => { const c = ++writes; await new Promise((r) => setTimeout(r, 10)); return { confirmed: true, ref: `r${c}`, text: 'נשלח' } },
+  }
+  const rs = await Promise.all([ba.boundMutation(ctx, spec), ba.boundMutation(ctx, spec)])
+  ok(writes === 1 && rs.map((r) => r.status).sort().join() === 'done,in_progress', `two identical requests with a serial confirm: one write (${writes}, ${rs.map((r) => r.status)})`)
+  ok(ba.openOperations() === 0, 'nothing is left claimed afterwards')
+  const again = await ba.boundMutation(ctx, spec)
+  ok(again.status === 'already_done' && writes === 1, 'the same request later: already done, not sent again')
+}
+{
+  // The same, with a repeatable action (filling a login): both at once never run twice.
+  let runs = 0
+  const ctx = { confirm: async () => (await new Promise((r) => setTimeout(r, 5)), true) }
+  const spec = { tool: 'dup_fill', account: 'local', repeatable: true, prepare: async () => ({ op: { id: 'e1' }, question: 'למלא?' }), execute: async () => (++runs, await new Promise((r) => setTimeout(r, 5)), { confirmed: true, ref: 'x', text: 'מולא' }) }
+  const rs = await Promise.all([ba.boundMutation(ctx, spec), ba.boundMutation(ctx, spec)])
+  ok(runs === 1 && rs.some((r) => r.status === 'in_progress'), `a repeatable action asked twice at once runs once (${runs})`)
+}
+{
+  // Another Helper process finished the same operation while this one waited for the answer.
+  let writes = 0
+  let digestSeen
+  const spec = {
+    tool: 'dup_other', account: 'synthetic',
+    prepare: async () => ({ op: { n: 1 }, question: 'לשלוח?' }),
+    execute: async () => (++writes, { confirmed: true, ref: 'r', text: 'נשלח' }),
+  }
+  digestSeen = ba.digestOf({ tool: 'dup_other', account: 'synthetic', op: { n: 1 }, fingerprint: null })
+  const ledgerFile = path.join(dir, 'mutation-ledger.json')
+  const ctx = { confirm: async () => {
+    const all = JSON.parse(fs.existsSync(ledgerFile) ? fs.readFileSync(ledgerFile, 'utf8') : '{}')
+    all[digestSeen] = { tool: 'dup_other', state: 'done', at: Date.now(), ref: 'other-process' }
+    fs.writeFileSync(ledgerFile, JSON.stringify(all))
+    return true
+  } }
+  const r = await ba.boundMutation(ctx, spec)
+  ok(r.status === 'already_done' && writes === 0, `done by another process during the question: checked again after the yes, not sent (${r.status})`)
+}
+{
+  // "unknown" is on disk before execute starts, so a crash or restart in the middle blocks an automatic retry.
+  let onDisk
+  const spec = {
+    tool: 'dup_crash', account: 'synthetic',
+    prepare: async () => ({ op: { n: 2 }, question: 'לשלוח?' }),
+    execute: async () => {
+      onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'mutation-ledger.json'), 'utf8'))
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })
+    },
+  }
+  const digest = ba.digestOf({ tool: 'dup_crash', account: 'synthetic', op: { n: 2 }, fingerprint: null })
+  const r1 = await ba.boundMutation({ confirm: async () => true }, spec)
+  ok(onDisk?.[digest]?.state === 'unknown', 'the claim is written to disk before execute runs')
+  ok(r1.status === 'unknown', 'no answer from the service: unknown')
+  let asked = 0
+  const r2 = await ba.boundMutation({ confirm: async () => (asked++, true) }, { ...spec, execute: async () => ({ confirmed: true, ref: 'x', text: 'x' }) })
+  ok(r2.status === 'unknown' && asked === 0, 'after an unknown outcome (or a restart in the middle), the same operation is not asked or run again')
+  ok(!fs.readdirSync(dir).some((f) => f.endsWith('.tmp') || f.endsWith('.lock')), 'no temporary or lock files are left behind')
+}
+{
+  // A confirm that throws is a no, and the claim is released.
+  let writes = 0
+  const spec = { tool: 'dup_throw', account: 'synthetic', prepare: async () => ({ op: { n: 3 }, question: 'לשלוח?' }), execute: async () => (++writes, { confirmed: true, ref: 'r', text: 'x' }) }
+  const r = await ba.boundMutation({ confirm: async () => { throw new Error('chat closed') } }, spec)
+  ok(r.status === 'declined' && writes === 0 && ba.openOperations() === 0, `a confirm that throws counts as no and releases the claim (${r.status})`)
+  const r2 = await ba.boundMutation({ confirm: async () => true }, spec)
+  ok(r2.status === 'done' && writes === 1, 'after a no, the same operation can be asked again and run once')
+}
+{
+  // A stale lock left by a crashed process does not block forever; a fresh one held by another process blocks.
+  const lock = path.join(dir, 'mutation-ledger.json.lock')
+  fs.writeFileSync(lock, '')
+  const old = new Date(Date.now() - 60000)
+  fs.utimesSync(lock, old, old)
+  const r = await ba.boundMutation({ confirm: async () => true }, { tool: 'dup_lock', account: 's', prepare: async () => ({ op: { n: 4 }, question: 'x?' }), execute: async () => ({ confirmed: true, ref: 'r', text: 'x' }) })
+  ok(r.status === 'done', `a stale ledger lock is cleared (${r.status})`)
+  fs.writeFileSync(lock, '')
+  let writes = 0
+  const r2 = await ba.boundMutation({ confirm: async () => true }, { tool: 'dup_lock', account: 's', prepare: async () => ({ op: { n: 5 }, question: 'x?' }), execute: async () => (++writes, { confirmed: true, ref: 'r', text: 'x' }) })
+  fs.rmSync(lock, { force: true })
+  ok(r2.status === 'refused' && writes === 0, `a held ledger lock: refused, nothing runs (${r2.status})`)
+}
+
 // ---- googleWriteAccount ----
 {
   const g = { googleAccounts: () => [], grantedScopes: async () => [] }
