@@ -7,9 +7,9 @@ const PERSONA_SHORT = path.join(ROOT, 'persona.short.md')
 const VOICE_FILE = path.join(ROOT, 'persona.voice.md')
 import { calendarOn } from './calendar.js'
 import { googleAccounts, googleEnabled } from './google.js'
-import { state, save } from './store.js'
+import { state, save, newId } from './store.js'
 import { llm, ask, LONG_PATIENCE, Aborted, chatModel } from './llm.js'
-import { polish } from './style.js'
+import { polish, humanError } from './style.js'
 import { recordTurn } from './metrics.js'
 import { activeTools, allTools, toolDefs, domainIsOn } from './tools.js'
 import { pickDomains, routingText, menuLine, domainOf } from './domains.js'
@@ -219,29 +219,159 @@ const isHis = (m) => m.role === 'user' && !isOwnTurn(m)
 // A turn of his is being answered: an exchange from outside it waits until the turn ends. Pushed into the middle
 // of the turn it would land between a tool call and its result (the API refuses that), and a failed turn, which
 // rolls the history back to where it began, would take the result with it.
+//
+// While it waits, who it belongs to is already on disk: state.ownPending gets one record per waiting exchange
+// (kind, done or failed, the task's title, when, whether the message about it left) in a save of its own. Never the
+// text of a result or of an error: that stays in this process until the turn ends, and if the process dies first
+// it is gone, and the conversation is told so (recoverConversation). state.turnOpen marks where the turn being
+// answered began, so a restart can tell a turn that was cut from one that ended.
 let turnsRunning = 0
-const waiting = []
-function addOwnTurn(marker, reply) {
+const waiting = [] // { id, pair }
+const pending = () => (Array.isArray(state.ownPending) ? state.ownPending : (state.ownPending = []))
+// A title goes inside a "[...]" marker on one line: it cannot close the marker or start a line of its own.
+const label = (title) => String(title ?? '').replace(/[\[\]\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
+const ownMarker = (rec) => (rec.kind === 'task' ? '[משימה מתוזמנת רצה]' : `[${rec.failed ? 'משימת רקע לא הסתיימה' : 'משימת רקע הסתיימה'}: ${rec.title}]`)
+
+function addOwnTurn(meta, marker, reply) {
   const pair = [{ role: 'user', content: marker }, { role: 'assistant', content: reply }]
-  if (turnsRunning) return void waiting.push(pair)
+  if (turnsRunning) {
+    const id = newId()
+    waiting.push({ id, pair })
+    pending().push({ id, ...meta, at: Date.now() })
+    // A disk that cannot be written must not stop the result from being sent to him: it still waits in memory.
+    try {
+      save()
+    } catch (e) {
+      console.log(`[agent] הסטטוס של "${meta.title || meta.kind}" לא נשמר לדיסק: ${e.message}`)
+    }
+    return
+  }
   state.history.push(...pair)
   trimHistory()
   save()
 }
+
+// The turn is over (answered, failed or stopped): what waited joins the history after it and its records are
+// settled, all before the caller's one save, so the disk never holds an exchange both as waiting and as arrived.
 function turnEnded() {
   turnsRunning = Math.max(0, turnsRunning - 1)
-  if (turnsRunning || !waiting.length) return
-  for (const pair of waiting.splice(0)) state.history.push(...pair)
+  if (turnsRunning) return
+  delete state.turnOpen
+  if (!waiting.length) return
+  const arrived = new Set()
+  for (const w of waiting.splice(0)) {
+    state.history.push(...w.pair)
+    arrived.add(w.id)
+  }
+  state.ownPending = pending().filter((r) => !arrived.has(r.id))
   trimHistory()
-  save()
 }
 
-// A background task that did not go through runBackground (Claude Code, the TV, a lesson being learned) or that
-// failed: what he was sent about it joins the conversation, so "לא מה שביקשתי" or "סיימת?" has something to refer to.
+// What the conversation keeps about a task that did not go through runBackground (Claude Code, the TV, a lesson
+// being learned) or that failed: that it ended, and how. The result or the error itself was sent to him and is
+// not copied here: it can hold a private document, someone else's words or a secret from an error message, and
+// being sent to him once is not a reason to keep it. `text` is only checked for being there.
+const DONE_NOTE = 'המשימה הסתיימה. את התוצאה אני שולח בהודעה נפרדת, והטקסט שלה לא שמור אצלי בשיחה הזאת.'
+const FAILED_NOTE = 'המשימה לא הסתיימה. על זה אני מודיע בהודעה נפרדת, ופרטי השגיאה לא שמורים אצלי בשיחה הזאת.'
 export function noteBackground(title, text, failed = false) {
-  const reply = String(text || '').trim()
-  if (!reply) return
-  addOwnTurn(`[${failed ? 'משימת רקע לא הסתיימה' : 'משימת רקע הסתיימה'}: ${title}]`, reply.slice(0, 2000))
+  if (!String(text || '').trim()) return
+  const rec = { kind: 'job', failed: Boolean(failed), title: label(title) }
+  addOwnTurn(rec, ownMarker(rec), rec.failed ? FAILED_NOTE : DONE_NOTE)
+}
+
+// The message about a finished task left for WhatsApp. Only matters while its record still waits: after a restart
+// it is the difference between "it was sent" and "I do not know if it reached you".
+export function noteDelivered(title, failed = false) {
+  const name = label(title)
+  const rec = pending().findLast((r) => r.kind === 'job' && r.title === name && r.failed === Boolean(failed) && !r.sent)
+  if (!rec) return
+  rec.sent = true
+  try {
+    save()
+  } catch (e) {
+    console.log(`[agent] ${e.message}`)
+  }
+}
+
+// What index.js does when a background task ends. `external`: the work was done by something other than the agent
+// (runBackground notes its own result). A task that was stopped ends with neither a result nor an error: nothing
+// is sent and nothing is noted.
+export const backgroundDone = ({ external, send }) => async (name, result, error) => {
+  if (!result && !error) return
+  const failed = !result
+  const text = failed ? `המשימה "${name}" לא הסתיימה: ${humanError(error)}` : `*${name}*\n${result}`
+  if (failed || external) noteBackground(name, text, failed)
+  await send(text)
+  noteDelivered(name, failed)
+}
+
+// After a restart, once, before anything else is answered. Three things can have been cut:
+// - a turn of his (state.turnOpen): his message stays, what the turn had written after it goes (tool calls that may
+//   have no result, a draft, the self-check), and a line says it was cut and which tools had run. Nothing is run
+//   again and nothing is answered again.
+// - exchanges that waited for that turn to end (state.ownPending): each joins the history as its status alone.
+//   Their text was never on disk, and the line says so.
+// - background tasks that were still running (`interrupted`, from jobs.js): not finished, no result, not restarted.
+// Returns what was found, for the one notice index.js sends (recoveryNotice).
+export function recoverConversation(interrupted = []) {
+  const found = { cutTurn: false, unsure: [], interrupted: interrupted.length }
+  const open = state.turnOpen
+  const left = pending().splice(0)
+  if (!open && !left.length && !interrupted.length) return found
+  if (open) {
+    found.cutTurn = closeCutTurn(open.mark)
+    delete state.turnOpen
+  }
+  for (const rec of left) {
+    const what = rec.kind === 'task' ? 'בדיקה מתוזמנת רצה' : rec.failed ? 'המשימה לא הסתיימה' : 'המשימה הסתיימה'
+    const about = rec.kind === 'task' ? 'ההודעה שלה' : rec.failed ? 'ההודעה על זה' : 'התוצאה'
+    const kept = rec.failed ? 'פרטי השגיאה לא שמורים אצלי' : 'הטקסט שלה לא שמור אצלי'
+    state.history.push(
+      { role: 'user', content: ownMarker(rec) },
+      { role: 'assistant', content: rec.sent ? `${what}, ${about} נשלחה אליך, ואחר כך הופעלתי מחדש. ${kept}.` : `${what} ממש לפני שהופעלתי מחדש. אני לא יודע אם ${about} הגיעה אליך, ו${kept}.` }
+    )
+    if (!rec.sent) found.unsure.push({ kind: rec.kind, failed: Boolean(rec.failed), title: rec.title || '' })
+  }
+  for (const j of interrupted) {
+    const rec = { kind: 'job', failed: true, title: label(j.title) }
+    state.history.push({ role: 'user', content: ownMarker(rec) }, { role: 'assistant', content: 'המשימה נקטעה כי הופעלתי מחדש. היא לא הסתיימה, אין לה תוצאה, ולא התחלתי אותה שוב.' })
+  }
+  trimHistory()
+  save()
+  return found
+}
+
+function closeCutTurn(mark) {
+  const h = state.history
+  if (!Number.isInteger(mark) || mark < 0 || mark >= h.length) return false
+  const his = h[mark]
+  // The mark does not point at a message of his: the tail cannot be told apart, so it goes, as a failed turn's does.
+  if (his.role !== 'user') return (h.length = mark), false
+  const rest = h.splice(mark + 1)
+  if (Array.isArray(his.content)) his.content = `${his.content.find((p) => p.type === 'text')?.text || ''} [צורפה תמונה]`
+  const answered = new Set(rest.filter((m) => m.role === 'tool').map((m) => m.tool_call_id))
+  const calls = rest.flatMap((m) => (m.role === 'assistant' && m.tool_calls) || [])
+  const names = (list) => [...new Set(list.map((c) => c.function?.name).filter(Boolean))].join(', ')
+  const ran = names(calls.filter((c) => answered.has(c.id)))
+  const unsure = names(calls.filter((c) => !answered.has(c.id)))
+  h.push({
+    role: 'assistant',
+    content: `הופעלתי מחדש באמצע הטיפול בהודעה הזאת ולא סיימתי אותה.${ran ? ` כלים שכבר רצו: ${ran}.` : ''}${unsure ? ` כלים שהתחילו ולא ידוע אם הסתיימו: ${unsure}.` : ''} לפני שחוזרים על פעולה ששולחת, מזמינה, משלמת או משנה משהו, צריך לבדוק מה כבר בוצע.`,
+  })
+  return true
+}
+
+// One message to him after a restart about results that may not have reached him. Titles only.
+export function recoveryNotice(found) {
+  return (found?.unsure || [])
+    .map((r) =>
+      r.kind === 'task'
+        ? 'בדיקה מתוזמנת רצה ממש לפני שהופעלתי מחדש, ואני לא יודע אם ההודעה שלה הגיעה אליך. הטקסט שלה לא נשמר.'
+        : r.failed
+          ? `המשימה "${r.title}" לא הסתיימה, ממש לפני שהופעלתי מחדש. אם לא קיבלת על זה הודעה: היא נכשלה, ופרטי השגיאה לא נשמרו.`
+          : `המשימה "${r.title}" הסתיימה ממש לפני שהופעלתי מחדש, ואני לא יודע אם התוצאה הגיעה אליך. הטקסט שלה לא נשמר, אז אם לא קיבלת אותה, תבקש שוב.`
+    )
+    .join('\n')
 }
 
 // Hard cap, in case compaction keeps failing.
@@ -558,7 +688,17 @@ export async function runTurn(userText, ctx, image) {
   ctx.plan ??= savedPlan()
   // He wrote: Helper's own messages are being answered, and he is in the conversation right now.
   noteUserMessage()
+  if (!turnsRunning) state.turnOpen = { mark, at: started }
   turnsRunning++
+  // Called right before the save that ends the turn, whichever way it ends: that one save carries the turn, the
+  // exchanges that waited for it, and their settled records together.
+  let closed = false
+  const close = () => {
+    if (closed) return false
+    closed = true
+    turnEnded()
+    return true
+  }
   try {
     // The team (src/team/conductor.js, off unless TEAM_MODE is set): a flight with limits, or a big task that
     // opens the war room. A request it takes is answered by it, once. null = the turn goes on as before.
@@ -566,6 +706,7 @@ export async function runTurn(userText, ctx, image) {
     if (team) {
       state.history.push({ role: 'assistant', content: team.reply })
       recordTurn({ ms: Date.now() - started, tools: team.toolCalls || 0, model: 'team' })
+      close()
       trimHistory()
       save()
       return team.reply
@@ -584,17 +725,21 @@ export async function runTurn(userText, ctx, image) {
       if (m.role === 'tool' && Array.isArray(m.content)) m.content = m.content.find((p) => p.type === 'text')?.text || 'צילום מסך'
     }
     recordTurn({ ms: Date.now() - started, tools: state.history.slice(mark).filter((m) => m.role === 'tool').length, model: chatModel() })
+    close()
     trimHistory()
     save()
     // After the answer is on its way: note lasting facts from this message as candidates. Never blocks or fails the turn.
     learnFrom(userText).catch((e) => console.log(`[memory] ${e.message}`))
     return reply
   } catch (e) {
-    state.history.length = mark
+    // Rolled back to where the turn began, unless it had already closed: then what waited for it sits after it
+    // in the history, and cutting there would take those exchanges too.
+    if (!closed) state.history.length = Math.min(mark, state.history.length)
+    close()
     save()
     throw e
   } finally {
-    turnEnded()
+    if (close()) save()
   }
 }
 
@@ -608,7 +753,7 @@ const TASK_PROMPT = `[משימה מתוזמנת - המשתמש לא כתב עכ�
 export async function runTask(instruction, ctx) {
   const reply = (await converse([{ role: 'user', content: TASK_PROMPT + instruction }], ctx)).trim()
   if (!reply || /^SKIP\b/.test(reply)) return ''
-  addOwnTurn(`[משימה מתוזמנת רצה: ${instruction}]`, reply)
+  addOwnTurn({ kind: 'task', failed: false }, `[משימה מתוזמנת רצה: ${instruction}]`, reply)
   return reply
 }
 
@@ -621,7 +766,7 @@ const BACKGROUND_PROMPT = `[משימת רקע. המשתמש ביקש אותה ב
 // so the user can answer it like any other message.
 export async function runBackground(title, instruction, ctx) {
   const reply = (await converse([{ role: 'user', content: BACKGROUND_PROMPT + instruction }], ctx)).trim()
-  addOwnTurn(`[משימת רקע הסתיימה: ${title}]`, reply)
+  addOwnTurn({ kind: 'job', failed: false, title: label(title) }, `[משימת רקע הסתיימה: ${title}]`, reply)
   return reply
 }
 
@@ -638,6 +783,10 @@ export function resetHistory() {
   state.summary = ''
   state.modelOverride = ''
   if (state.team) state.team.pending = null
+  // "שיחה חדשה" is his choice to drop the conversation: what waited to join it is dropped with it.
+  waiting.length = 0
+  state.ownPending = []
+  if (state.turnOpen) state.turnOpen.mark = 0
   clearPlan()
   save()
 }

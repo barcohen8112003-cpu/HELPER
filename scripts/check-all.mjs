@@ -55,6 +55,7 @@ const TESTS = [
   'src/instinct-continuity-selftest.js',
   'src/inflight-selftest.js',
   'src/boot-recovery-selftest.js',
+  'src/continuity-preserve-selftest.js',
   'src/claude-code-selftest.js',
   'src/gemini-spark-selftest.js',
   'src/tv-agent-selftest.js',

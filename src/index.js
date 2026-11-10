@@ -6,7 +6,7 @@ import { config, DATA_DIR } from './config.js'
 import { lockHeldByOther } from './instance-lock.js'
 import { state, save } from './store.js'
 import { startWhatsApp } from './whatsapp.js'
-import { runTurn, runTask, runBackground, runIsolated, resetHistory, compact, setSettingsUrl, noteBackground } from './agent.js'
+import { runTurn, runTask, runBackground, runIsolated, resetHistory, compact, setSettingsUrl, backgroundDone, recoverConversation, recoveryNotice } from './agent.js'
 import { startJob, stopJobs, jobsText, listJobs, interruptedJobs } from './jobs.js'
 import { startScheduler, newsDigest, newsInBrief } from './scheduler.js'
 import * as inbox from './inbox.js'
@@ -434,19 +434,9 @@ function background(title, instruction, run) {
   return startJob(
     title,
     run || ((signal, setStep) => runBackground(title, instruction, { source: 'job', confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep })),
-    async (name, result, error) => {
-      // runBackground adds its own result to the conversation; a task run by something else, or one that failed,
-      // is added here, so his next message about it has something to refer to.
-      if (result) {
-        if (run) noteBackground(name, result)
-        return wa.send(state.owner.jid, `*${name}*\n${result}`)
-      }
-      if (error) {
-        const text = `המשימה "${name}" לא הסתיימה: ${humanError(error)}`
-        noteBackground(name, text, true)
-        return wa.send(state.owner.jid, text)
-      }
-    }
+    // runBackground adds its own result to the conversation; a task run by something else, or one that failed,
+    // leaves its status there (never the result or the error text), so "סיימת?" has something to refer to.
+    backgroundDone({ external: Boolean(run), send: (text) => wa.send(state.owner.jid, text) })
   )
 }
 
@@ -473,6 +463,11 @@ setInterval(() => backupTick((text) => notify(text)).catch((e) => console.log(`[
 setTimeout(() => backupTick((text) => notify(text)).catch(() => {}), 5 * 60000).unref()
 
 const cutShort = interruptedJobs()
+// What a restart cut in the conversation itself (src/agent.js): a turn of his, results that waited for it, and the
+// tasks above. The history gets their status; he gets one more line only for a result that may not have reached him.
+const cutTalk = recoverConversation(cutShort)
+if (cutTalk.cutTurn || cutTalk.unsure.length) console.log(`[agent] אחרי הפעלה מחדש: ${cutTalk.cutTurn ? 'תור אחד נקטע, ' : ''}${cutTalk.unsure.length} תוצאות שלא ידוע אם הגיעו`)
+if (cutTalk.unsure.length) outbox.notify(recoveryNotice(cutTalk), true).catch(() => {})
 if (cutShort.length) outbox.notify(`${cutShort.length > 1 ? 'המשימות' : 'המשימה'} ${cutShort.map((j) => `"${j.title}"`).join(', ')} ${cutShort.length > 1 ? 'נקטעו' : 'נקטעה'} כי הופעלתי מחדש. אם עדיין צריך, תבקש שוב.`, true).catch(() => {})
 
 // WhatsApp cannot report its own outage, so after WHATSAPP_DOWN_ALERT_MIN minutes without it the alert goes out
