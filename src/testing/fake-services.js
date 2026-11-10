@@ -65,3 +65,22 @@ export function askingCtx(answers = [], extra = {}) {
     ctx: { source: 'whatsapp', confirm: async (q) => (asked.push(q), queue.length ? queue.shift() : false), say: async () => {}, sendMedia: async () => {}, ...extra },
   }
 }
+
+// A scripted model for end-to-end checks through the real agent loop (src/agent.js runTurn): the first request gets
+// the given tool calls, every later one a plain answer. Requests to other hosts go to `fallback` (a fakeFetch).
+export function scriptedModel(config, fallback) {
+  Object.assign(config.llm, { apiKey: 'test-key', model: 'fake-model', fallbackModels: [], cheapModel: '', baseUrl: 'http://fake.invalid', backup: { apiKey: '', model: '' }, light: false })
+  config.memoryLearn = false
+  const s = { requests: [], next: null }
+  let id = 1
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).startsWith('http://fake.invalid')) return fallback(url, init)
+    s.requests.push(JSON.parse(init.body))
+    const message = s.next ? { role: 'assistant', content: '', tool_calls: s.next.map(([name, args]) => ({ id: `c${id++}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })) } : { role: 'assistant', content: 'סיימתי.' }
+    s.next = null
+    return { ok: true, headers: { get: () => null }, json: async () => ({ choices: [{ message }] }) }
+  }
+  // The tool results the model was given in the last turn.
+  s.toolResults = () => (s.requests.at(-1)?.messages || []).filter((m) => m.role === 'tool').map((m) => (typeof m.content === 'string' ? m.content : m.content?.[0]?.text || ''))
+  return s
+}
