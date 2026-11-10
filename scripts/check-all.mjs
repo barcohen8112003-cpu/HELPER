@@ -35,6 +35,7 @@ const TESTS = [
   'src/phone-app-selftest.js',
   'src/dashboard/_selftest.js',
   'src/backup-selftest.js',
+  'src/backup-archive-selftest.js',
   'src/style-selftest.js',
   'src/answers-selftest.js',
   'src/metrics-selftest.js',
