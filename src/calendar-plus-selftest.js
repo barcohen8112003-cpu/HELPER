@@ -106,7 +106,7 @@ for (const n of ['calendar_find', 'calendar_update', 'calendar_delete', 'calenda
 {
   const f = JSON.parse(await byName.get('calendar_find').run({ from: '2026-11-16', days: 14 }))
   const inst = f.events.find((e) => e.recurring_event_id === 'evseries1')
-  ok(f.time_zone === tz && inst?.event_id === 'evseries1_20261123T080000Z' && /2026-11-23 10:00–11:00/.test(inst.when), 'find: occurrences come with their own id, the series id and local time')
+  ok(f.time_zone === tz && inst?.event_id === 'evseries1_20261123T080000Z' && /מ-2026-11-23 10:00 .* עד 2026-11-23 11:00/.test(inst.when), 'find: occurrences come with their own id, the series id and local time')
   ok(f.events.find((e) => e.event_id === 'evguest1').guests[0].email === 'g@x.org', 'find: guests are listed (without me)')
 }
 
@@ -232,6 +232,41 @@ for (const n of ['calendar_find', 'calendar_update', 'calendar_delete', 'calenda
   model.next = [['calendar_delete', { event_id: 'evallday1' }]]
   await runTurn('כן תמחק', { source: 'whatsapp', confirm: async () => true, say: async () => {} })
   ok(deleted.has('evallday1') && model.toolResults().some((t) => /\[done\]/.test(t)), 'agent loop: with the owner\'s yes the registered path deletes it')
+}
+
+// ---- the question shows full start AND end, as sent (review: an end moved by 3 days read as unchanged) ----
+{
+  const fresh = (id, over = {}) => (events[id] = { id, etag: `e-${id}`, status: 'confirmed', summary: 'סקירה', start: { dateTime: '2026-11-20T10:00:00+02:00', timeZone: tz }, end: { dateTime: '2026-11-20T11:00:00+02:00', timeZone: tz }, organizer: { email: 'me@example.com', self: true }, ...over })
+  fresh('evreview1')
+  const r = await run('calendar_update', { event_id: 'evreview1', end: '2026-11-23T11:00' }, [true])
+  const sent = patches.at(-1)
+  ok(r.status === 'done' && sent.body.end.dateTime === '2026-11-23T11:00:00' && sent.body.start.dateTime === '2026-11-20T10:00:00', `the reviewer's end-only change is sent as asked (${r.status})`)
+  ok(/זמן עכשיו:\* מ-2026-11-20 10:00 .*עד 2026-11-20 11:00.*משך 1 שעות/.test(r.asked[0]) && /זמן חדש:\* מ-2026-11-20 10:00 .*עד 2026-11-23 11:00.*משך 3 ימים ו-1 שעות/.test(r.asked[0]), `the question shows the new end date and the 3-day duration (${r.asked[0].split('\n').filter((l) => /זמן/.test(l)).join(' | ')})`)
+  ok(/UTC\+02:00/.test(r.asked[0]), 'each time carries its UTC offset')
+
+  // Across the end of summer time (Asia/Jerusalem, 25 Oct 2026): two different offsets, true duration.
+  fresh('evreview2')
+  const d = await run('calendar_update', { event_id: 'evreview2', start: '2026-10-24T22:00', end: '2026-10-25T03:00' }, [false])
+  ok(/מ-2026-10-24 22:00 \(Asia\/Jerusalem UTC\+03:00\) עד 2026-10-25 03:00 \(UTC\+02:00\), משך 6 שעות/.test(d.asked[0]), `across a DST change the offsets and real duration are shown (${d.asked[0].split('\n').find((l) => /זמן חדש/.test(l))})`)
+
+  // All-day: first and last day inclusive and the count; what is sent is the exclusive end date.
+  fresh('evreview3')
+  const a = await run('calendar_update', { event_id: 'evreview3', all_day: true, start: '2026-11-20', end: '2026-11-22' }, [true])
+  ok(/זמן חדש:\* 2026-11-20 עד 2026-11-22 כולל \(כל היום, 3 ימים\)/.test(a.asked[0]) && patches.at(-1).body.end.date === '2026-11-23' && patches.at(-1).body.start.date === '2026-11-20', 'all-day: inclusive days and count are shown; the exclusive end is sent')
+
+  // A zone change: the new zone and its offset are shown.
+  fresh('evreview4')
+  const z = await run('calendar_update', { event_id: 'evreview4', start: '2026-11-20T10:00', time_zone: 'Europe/London' }, [false])
+  ok(/זמן חדש:\* מ-2026-11-20 10:00 \(Europe\/London UTC\+00:00\) עד 2026-11-20 11:00/.test(z.asked[0]) && /זמן עכשיו:\* מ-2026-11-20 10:00 \(Asia\/Jerusalem UTC\+02:00\)/.test(z.asked[0]), 'a time zone change shows both zones and offsets')
+
+  // One occurrence of a series: its own full dates.
+  const i = await run('calendar_update', { event_id: 'evseries1_20261123T080000Z', scope: 'instance', end: '2026-11-23T12:30' }, [false])
+  ok(/זמן חדש:\* מ-2026-11-23 11:00 .*עד 2026-11-23 12:30.*משך 1 שעות ו-30 דקות/.test(i.asked[0]), `an occurrence shows its full dates and new duration (${i.status})`)
+
+  // The same time again is flagged.
+  fresh('evreview5')
+  const same = await run('calendar_update', { event_id: 'evreview5', end: '2026-11-20T11:00' }, [false])
+  ok(/זהה לזמן הנוכחי/.test(same.asked[0]), 'a "change" to the same time is flagged')
 }
 
 done('calendar-plus')

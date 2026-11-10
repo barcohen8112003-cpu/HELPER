@@ -87,16 +87,45 @@ const prevDay = (d) => {
   return t.toISOString().slice(0, 10)
 }
 
-// How an event's time reads to a person, in its own zone.
+// The UTC offset a zone has at an instant, e.g. "UTC+02:00".
+const offsetOf = (ms, tz) => (new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' }).formatToParts(new Date(ms)).find((p) => p.type === 'timeZoneName')?.value || '').replace(/^GMT$/, 'UTC+00:00').replace('GMT', 'UTC')
+
+// The instant one side (start or end) names: a dateTime with an offset as it is; a local dateTime in its timeZone
+// (the first of a repeated hour, as Google does).
+function instantOfSide(side, tz) {
+  const dt = side?.dateTime
+  if (!dt) return NaN
+  if (/(Z|[+-]\d{2}:?\d{2})$/.test(dt)) return Date.parse(dt)
+  const at = instantsOf(dt.slice(0, 16), side.timeZone || tz)
+  return at.length ? at[0] : NaN
+}
+
+function duration(ms) {
+  const m = Math.round(ms / 60000)
+  const d = Math.floor(m / 1440)
+  const h = Math.floor((m % 1440) / 60)
+  const min = m % 60
+  return [d && `${d} ימים`, h && `${h} שעות`, min && `${min} דקות`].filter(Boolean).join(' ו-') || '0 דקות'
+}
+
+const dayCount = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 86400000)
+
+// How an event's time reads to a person: full start AND end date and time, each with its zone and UTC offset, and
+// the duration. All-day events: first and last day (inclusive) and the number of days. The same function reads the
+// event as it is and the patch that will be sent, so the question shows exactly the times Google will get.
 function timeText(ev, tz) {
   if (ev.start?.date) {
-    const last = prevDay(ev.end?.date || nextDay(ev.start.date))
-    return last === ev.start.date ? `${ev.start.date} (כל היום)` : `${ev.start.date} עד ${last} (כל היום)`
+    const endEx = ev.end?.date || nextDay(ev.start.date)
+    const last = prevDay(endEx)
+    const n = dayCount(ev.start.date, endEx)
+    return last === ev.start.date ? `${ev.start.date} (כל היום, יום אחד)` : `${ev.start.date} עד ${last} כולל (כל היום, ${n} ימים)`
   }
-  const zone = ev.start?.timeZone || tz
-  const a = Date.parse(ev.start?.dateTime)
-  const b = Date.parse(ev.end?.dateTime)
-  return `${localOf(a, zone).replace('T', ' ')}–${localOf(b, zone).slice(11)} (${zone})`
+  const zs = ev.start?.timeZone || tz
+  const ze = ev.end?.timeZone || zs
+  const a = instantOfSide(ev.start, zs)
+  const b = instantOfSide(ev.end, ze)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return '(זמן לא ידוע)'
+  return `מ-${localOf(a, zs).replace('T', ' ')} (${zs} ${offsetOf(a, zs)}) עד ${localOf(b, ze).replace('T', ' ')} (${ze === zs ? '' : `${ze} `}${offsetOf(b, ze)}), משך ${duration(b - a)}`
 }
 
 // The new start/end for a patch, from what was asked and what the event has now.
@@ -233,8 +262,11 @@ export async function updateEvent(ctx, args) {
         patch.start = times.start
         patch.end = times.end
         notes = times.notes
-        const after = { start: { date: times.start.date, dateTime: times.start.dateTime && new Date(times.startMs).toISOString(), timeZone: times.start.timeZone }, end: { date: times.end.date, dateTime: times.end.dateTime && new Date(times.endMs).toISOString() } }
-        lines.push(`*זמן:* ${timeText(ev, tz)} ← ${timeText(after, times.tz || tz)}`)
+        // "After" is read from the patch itself, the exact values sent.
+        const before = timeText(ev, tz)
+        const after = timeText({ start: patch.start, end: patch.end }, tz)
+        lines.push(`*זמן עכשיו:* ${before}\n*זמן חדש:* ${after}`)
+        if (after === before) notes.push('⚠️ הזמן החדש זהה לזמן הנוכחי.')
       }
       const add = [...new Set([].concat(args.add_guests || []).map((a) => String(a).trim().toLowerCase()))]
       const remove = [...new Set([].concat(args.remove_guests || []).map((a) => String(a).trim().toLowerCase()))]
