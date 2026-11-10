@@ -8,6 +8,8 @@
 //   login frame inside someone else's page is refused);
 // - there must be exactly one visible password field, and it must still be type=password when it is filled.
 // The values are passed to an isolated world as call arguments, set on the fields, and never returned.
+import { holdForRedaction } from './secret-redact.js'
+
 const originOfUrl = (u) => {
   try {
     return new URL(u).origin
@@ -51,6 +53,8 @@ const FILL = `function (user, pass) {
     if (u) put(u, user)
   }
   put(p, pass)
+  // Marked so screenshots keep it masked and probes never read it, even if the page later shows it as text.
+  p.setAttribute('data-helper-secret', '1')
   return { ok: p.type === 'password' && p.value === pass, user: Boolean(u) }
 }`
 
@@ -79,6 +83,9 @@ export async function locateLogin(call, origin) {
 // here, right before the values are set, whatever was checked before the question.
 export async function fillLogin(call, { origin, username, password }) {
   const target = await locateLogin(call, origin)
+  // Held (memory only, limited time) before the value reaches the page, so any text read from the page afterwards,
+  // and every message the browser agent sends to a model, is scrubbed of it (src/secret-redact.js).
+  holdForRedaction(password)
   const { result: global } = await call('Runtime.evaluate', { expression: 'globalThis', contextId: target.contextId })
   const { result } = await call('Runtime.callFunctionOn', { functionDeclaration: FILL, objectId: global.objectId, arguments: [{ value: username || '' }, { value: password }], returnByValue: true, silent: true })
   // Nothing from the call is returned except whether it worked.

@@ -76,6 +76,7 @@ const TESTS = [
   'src/panel-selftest.js',
   'src/bound-actions-selftest.js',
   'src/vault-selftest.js',
+  'src/vault-leak-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

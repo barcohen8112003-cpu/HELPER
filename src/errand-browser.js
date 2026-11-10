@@ -12,6 +12,7 @@ import WebSocket from 'ws'
 import { config, DATA_DIR } from './config.js'
 import { bridgeReady, remoteActive, remoteCall } from './pc-bridge.js'
 import { ensureCloudBrowser, errandCloudOn } from './webtop-browser.js'
+import { redact } from './secret-redact.js'
 
 const PROFILE = path.join(DATA_DIR, 'errand-profile')
 const VIEW = { width: 1280, height: 860 }
@@ -150,19 +151,24 @@ export function withLocalErrandTab(run) {
   return withTab((call) => run(call))
 }
 
+// One screenshot on a CDP connection, secrets masked first (also used by the vault self-test on a raw local Chrome).
+export async function captureOn(call, pageUrl = '') {
+  // A hidden tab may produce no frame to capture, so it is made the visible one first (inside its own window).
+  await call('Page.bringToFront').catch(() => {})
+  // The visible part of the page at one image pixel per CSS pixel, so the model's coordinates are click coordinates.
+  const { cssVisualViewport: vv } = await call('Page.getLayoutMetrics')
+  const width = Math.round(vv.clientWidth), height = Math.round(vv.clientHeight)
+  // Masking is required: if it fails, there is no screenshot.
+  await maskSecrets(call)
+  const { data } = await call('Page.captureScreenshot', { format: 'jpeg', quality: 70, clip: { x: vv.pageX, y: vv.pageY, width, height, scale: 1 } })
+  const { result } = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }).catch(() => ({ result: {} }))
+  return { image: `data:image/jpeg;base64,${data}`, buffer: Buffer.from(data, 'base64'), mime: 'image/jpeg', width, height, scale: 1, left: 0, top: 0, url: result.value || pageUrl }
+}
+
 // -> { image: data URL, width, height, scale: 1, left: 0, top: 0, url, title }
 export function browserScreenshot() {
   if (!useCloudBrowser() && remoteActive()) return remoteCall('browserScreenshot', [])
-  return withTab(async (call, page) => {
-    // A hidden tab may produce no frame to capture, so it is made the visible one first (inside its own window).
-    await call('Page.bringToFront').catch(() => {})
-    // The visible part of the page at one image pixel per CSS pixel, so the model's coordinates are click coordinates.
-    const { cssVisualViewport: vv } = await call('Page.getLayoutMetrics')
-    const width = Math.round(vv.clientWidth), height = Math.round(vv.clientHeight)
-    const { data } = await call('Page.captureScreenshot', { format: 'jpeg', quality: 70, clip: { x: vv.pageX, y: vv.pageY, width, height, scale: 1 } })
-    const { result } = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }).catch(() => ({ result: {} }))
-    return { image: `data:image/jpeg;base64,${data}`, buffer: Buffer.from(data, 'base64'), mime: 'image/jpeg', width, height, scale: 1, left: 0, top: 0, url: result.value || page.url }
-  })
+  return withTab((call, page) => captureOn(call, page.url))
 }
 
 export function browserAct(a) {
@@ -190,20 +196,52 @@ export function browserAct(a) {
 
 // What a click at (x, y), or a key press on the focused element, would set off: the label of the nearest control and
 // whether the focused field asks for a secret. Read from the page, never from the model.
+// A field's value is never part of a label: only buttons' own captions (submit/button/reset/image) are. Password and
+// other secret fields are named by kind only. The result is scrubbed of held vault passwords too (secret-redact.js).
 const PROBE = (x, y) => `(() => {
   const pick = (el) => el && (el.closest('button, a, [role=button], [role=link], [role=menuitem], input[type=submit], input[type=button], input[type=image], label, summary') || el)
-  const label = (el) => !el ? '' : [el.innerText, el.value, el.getAttribute && el.getAttribute('aria-label'), el.title, el.alt].filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 120)
+  const field = (el) => el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+  const caption = (el) => el.tagName === 'INPUT' && ['submit', 'button', 'reset', 'image'].includes(el.type) ? el.value : ''
+  const secretField = (el) => el && el.tagName === 'INPUT' && (el.type === 'password' || el.hasAttribute('data-helper-secret') || /cc-|one-time-code|current-password|new-password/.test(el.autocomplete || ''))
+  const label = (el) => {
+    if (!el) return ''
+    if (secretField(el)) return '[שדה סיסמה]'
+    const parts = field(el)
+      ? [caption(el), el.getAttribute('aria-label'), el.title, el.alt, el.placeholder, el.name]
+      : [el.innerText, el.getAttribute && el.getAttribute('aria-label'), el.title, el.alt]
+    return parts.filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 120)
+  }
   const target = ${Number.isFinite(x) ? `pick(document.elementFromPoint(${x}, ${y}))` : 'pick(document.activeElement)'}
   const f = document.activeElement
-  const secret = !!f && f.tagName === 'INPUT' && (f.type === 'password' || /cc-|one-time-code|current-password|new-password/.test(f.autocomplete || '') || /card|cvv|cvc|otp|passw|pin|סיסמ|אשראי/i.test((f.name || '') + ' ' + (f.id || '') + ' ' + (f.placeholder || '')))
+  const secret = !!f && f.tagName === 'INPUT' && (secretField(f) || /card|cvv|cvc|otp|passw|pin|סיסמ|אשראי/i.test((f.name || '') + ' ' + (f.id || '') + ' ' + (f.placeholder || '')))
   return JSON.stringify({ label: target && target !== document.body ? label(target) : '', secret })
 })()`
 
+// Before a screenshot: password fields, and any field the vault filled (even if the page later made it a text field),
+// are drawn without their characters, so a filled password never appears in an image for the model.
+export const MASK_EXPRESSION = `(() => {
+  const id = 'helper-secret-mask'
+  if (!document.getElementById(id)) {
+    const s = document.createElement('style')
+    s.id = id
+    s.textContent = 'input[type=password], [data-helper-secret] { -webkit-text-security: disc !important; color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }'
+    ;(document.head || document.documentElement).appendChild(s)
+  }
+  return true
+})()`
+export async function maskSecrets(call) {
+  await call('Runtime.evaluate', { expression: MASK_EXPRESSION, returnByValue: true })
+}
+
+// The probe on a CDP connection (also used by the vault self-test on a raw local Chrome).
+export async function probeOn(call, a) {
+  const pos = ['click', 'double_click'].includes(a.type) ? [Math.round(a.x), Math.round(a.y)] : [NaN, NaN]
+  const { result } = await call('Runtime.evaluate', { expression: PROBE(...pos), returnByValue: true })
+  const out = JSON.parse(result.value || '{}')
+  return { ...out, label: redact(out.label || '') }
+}
+
 export function browserProbe(a) {
   if (!useCloudBrowser() && remoteActive()) return remoteCall('browserProbe', [a])
-  return withTab(async (call) => {
-    const pos = ['click', 'double_click'].includes(a.type) ? [Math.round(a.x), Math.round(a.y)] : [NaN, NaN]
-    const { result } = await call('Runtime.evaluate', { expression: PROBE(...pos), returnByValue: true })
-    return JSON.parse(result.value || '{}')
-  })
+  return withTab((call) => probeOn(call, a))
 }

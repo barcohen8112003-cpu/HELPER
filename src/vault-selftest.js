@@ -160,13 +160,56 @@ let entryId
 }
 
 // ---- fill in a real browser ----
+// Playwright when it is installed, otherwise a local Chrome over CDP (src/testing/local-chrome.js) behind the same
+// small page interface, so this part runs wherever any Chrome binary exists. Only with neither is it skipped.
 let pw = null
 try {
   pw = createRequire(import.meta.url)('playwright')
 } catch {}
-if (!pw) {
-  console.log('SKIP real browser fill: playwright is not installed here')
+// HELPER_TEST_NO_PLAYWRIGHT=1 runs the same checks on the CDP path, as on a machine without Playwright.
+if (process.env.HELPER_TEST_NO_PLAYWRIGHT === '1') pw = null
+const { launchChrome, chromePath } = await import('./testing/local-chrome.js')
+async function cdpBrowser() {
+  const chrome = await launchChrome()
+  const { call, navigate } = chrome
+  let frames = []
+  const refresh = async () => {
+    await new Promise((r) => setTimeout(r, 300))
+    const list = []
+    const walk = (t) => { list.push(t.frame); for (const c of t.childFrames || []) walk(c) }
+    walk((await call('Page.getFrameTree')).frameTree)
+    frames = list
+  }
+  const inFrame = async (frameId, expression) => {
+    const { executionContextId } = await call('Page.createIsolatedWorld', { frameId, worldName: 'vault-test' })
+    return (await call('Runtime.evaluate', { expression, contextId: executionContextId, returnByValue: true })).result.value
+  }
+  const frameOf = (f) => {
+    const locator = (sel) => {
+      const one = { inputValue: () => inFrame(f.id, `document.querySelector(${JSON.stringify(sel)})?.value ?? ''`) }
+      return { ...one, first: () => one }
+    }
+    return { url: () => f.url, locator }
+  }
+  const page = {
+    goto: async (url) => { await navigate(url); await refresh() },
+    url: () => frames[0]?.url || '',
+    frames: () => frames.map(frameOf),
+    mainFrame: () => null,
+    locator: (sel) => frameOf(frames[0]).locator(sel),
+    evaluate: async (fn) => inFrame(frames[0].id, `(${fn})()`),
+  }
+  // A frame object other than the main one is told apart by its url.
+  page.frames = () => frames.map((f, i) => (i === 0 ? mainMarker : frameOf(f)))
+  const mainMarker = { url: () => frames[0]?.url || '', locator: (sel) => frameOf(frames[0]).locator(sel) }
+  page.mainFrame = () => mainMarker
+  return { page, send: (m, p) => call(m, p), close: async () => chrome.close() }
+}
+const realBrowser = pw ? 'playwright' : chromePath() ? 'local Chrome over CDP' : null
+if (!realBrowser) {
+  console.log('SKIP real browser fill: neither playwright nor a Chrome binary is available here (set CHROME_PATH)')
 } else {
+  console.log(`real browser fill: ${realBrowser}`)
   process.env.CREDENTIAL_AUTOFILL = 'on'
   const LOGIN = `<form><input name="u" autocomplete="username"><input id="p" name="p" type="password"><button>כניסה</button></form>`
   const site = (routes) => new Promise((resolve) => {
@@ -189,9 +232,17 @@ if (!pw) {
   await hit(`/vault/r/${linkIn(addA.said)}`, { method: 'POST', form: { csrf: csrfIn(pageA.body), username: USER, password: SECRET } })
   const idA = vault.status().entries.find((e) => e.origin === A).id
 
-  const browser = await pw.chromium.launch()
-  const page = await browser.newPage()
-  const cdp = await page.context().newCDPSession(page)
+  let browser, page, cdp
+  if (pw) {
+    browser = await pw.chromium.launch()
+    page = await browser.newPage()
+    cdp = await page.context().newCDPSession(page)
+  } else {
+    const c = await cdpBrowser()
+    page = c.page
+    cdp = { send: c.send }
+    browser = { close: c.close }
+  }
   const browserTab = (run) => run((method, params) => cdp.send(method, params))
   const fill = (answers, extra = {}) => runTool('credential_fill', { entry_id: idA, confirmed: true }, answers, { browserTab, ...extra })
   const values = async (frame = page) => ({ u: await frame.locator('input').first().inputValue().catch(() => ''), p: await frame.locator('input[type=password]').first().inputValue().catch(() => '') })
