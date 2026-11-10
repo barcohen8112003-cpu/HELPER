@@ -164,6 +164,15 @@ const ctxWith = (answers) => {
   ok(r.status === 'declined' && asked.length === 1 && ran.length === 0, 'approval words inside the operation do not approve it')
 }
 
+{
+  n++
+  const { spec, ran } = plan({ repeatable: true })
+  const { ctx, asked } = ctxWith([true, true])
+  const r1 = await ba.boundMutation(ctx, spec)
+  const r2 = await ba.boundMutation(ctx, spec)
+  ok(r1.status === 'done' && r2.status === 'done' && asked.length === 2 && ran.length === 2, 'a repeatable action is asked about and run again, never skipped as already done')
+}
+
 // ---- googleWriteAccount ----
 {
   const g = { googleAccounts: () => [], grantedScopes: async () => [] }

@@ -115,7 +115,9 @@ export const isDefinitive = (e) => Number.isInteger(e?.status) && e.status >= 40
 //   recheck:  async (op) => fingerprint now. Must equal the one approved.
 //   execute:  async (op) => ({ ref, text, confirmed }) — `confirmed` is true only when the service returned the
 //             created/changed object. Without it the result says the change is not confirmed.
-export async function boundMutation(ctx, { tool, account, prepare, recheck, execute, now = () => Date.now() }) {
+//   repeatable: true for an action that may rightly run again with the same arguments (filling a login form):
+//             the ledger is not consulted, so a second identical request is asked about again instead of refused.
+export async function boundMutation(ctx, { tool, account, prepare, recheck, execute, repeatable = false, now = () => Date.now() }) {
   if (typeof ctx?.confirm !== 'function') return outcome('refused', 'אין כאן משתמש מאומת שיכול לאשר את הפעולה, אז היא לא בוצעה.')
   let prepared
   try {
@@ -129,7 +131,7 @@ export async function boundMutation(ctx, { tool, account, prepare, recheck, exec
   account = prepared.account ?? account
   deepFreeze(op)
   const digest = digestOf({ tool, account, op, fingerprint })
-  const seen = ledgerEntry(digest)
+  const seen = repeatable ? null : ledgerEntry(digest)
   if (seen?.state === 'done') return outcome('already_done', `הפעולה הזאת כבר בוצעה${seen.ref ? ` (${seen.ref})` : ''}. לא שולח שוב.`, { ref: seen.ref })
   if (seen?.state === 'unknown') return outcome('unknown', 'ניסיון קודם של אותה פעולה בדיוק נגמר בלי תשובה ברורה, אז ייתכן שהיא כבר בוצעה. לא מנסה שוב אוטומטית: צריך לבדוק ידנית.')
   if (typeof question !== 'string' || !question.trim()) return outcome('refused', 'אין נוסח מלא להציג לאישור, אז הפעולה לא בוצעה.')
@@ -152,20 +154,20 @@ export async function boundMutation(ctx, { tool, account, prepare, recheck, exec
   } catch (e) {
     return outcome('refused', e.message)
   }
-  writeLedger(digest, { tool, state: 'unknown', at: now() })
+  if (!repeatable) writeLedger(digest, { tool, state: 'unknown', at: now() })
   let done
   try {
     done = await execute(op)
   } catch (e) {
     if (isDefinitive(e)) {
-      writeLedger(digest, null)
+      if (!repeatable) writeLedger(digest, null)
       if (e.status === 412 || e.code === 'revision-changed') return outcome('changed', `השירות סירב כי היעד השתנה מאז האישור: ${e.message}`)
       return outcome('failed', `השירות סירב: ${e.message}`)
     }
     return outcome('unknown', `אין תשובה ברורה מהשירות (${e.message}). ייתכן שהפעולה בוצעה; לא מנסה שוב אוטומטית.`)
   }
   if (!done?.confirmed) return outcome('unknown', `${done?.text || 'השירות לא החזיר אישור'}. לא ידוע בוודאות שהשינוי בוצע.`)
-  writeLedger(digest, { tool, state: 'done', at: now(), ref: String(done.ref || '').slice(0, 200) })
+  if (!repeatable) writeLedger(digest, { tool, state: 'done', at: now(), ref: String(done.ref || '').slice(0, 200) })
   return outcome('done', done.text, { ref: done.ref })
 }
 
