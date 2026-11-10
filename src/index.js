@@ -52,7 +52,7 @@ import { record as recordAudit } from './audit.js'
 import { createPanel, panelConfig, startPanelServer } from './panel.js'
 import { createExecutor } from './panel-execute.js'
 import { panelContext } from './panel-scopes.js'
-import { connectInstinct, isInstinctMessage, onInstinctMessage, stopInstinctChat, recoverInstinct } from './instinct.js'
+import { connectInstinct, isInstinctMessage, onInstinctMessage, stopInstinctChat, recoverInstinct, flushInstinctRecovery, instinctRecoveryPending } from './instinct.js'
 
 if (!config.llm.apiKey || !config.llm.model) {
   console.log('חסר LLM_API_KEY או LLM_MODEL. העתק את .env.example ל-.env ומלא אותם.')
@@ -165,15 +165,16 @@ const isOwner = (m) =>
   state.owner && m.fromMe === state.owner.self && (m.jids.some((j) => state.owner.jids.includes(j)) || (state.owner.selfChat && m.selfChat))
 
 // Messages that were still in flight when the last run ended (src/inflight.js): before WhatsApp connects, so nothing
-// of this run is mixed in. Those with no inbox receipt move to recovery, and the owner hears once (after the outbox
-// is ready, below). Nothing is answered again. Unanswered inbox entries from the last run are marked: an answer may
-// have left before the stop, so the watchdog says "maybe" instead of "I did not answer".
+// of this run is mixed in. Those with no inbox receipt move to recovery, and the owner hears once (tellRecovery,
+// below, once notify and everything it touches exist). Nothing is answered again. Unanswered inbox entries from the
+// last run are marked: an answer may have left before the stop, so the watchdog says "maybe", not "I did not answer".
 state.wa ||= { seen: [], lastAt: 0 }
-const strandedAtBoot = inflight.strand(state.wa, { inbox: state.inbox || [], all: true })
+const strandedAtBoot = inflight.strand(state.wa, { inbox: state.inbox || [], outbox: state.outbox, all: true })
 for (const e of state.inbox || []) if (!e.answered) e.restarted = true
 save()
-// The same for an Instinct conversation the stop cut off (src/instinct.js): metadata only, nothing sent again.
-const instinctBoot = recoverInstinct()
+// The same for an Instinct conversation the stop cut off (src/instinct.js): metadata only, nothing sent again. Its
+// notice is saved in the same write that ends the conversation, and handed to notify by tellRecovery.
+recoverInstinct()
 if (strandedAtBoot) console.log(`[inflight] ${strandedAtBoot} message(s) were mid-handling at the last stop; owner will be told, nothing replayed`)
 
 const wa = await startWhatsApp(async (m) => {
@@ -462,18 +463,6 @@ const outbox = createOutbox((text) => wa.send(state.owner.jid, text))
 setInterval(() => backupTick((text) => notify(text)).catch((e) => console.log(`[backup] ${e.message}`)), 3600 * 1000).unref()
 setTimeout(() => backupTick((text) => notify(text)).catch(() => {}), 5 * 60000).unref()
 
-// One notice per incident of messages that were mid-handling (src/inflight.js), and one for an Instinct conversation
-// the last stop cut off (src/instinct.js). Through notify, so quiet hours and the daily budget apply; keyed, so a
-// restart does not repeat them. No message text: none was kept.
-function tellRecovery() {
-  const notes = inflight.recoveryNotices(state.wa)
-  if (!notes.length) return
-  save()
-  for (const n of notes) notify(n.text, false, n.key, 'recovery').catch((e) => console.log(`[inflight] ${e.message}`))
-}
-tellRecovery()
-if (instinctBoot) notify(instinctBoot.text, false, instinctBoot.key, 'recovery').catch((e) => console.log(`[instinct] ${e.message}`))
-
 const cutShort = interruptedJobs()
 if (cutShort.length) outbox.notify(`${cutShort.length > 1 ? 'המשימות' : 'המשימה'} ${cutShort.map((j) => `"${j.title}"`).join(', ')} ${cutShort.length > 1 ? 'נקטעו' : 'נקטעה'} כי הופעלתי מחדש. אם עדיין צריך, תבקש שוב.`, true).catch(() => {})
 
@@ -567,6 +556,16 @@ function notify(text, urgent = false, key, kindName) {
   return Promise.resolve()
 }
 startScheduler(notify, scheduledTask, monitoring)
+
+// One notice per incident of messages that were mid-handling (src/inflight.js), and one for an Instinct conversation
+// the last stop cut off (src/instinct.js). Through notify, so quiet hours, the daily budget and the brief apply.
+// Called only from here on: notify reaches monitoring and the outbox, which do not exist earlier in this file.
+// A notice stays open until notify accepted it (src/recovery-notice.js); the watchdog below tries again each minute.
+function tellRecovery() {
+  inflight.flushRecovery(state.wa, notify, save)
+  flushInstinctRecovery(notify)
+}
+tellRecovery()
 // WhatsApp groups (src/groups.js): once a minute it checks whether a round of reading is due (every
 // GROUPS_EVERY_MINUTES). Only a test, cancellation or change for today or tomorrow is sent now, through notify, so
 // quiet hours and the daily budget apply; the rest waits for the morning brief and "מה פספסתי?".
@@ -578,10 +577,9 @@ setInterval(outbox.flush, 30000)
 const UNANSWERED_ALERT_MIN = process.env.UNANSWERED_ALERT_MIN === undefined || process.env.UNANSWERED_ALERT_MIN === '' ? 5 : Number(process.env.UNANSWERED_ALERT_MIN) || 0
 setInterval(() => {
   // A message stuck in flight in this run (onMessage threw before its receipt) is not left unknown forever.
-  if (inflight.strand(state.wa, { inbox: state.inbox || [] })) {
-    save()
-    tellRecovery()
-  }
+  // Also drains incidents from an overflow, or a notice that was attempted but not accepted, with nothing new stranded.
+  if (inflight.strand(state.wa, { inbox: state.inbox || [], outbox: state.outbox })) save()
+  if (inflight.pendingNotices(state.wa) || instinctRecoveryPending()) tellRecovery()
   if (!state.owner || !state.inbox?.length || !wa.connectedSince()) return
   // Waiting on his 👍 is waiting on him, not a stuck message.
   if (pendingConfirm) return

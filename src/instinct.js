@@ -21,7 +21,7 @@
 //   was stopped or replaced meanwhile is dropped, never sent into the new one.
 // - Every send has a result: sent, not sent (WhatsApp was down, so it surely did not leave) or uncertain (it may have
 //   left). An uncertain send is never sent again on its own; the owner is told, and the model sees it marked.
-// - Only metadata is kept on disk (state.instinct.chat / pending / lastSend: times, counters, status). The goal and
+// - Only metadata is kept on disk (state.instinct.chat / ops / sends: ids, times, counters, status). The goal and
 //   the messages stay in memory, so after a restart the conversation cannot continue where it was: the owner is told
 //   once that it was cut off (recoverInstinct), and nothing is sent again.
 import { state, save } from './store.js'
@@ -31,6 +31,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { config, DATA_DIR } from './config.js'
 import { proposeSkill, confirmSkills, rejectSkills, pendingSkills, allSkills, removeSkill } from './skills.js'
+import { handOff } from './recovery-notice.js'
 
 const PREFIX = '[HELPER] '
 const QUIET_MS = 15_000 // after Instinct's last message, how long to wait for another one before answering
@@ -60,33 +61,37 @@ const box = () => (state.instinct ||= { trusted: false, sent: [], lastAskAt: 0, 
 let waiter = null // { lines: [], wake() } while a question waits for its answer
 
 // ---------- Sending, with a result ----------
-// Before a message goes to Instinct its metadata (no text) is saved as pending; afterwards the result replaces it.
-// A restart that finds a pending send cannot know whether it left, so it becomes uncertain (recoverInstinct).
+// Each send is its own operation: before it goes out, its metadata (id, kind, conversation generation, time; no text)
+// is added to state.instinct.ops; when it ends, only that operation is taken out and its result is kept in
+// state.instinct.sends (last MAX_SENDS). Two sends in flight at once (say, say, respond) never clear each other.
+// A restart that finds operations still listed cannot know whether they left, so they become uncertain.
 // 'sent': WhatsApp accepted it. 'failed': it surely did not leave (not connected). 'uncertain': it may have left.
+const MAX_SENDS = 20
 const opId = () => `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+function finish(b, op, status, extra = {}) {
+  b.ops = (b.ops || []).filter((o) => o.op !== op.op)
+  b.lastSend = { ...op, status, ...extra, doneAt: Date.now() }
+  b.sends = [...(b.sends || []), b.lastSend].slice(-MAX_SENDS)
+  save()
+}
 async function dispatch(text, kind, gen = box().generation || 0) {
   const b = box()
   const op = { op: opId(), kind, gen, at: Date.now() }
   if (!link.send) {
-    b.lastSend = { ...op, status: 'failed', error: 'not connected' }
-    save()
-    return { status: 'failed', error: 'וואטסאפ לא מחובר כרגע' }
+    finish(b, op, 'failed', { error: 'not connected' })
+    return { status: 'failed', op: op.op, error: 'וואטסאפ לא מחובר כרגע' }
   }
-  b.pending = op
+  b.ops = [...(b.ops || []), op]
   save()
   try {
     const ref = await link.send(instinctJid(), PREFIX + text)
-    b.pending = null
-    b.lastSend = { ...op, status: 'accepted', ...(ref && typeof ref === 'string' && { ref }), doneAt: Date.now() }
-    save()
-    return { status: 'sent' }
+    finish(b, op, 'accepted', ref && typeof ref === 'string' ? { ref } : {})
+    return { status: 'sent', op: op.op }
   } catch (e) {
     const status = e?.notSent ? 'failed' : 'uncertain'
     console.log(`[instinct] send ${status}: ${e?.message}`)
-    b.pending = null
-    b.lastSend = { ...op, status, doneAt: Date.now() }
-    save()
-    return { status, error: String(e?.message || e) }
+    finish(b, op, status)
+    return { status, op: op.op, error: String(e?.message || e) }
   }
 }
 
@@ -105,7 +110,8 @@ export async function onInstinctMessage(m, now = Date.now()) {
   if (chat) {
     chat.inbox.push(text)
     clearTimeout(chat.timer)
-    chat.timer = setTimeout(queueRespond, chat.quietMs)
+    const c = chat
+    c.timer = setTimeout(() => queueRespond(c), c.quietMs)
     return chat.paused ? 'chat-paused' : 'chat'
   }
   const b = box()
@@ -173,9 +179,14 @@ export async function askInstinct({ question }, ctx = {}, { quietMs = QUIET_MS, 
 // ---------- Conversation mode ----------
 
 const CONFIRM = /אשר|לאשר|מאשר|אישור|לשלם|תשלום|כרטיס אשראי|אמצעי תשלום|להמשיך עם ה(הזמנה|רכישה)|confirm|approve|proceed|go ahead|shall i|should i (book|buy|order|pay|send)|payment|credit card|checkout|card number|password|קוד אימות|verification code|\botp\b/i
-let chat = null // { goal, gen, rev, started, turns, history: [{role, content}], inbox: [], paused, timer, quietMs, maxTurns, maxMs }
-let respondChain = Promise.resolve() // one respond() at a time: a think never overlaps another one
-const queueRespond = () => (respondChain = respondChain.then(() => respond()).catch((e) => (console.log(`[instinct] ${e.message}`), 'error')))
+let chat = null // { goal, gen, rev, chain, started, turns, history: [{role, content}], inbox: [], paused, timer, quietMs, maxTurns, maxMs }
+// One respond() at a time per conversation: each conversation has its own chain, so a think never overlaps another
+// one of the same conversation, and a slow think of a conversation that was stopped never holds up the next one.
+const queueRespond = (c = chat) => {
+  if (!c) return Promise.resolve('idle')
+  c.chain = (c.chain || Promise.resolve()).then(() => respond(c)).catch((e) => (console.log(`[instinct] ${e.message}`), 'error'))
+  return c.chain
+}
 // What a restart may need to know, without any text: is a conversation on, which one, how far along.
 function keepMeta() {
   const b = box()
@@ -185,7 +196,7 @@ function keepMeta() {
 function newChat(fields) {
   const b = box()
   b.generation = (b.generation || 0) + 1
-  chat = { ...fields, gen: b.generation, rev: 0, inbox: [], paused: false, timer: null }
+  chat = { ...fields, gen: b.generation, rev: 0, chain: Promise.resolve(), inbox: [], paused: false, timer: null }
   keepMeta()
   return chat
 }
@@ -304,44 +315,45 @@ async function pauseForOwner(question) {
   return 'paused'
 }
 
-async function respond() {
-  if (!chat || chat.paused || !chat.inbox.length) return chat?.paused ? 'paused' : 'idle'
-  const incoming = chat.inbox.splice(0).join('\n\n').slice(0, MAX_REPLY)
-  chat.history.push({ role: 'user', content: incoming })
-  if (chat.turns >= chat.maxTurns) return endChat(`הגעתי לתקרה של ${chat.maxTurns} הודעות`), 'cap'
-  if (Date.now() - chat.started > chat.maxMs) return endChat('עברו שעתיים'), 'cap'
+async function respond(c) {
+  // A conversation that was stopped or replaced before its turn came: nothing to do.
+  if (!c || chat !== c) return 'stale'
+  if (c.paused || !c.inbox.length) return c.paused ? 'paused' : 'idle'
+  const incoming = c.inbox.splice(0).join('\n\n').slice(0, MAX_REPLY)
+  c.history.push({ role: 'user', content: incoming })
+  if (c.turns >= c.maxTurns) return endChat(`הגעתי לתקרה של ${c.maxTurns} הודעות`), 'cap'
+  if (Date.now() - c.started > c.maxMs) return endChat('עברו שעתיים'), 'cap'
   // Instinct asks to confirm, pay or act: that is the owner's call, whatever the model would answer.
-  if (!chat.learn && CONFIRM.test(incoming)) return pauseForOwner(`Instinct כתב:\n"${incoming.slice(0, 1500)}"`)
-  const messages = [{ role: 'system', content: chat.learn ? learnSystem(chat.goal) : chatSystem(chat.goal) }, ...chat.history.slice(-30)]
+  if (!c.learn && CONFIRM.test(incoming)) return pauseForOwner(`Instinct כתב:\n"${incoming.slice(0, 1500)}"`)
+  const messages = [{ role: 'system', content: c.learn ? learnSystem(c.goal) : chatSystem(c.goal) }, ...c.history.slice(-30)]
   // Which conversation, and which state of it, this answer is for. "עצור", a new conversation or an answer the owner
   // sent himself (say) while the model was thinking makes the answer stale: it is dropped, never sent.
-  const ref = chat
-  const { gen, rev } = chat
+  const { gen, rev } = c
   const reply = await think(messages)
   if (!chat) return 'stopped' // "עצור" while the model was thinking
-  if (chat !== ref || chat.gen !== gen) return 'stale' // replaced by another conversation
-  if (chat.rev !== rev || chat.paused) return 'stale' // the owner answered Instinct himself, or it was paused
+  if (chat !== c || c.gen !== gen) return 'stale' // replaced by another conversation
+  if (c.rev !== rev || c.paused) return 'stale' // the owner answered Instinct himself, or it was paused
   if (!reply) return pauseForOwner(`לא ידעתי מה לענות ל-Instinct על:\n"${incoming.slice(0, 1500)}"`)
   if (reply.startsWith('[DONE]')) return endChat('המטרה הושגה', reply.slice(6).trim()), 'done'
   if (reply.startsWith('[ASK_OWNER]')) return pauseForOwner(reply.slice(11).trim())
   // A reply that commits to an action waits for the owner, even if the model forgot the rule.
   if (ACTION.test(reply) && CONFIRM.test(reply)) return pauseForOwner(`רציתי לענות ל-Instinct:\n"${reply}"\nלשלוח? תענה כן או תכתוב מה לענות.`)
   const out = await dispatch(reply, 'chat', gen)
-  if (chat !== ref) return out.status // stopped while sending: after dispatch a stop is no proof it did not leave
+  if (chat !== c) return out.status // stopped while sending: after dispatch a stop is no proof it did not leave
   if (out.status === 'failed') {
     // Surely not sent: nothing for Instinct to have seen. The conversation waits for the owner.
     await pauseForOwner(`לא נשלח ל-Instinct (${out.error}). רציתי לענות לו:\n"${reply.slice(0, 1500)}"\nתגיד לי מה לשלוח כשוואטסאפ יחזור, או "עצור".`)
     return 'failed'
   }
-  chat.turns++
+  c.turns++
   if (out.status === 'uncertain') {
     // It may have left. The model sees it marked, so it assumes neither; it is not sent again.
-    chat.history.push({ role: 'assistant', content: `[אולי לא נשלח] ${reply}` })
+    c.history.push({ role: 'assistant', content: `[אולי לא נשלח] ${reply}` })
     keepMeta()
     await link.notify?.(`⚠️ ייתכן שההודעה האחרונה שלי ל-Instinct נשלחה וייתכן שלא (${out.error}). לא אשלח אותה שוב. אם הוא יענה, אמשיך כרגיל; "עצור" מסיים.`)
     return 'uncertain'
   }
-  chat.history.push({ role: 'assistant', content: reply })
+  c.history.push({ role: 'assistant', content: reply })
   keepMeta()
   return 'sent'
 }
@@ -422,31 +434,52 @@ export async function instinctChat({ action, goal, text }, ctx = {}, { quietMs =
   return 'השיחה עם Instinct התחילה. אני ממשיך לענות לו לבד, ו"עצור" מסיים. תגיד לו את זה במשפט אחד.'
 }
 
-// Once at start, before WhatsApp connects, so nothing of this run is mixed in. A conversation that was on when the last run ended cannot go on: only its
-// metadata was kept, not the goal or the messages. The owner hears it once (dedup key per conversation), nothing is
-// sent to Instinct, and a send that was in flight becomes uncertain: it may have left, so it is never sent again.
-export function recoverInstinct(notify) {
+// Once at start, before WhatsApp connects, so nothing of this run is mixed in. A conversation that was on when the
+// last run ended cannot go on: only its metadata was kept, not the goal or the messages. Every send still listed
+// becomes uncertain: it may have left, so it is never sent again. The notice about it is written in the same save
+// that ends the conversation (state.instinct.recovery), so a crash right after cannot consume one without the other;
+// flushInstinctRecovery hands it to notify later, and it stays until notify accepted it (src/recovery-notice.js).
+export function recoverInstinct() {
   const b = state.instinct
   if (!b) return null
   const was = b.chat?.active ? b.chat : null
-  const pending = b.pending || null
-  b.generation = Math.max(b.generation || 0, was?.gen || 0, pending?.gen || 0) + 1
-  if (pending) b.lastSend = { ...pending, status: 'uncertain', doneAt: Date.now(), why: 'restart' }
-  b.pending = null
-  if (was) b.lastChat = { gen: was.gen, endedAt: Date.now(), turns: was.turns, reason: 'restart' }
+  // `pending` is the single slot an earlier build of this change used; read so its state is not lost.
+  const ops = [...(b.ops || []), ...(b.pending ? [b.pending] : [])]
+  if (!was && !ops.length) return null
+  b.generation = Math.max(b.generation || 0, was?.gen || 0, ...ops.map((o) => o.gen || 0)) + 1
+  const now = Date.now()
+  for (const op of ops) {
+    b.lastSend = { ...op, status: 'uncertain', doneAt: now, why: 'restart' }
+    b.sends = [...(b.sends || []), b.lastSend].slice(-MAX_SENDS)
+  }
+  b.ops = []
+  delete b.pending
+  if (was) b.lastChat = { gen: was.gen, endedAt: now, turns: was.turns, reason: 'restart' }
   b.chat = null
-  save()
-  if (!was && !pending) return null
   const lines = []
   if (was) {
     lines.push(`${was.learn ? 'הראיון' : 'השיחה'} שלי עם Instinct נקטע${was.learn ? '' : 'ה'} כשהופעלתי מחדש. לא שמרתי את תוכן השיחה, אז אין לי איך להמשיך מאותה נקודה.`)
     lines.push(was.learn ? 'מה שנלמד בראיון הזה לא נשמר. אם עדיין רוצים, תבקש שוב "תלמד מ-Instinct".' : 'אם עדיין צריך, תבקש שוב ותגיד מה המטרה.')
   }
-  if (pending) lines.push('ייתכן שההודעה האחרונה שלי אליו נשלחה וייתכן שלא. לא אשלח אותה שוב.')
-  const notice = { text: lines.join('\n'), key: `instinct-recovery-${was?.gen ?? pending?.gen ?? 0}-${pending?.op || 'chat'}`, chat: Boolean(was), uncertain: Boolean(pending) }
-  // Without notify the caller sends the notice itself later (index.js, once its outbox is ready).
-  if (notify) Promise.resolve(notify(notice.text, false, notice.key)).catch((e) => console.log(`[instinct] ${e.message}`))
+  if (ops.length) lines.push(ops.length === 1 ? 'ייתכן שההודעה האחרונה שלי אליו נשלחה וייתכן שלא. לא אשלח אותה שוב.' : `ייתכן ש-${ops.length} ההודעות האחרונות שלי אליו נשלחו וייתכן שלא. לא אשלח אותן שוב.`)
+  const notice = { key: `instinct-recovery-${was?.gen ?? 'x'}-${ops[0]?.op || 'chat'}`, text: lines.join('\n'), state: 'needs_recovery', attempts: 0, chat: Boolean(was), uncertain: ops.length }
+  // Handed notices belong to the outbox now. Open ones are never dropped: past 5, the oldest two are merged into one.
+  b.recovery = [...(b.recovery || []).filter((r) => r.state !== 'handed'), notice]
+  while (b.recovery.length > 5) {
+    const [x, y] = b.recovery
+    b.recovery.splice(0, 2, { ...y, text: [...new Set([...x.text.split('\n'), ...y.text.split('\n')])].join('\n'), attempts: 0 })
+  }
+  save()
   return notice
+}
+
+export const instinctRecoveryPending = () => (state.instinct?.recovery || []).some((r) => r.state !== 'handed')
+
+// Hands each waiting Instinct recovery notice to notify. A handed notice is then the outbox's (or the brief's).
+export function flushInstinctRecovery(notify) {
+  let handed = 0
+  for (const r of (state.instinct?.recovery || []).filter((x) => x.state !== 'handed')) if (handOff(r, r.key, r.text, notify, save)) handed++
+  return handed
 }
 
 export const instinctChatTool = {
@@ -472,7 +505,7 @@ export const instinctTool = {
 }
 
 export const _test = {
-  reset: () => (endChat(''), (waiter = null), (respondChain = Promise.resolve()), (link = { send: null, notify: null }), delete state.instinct),
+  reset: () => (endChat(''), (waiter = null), (link = { send: null, notify: null }), delete state.instinct),
   setThink: (fn) => (think = fn),
   harvest: (topic, history) => harvest(topic, history),
   respond: () => queueRespond(),

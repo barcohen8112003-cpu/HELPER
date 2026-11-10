@@ -198,25 +198,105 @@ fresh()
 }
 
 // 8. Restart while a conversation was running and a send was in flight: one notice, no send, no content, and the
-//    in-flight send is recorded as uncertain.
+//    in-flight send is recorded as uncertain. The notice is handed to notify only after boot (flushInstinctRecovery).
+const has = (name) => typeof inst[name] === 'function'
+const flush = (notify) => (has('flushInstinctRecovery') ? inst.flushInstinctRecovery(notify) : 0)
 fresh()
 {
-  state.instinct = { trusted: true, sent: [], lastAskAt: 0, lateUntil: 0, generation: 4, chat: { active: true, gen: 4, learn: false, started: Date.now() - 60_000, turns: 3, paused: false }, pending: { op: 'op-x', gen: 4, at: Date.now() - 5000, kind: 'chat' } }
+  state.instinct = { trusted: true, sent: [], lastAskAt: 0, lateUntil: 0, generation: 4, chat: { active: true, gen: 4, learn: false, started: Date.now() - 60_000, turns: 3, paused: false }, ops: [{ op: 'op-x', gen: 4, at: Date.now() - 5000, kind: 'chat' }] }
   const notices = []
-  const notify = async (text, urgent, key) => notices.push({ text, key })
-  const r1 = typeof inst.recoverInstinct === 'function' ? inst.recoverInstinct(notify) : null
+  const notify = (text, urgent, key) => (notices.push({ text, key }), Promise.resolve())
+  inst.recoverInstinct()
+  flush(notify)
   await wait(10)
   ok(notices.length === 1 && /נקטעה/.test(notices[0]?.text || ''), 'restart: one notice that the conversation was cut off')
   ok(/לא שמרתי/.test(notices[0]?.text || '') && !/ההקשר נשמר/.test(notices[0]?.text || ''), 'restart: does not promise saved context')
   ok(/ייתכן/.test(notices[0]?.text || '') && /לא אשלח/.test(notices[0]?.text || ''), 'restart: in-flight send reported as maybe sent, not resent')
   ok(/^instinct-recovery-/.test(notices[0]?.key || ''), 'restart: notice has a dedup key')
   ok(sent.length === 0 && !inst.instinctChatOn(), 'restart: nothing sent, no conversation resumed on its own')
-  ok(state.instinct.lastSend?.status === 'uncertain' && !state.instinct.pending, 'restart: in-flight send recorded as uncertain')
+  ok(state.instinct.lastSend?.status === 'uncertain' && !(state.instinct.ops || []).length, 'restart: in-flight send recorded as uncertain')
   ok(state.instinct.generation > 4, 'restart: generation moves on')
-  if (typeof inst.recoverInstinct === 'function') inst.recoverInstinct(notify)
+  inst.recoverInstinct()
+  flush(notify)
   await wait(10)
   ok(notices.length === 1, 'restart: a second recovery pass does not notify again')
-  ok(r1 !== null, 'restart: recoverInstinct exists')
+}
+
+// 9. Crash after the conversation was consumed but before its notice reached notify: the notice is still there on
+//    the next start (it was saved in the same write), and goes out then.
+fresh()
+{
+  state.instinct = { trusted: true, sent: [], lastAskAt: 0, lateUntil: 0, generation: 2, chat: { active: true, gen: 2, learn: false, started: Date.now() - 60_000, turns: 1, paused: false } }
+  inst.recoverInstinct() // first run: consumed, then "crash" before any notify
+  const kept = JSON.parse(JSON.stringify(state.instinct))
+  ok(!kept.chat && (kept.recovery || []).some((r) => r.state !== 'handed' && /נקטעה/.test(r.text)), 'durable: the notice is saved with the consumed conversation')
+  state.instinct = kept // "restart" from what was on disk
+  inst.recoverInstinct() // nothing left to consume
+  const notices = []
+  flush((text, urgent, key) => (notices.push({ text, key }), Promise.resolve()))
+  ok(notices.length === 1 && /נקטעה/.test(notices[0]?.text || ''), 'durable: after the crash the notice still goes out once')
+  // notify throws on the first try (e.g. something it needs is not ready): the notice stays open, next try sends it.
+  fresh()
+  state.instinct = { trusted: true, sent: [], lastAskAt: 0, lateUntil: 0, chat: { active: true, gen: 7, learn: true, started: Date.now(), turns: 1, paused: false } }
+  inst.recoverInstinct()
+  let n = 0
+  const keys = []
+  flush(() => {
+    n++
+    throw new ReferenceError('monitoring is not ready')
+  })
+  ok(n === 1 && has('instinctRecoveryPending') && inst.instinctRecoveryPending(), 'durable: a notice notify did not accept stays open')
+  flush((text, urgent, key) => (keys.push(key), Promise.resolve()))
+  ok(keys.length === 1 && /-t2$/.test(keys[0]) && !inst.instinctRecoveryPending(), 'durable: the next try sends it with a new attempt key, then it is handed')
+}
+
+// 10. Two approved "say" sends in flight at once: each has its own operation; finishing one does not clear the other,
+//     and a restart while the second is still out marks it uncertain.
+fresh()
+{
+  inst._test.setThink(async () => '')
+  await start()
+  const gates = []
+  sendImpl = (jid, text) => {
+    const d = deferred()
+    gates.push(d)
+    return d.promise.then(() => (sent.push(text), `MSG${sent.length}`))
+  }
+  const a = inst.instinctChat({ action: 'say', text: 'הודעה א' }, {})
+  const b = inst.instinctChat({ action: 'say', text: 'הודעה ב' }, {})
+  await wait(10)
+  const ops = (state.instinct.ops || []).map((o) => o.op)
+  ok(ops.length === 2 && ops[0] !== ops[1], 'ops: two sends in flight have two operations')
+  gates[0]?.resolve()
+  await a
+  const left = (state.instinct.ops || []).map((o) => o.op)
+  ok(left.length === 1 && left[0] === ops[1], 'ops: finishing the first leaves the second listed')
+  const snapshot = JSON.parse(JSON.stringify(state.instinct))
+  gates[1]?.resolve()
+  await b
+  state.instinct = snapshot // "restart" while the second was still out
+  inst.recoverInstinct()
+  ok(state.instinct.lastSend?.op === ops[1] && state.instinct.lastSend?.status === 'uncertain', 'ops: the one still out at restart becomes uncertain')
+}
+
+// 11. A slow think of a stopped conversation does not hold up the next conversation.
+fresh()
+{
+  let calls = 0
+  const old = deferred()
+  inst._test.setThink(async () => (++calls === 1 ? old.promise : 'תשובה חדשה'))
+  await start('שיחה ישנה', 'פתיחה ישנה')
+  await inst.onInstinctMessage(fromInstinct('הודעה לשיחה הישנה'))
+  await wait(30)
+  inst.stopInstinctChat()
+  await start('שיחה חדשה', 'פתיחה חדשה')
+  await inst.onInstinctMessage(fromInstinct('הודעה לשיחה החדשה'))
+  await wait(40)
+  ok(calls === 2, `chains: the new conversation thinks while the old think is still pending (calls=${calls})`)
+  ok(sent.at(-1) === '[HELPER] תשובה חדשה', 'chains: the new conversation answers before the old think settles')
+  old.resolve('תשובה ישנה')
+  await wait(20)
+  ok(!sent.includes('[HELPER] תשובה ישנה'), 'chains: the old answer is still dropped when it finally settles')
 }
 
 console.log(`instinct continuity selftest: ${passed} passed, ${failed.length} failed`)

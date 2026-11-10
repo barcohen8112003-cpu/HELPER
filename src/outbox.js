@@ -65,7 +65,8 @@ export function createOutbox(send, sendFile) {
       if (state.sentKeys.includes(key)) return Promise.resolve()
       state.sentKeys = [...state.sentKeys, key].slice(-MAX_KEYS)
     }
-    state.outbox.push({ text, urgent })
+    // The key travels with the message, so a caller can tell whether its notice is still waiting here.
+    state.outbox.push({ text, urgent, ...(key && { key }) })
     if (state.outbox.length > MAX_OUTBOX) state.outbox.shift()
     save()
     return flush()
