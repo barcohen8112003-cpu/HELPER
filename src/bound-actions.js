@@ -50,7 +50,7 @@ function deepFreeze(value) {
 }
 
 // A structured result for the model: what happened, in one word it cannot mistake, plus the text.
-// status: done | declined | refused | changed | unknown | already_done | setup_needed | unsupported | failed
+// status: done | declined | refused | changed | unknown | already_done | in_progress | setup_needed | unsupported | failed
 export const outcome = (status, text, extra = {}) => ({ status, text: `[${status}] ${text}`, ...extra })
 
 // ---- grants ----
@@ -90,14 +90,67 @@ function loadLedger(now = Date.now()) {
   return all
 }
 
-function writeLedger(digest, entry) {
-  const all = loadLedger()
-  if (entry) all[digest] = entry
-  else delete all[digest]
+// Every ledger change is a read-modify-write under a lock file, so two Helper processes (or a restart in the middle)
+// cannot both claim the same operation. The file is synced before the rename, so a claim survives a crash.
+const LOCK = () => `${LEDGER()}.lock`
+const LOCK_STALE_MS = 10000
+
+function withLedgerLock(fn) {
   fs.mkdirSync(DATA_DIR, { recursive: true })
+  const until = Date.now() + 2000
+  let fd
+  for (;;) {
+    try {
+      fd = fs.openSync(LOCK(), 'wx')
+      break
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e
+      try {
+        if (Date.now() - fs.statSync(LOCK()).mtimeMs > LOCK_STALE_MS) fs.rmSync(LOCK(), { force: true })
+      } catch {}
+      if (Date.now() > until) throw Object.assign(new Error('יומן הפעולות נעול'), { code: 'ledger-locked' })
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    }
+  }
+  try {
+    return fn()
+  } finally {
+    fs.closeSync(fd)
+    fs.rmSync(LOCK(), { force: true })
+  }
+}
+
+function saveLedger(all) {
   const tmp = `${LEDGER()}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(all))
+  const fd = fs.openSync(tmp, 'w')
+  try {
+    fs.writeSync(fd, JSON.stringify(all))
+    fs.fsyncSync(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
   fs.renameSync(tmp, LEDGER())
+}
+
+function writeLedger(digest, entry) {
+  withLedgerLock(() => {
+    const all = loadLedger()
+    if (entry) all[digest] = entry
+    else delete all[digest]
+    saveLedger(all)
+  })
+}
+
+// Compare-and-set: records `entry` only if nothing is recorded for the digest yet. Returns the entry that was
+// already there (the claim failed) or null (this call now owns the operation).
+function claimLedger(digest, entry) {
+  return withLedgerLock(() => {
+    const all = loadLedger()
+    if (all[digest]) return all[digest]
+    all[digest] = entry
+    saveLedger(all)
+    return null
+  })
 }
 
 export const ledgerEntry = (digest) => loadLedger()[digest] || null
@@ -108,6 +161,16 @@ export const clearLedgerEntry = (digest) => writeLedger(digest, null)
 // (timeout, connection reset, no answer) may or may not have reached it, so the outcome is unknown.
 export const isDefinitive = (e) => Number.isInteger(e?.status) && e.status >= 400 && e.status < 500
 
+// Operations of this process that are being asked about or run right now, by digest. A second identical request
+// is turned away while the first is open, instead of being asked about (and run) a second time.
+const open = new Set()
+export const openOperations = () => open.size
+
+const alreadyText = (seen) =>
+  seen.state === 'done'
+    ? outcome('already_done', `הפעולה הזאת כבר בוצעה${seen.ref ? ` (${seen.ref})` : ''}. לא שולח שוב.`, { ref: seen.ref })
+    : outcome('unknown', 'ניסיון קודם של אותה פעולה בדיוק נגמר בלי תשובה ברורה, אז ייתכן שהיא כבר בוצעה. לא מנסה שוב אוטומטית: צריך לבדוק ידנית.')
+
 // The one path every mutation takes. Returns an outcome(); never throws for a refusal.
 //   tool:     the tool's name (part of what is approved)
 //   account:  which identity acts (an email, "github:<login>", "local") — part of what is approved
@@ -116,7 +179,17 @@ export const isDefinitive = (e) => Number.isInteger(e?.status) && e.status >= 40
 //   execute:  async (op) => ({ ref, text, confirmed }) — `confirmed` is true only when the service returned the
 //             created/changed object. Without it the result says the change is not confirmed.
 //   repeatable: true for an action that may rightly run again with the same arguments (filling a login form):
-//             the ledger is not consulted, so a second identical request is asked about again instead of refused.
+//             the ledger is not consulted, so a second identical request later is asked about again instead of
+//             refused. Two identical requests at the same time are still never both run.
+//
+// Duplicate safety, in order:
+//   1. the digest is claimed in this process before the question; an identical request meanwhile is turned away;
+//   2. the ledger is checked before the question and again after the answer (another process, or a run that ended
+//      while this one waited);
+//   3. right before execute, "unknown" is written to the ledger with compare-and-set under a lock and synced to
+//      disk. If it was already there, nothing runs. A crash or restart during execute leaves "unknown", which
+//      blocks an automatic retry;
+//   4. only a definite refusal from the service (4xx) removes the entry; a definite success turns it into "done".
 export async function boundMutation(ctx, { tool, account, prepare, recheck, execute, repeatable = false, now = () => Date.now() }) {
   if (typeof ctx?.confirm !== 'function') return outcome('refused', 'אין כאן משתמש מאומת שיכול לאשר את הפעולה, אז היא לא בוצעה.')
   let prepared
@@ -131,44 +204,65 @@ export async function boundMutation(ctx, { tool, account, prepare, recheck, exec
   account = prepared.account ?? account
   deepFreeze(op)
   const digest = digestOf({ tool, account, op, fingerprint })
-  const seen = repeatable ? null : ledgerEntry(digest)
-  if (seen?.state === 'done') return outcome('already_done', `הפעולה הזאת כבר בוצעה${seen.ref ? ` (${seen.ref})` : ''}. לא שולח שוב.`, { ref: seen.ref })
-  if (seen?.state === 'unknown') return outcome('unknown', 'ניסיון קודם של אותה פעולה בדיוק נגמר בלי תשובה ברורה, אז ייתכן שהיא כבר בוצעה. לא מנסה שוב אוטומטית: צריך לבדוק ידנית.')
   if (typeof question !== 'string' || !question.trim()) return outcome('refused', 'אין נוסח מלא להציג לאישור, אז הפעולה לא בוצעה.')
   if (question.length > MAX_QUESTION_CHARS) return outcome('refused', `השינוי ארוך מכדי להציג אותו במלואו לאישור (${question.length} תווים, מקסימום ${MAX_QUESTION_CHARS}). צריך לחלק אותו לחלקים קטנים יותר.`)
-  // Only a strict true is a yes. A truthy string ("no") from a broken confirm is not.
-  const yes = (await ctx.confirm(question)) === true
-  if (!yes) return outcome('declined', 'המשתמש לא אישר, ולכן שום דבר לא שונה. אל תנסה שוב ואל תעקוף.')
-  const grant = issueGrant(digest, { now: now() })
-  if (recheck) {
-    let current
+  if (open.has(digest)) return outcome('in_progress', 'אותה פעולה בדיוק כבר ממתינה לאישור או רצה עכשיו. לא שואל ולא מבצע אותה פעם שנייה.')
+  open.add(digest)
+  try {
+    if (!repeatable) {
+      const seen = ledgerEntry(digest)
+      if (seen) return alreadyText(seen)
+    }
+    // Only a strict true is a yes. A truthy string ("no") from a broken confirm is not, and a confirm that throws
+    // is a no.
+    let yes = false
     try {
-      current = await recheck(op)
+      yes = (await ctx.confirm(question)) === true
+    } catch {
+      yes = false
+    }
+    if (!yes) return outcome('declined', 'המשתמש לא אישר, ולכן שום דבר לא שונה. אל תנסה שוב ואל תעקוף.')
+    const grant = issueGrant(digest, { now: now() })
+    if (recheck) {
+      let current
+      try {
+        current = await recheck(op)
+      } catch (e) {
+        return outcome('refused', `לא הצלחתי לוודא שהמצב לא השתנה מאז האישור (${e.message}). לא שיניתי כלום.`)
+      }
+      if (canonical(current) !== canonical(fingerprint)) return outcome('changed', 'היעד השתנה מאז שאישרת (גרסה, תוכן או טיוטה אחרים). לא שיניתי כלום; צריך להציג ולאשר מחדש.')
+    }
+    try {
+      consumeGrant(grant, digestOf({ tool, account, op, fingerprint }), { now: now() })
     } catch (e) {
-      return outcome('refused', `לא הצלחתי לוודא שהמצב לא השתנה מאז האישור (${e.message}). לא שיניתי כלום.`)
+      return outcome('refused', e.message)
     }
-    if (canonical(current) !== canonical(fingerprint)) return outcome('changed', 'היעד השתנה מאז שאישרת (גרסה, תוכן או טיוטה אחרים). לא שיניתי כלום; צריך להציג ולאשר מחדש.')
-  }
-  try {
-    consumeGrant(grant, digestOf({ tool, account, op, fingerprint }), { now: now() })
-  } catch (e) {
-    return outcome('refused', e.message)
-  }
-  if (!repeatable) writeLedger(digest, { tool, state: 'unknown', at: now() })
-  let done
-  try {
-    done = await execute(op)
-  } catch (e) {
-    if (isDefinitive(e)) {
-      if (!repeatable) writeLedger(digest, null)
-      if (e.status === 412 || e.code === 'revision-changed') return outcome('changed', `השירות סירב כי היעד השתנה מאז האישור: ${e.message}`)
-      return outcome('failed', `השירות סירב: ${e.message}`)
+    if (!repeatable) {
+      let before
+      try {
+        before = claimLedger(digest, { tool, state: 'unknown', at: now() })
+      } catch (e) {
+        return outcome('refused', `לא הצלחתי לרשום את הפעולה לפני הביצוע (${e.message}). לא שיניתי כלום.`)
+      }
+      if (before) return alreadyText(before)
     }
-    return outcome('unknown', `אין תשובה ברורה מהשירות (${e.message}). ייתכן שהפעולה בוצעה; לא מנסה שוב אוטומטית.`)
+    let done
+    try {
+      done = await execute(op)
+    } catch (e) {
+      if (isDefinitive(e)) {
+        if (!repeatable) writeLedger(digest, null)
+        if (e.status === 412 || e.code === 'revision-changed') return outcome('changed', `השירות סירב כי היעד השתנה מאז האישור: ${e.message}`)
+        return outcome('failed', `השירות סירב: ${e.message}`)
+      }
+      return outcome('unknown', `אין תשובה ברורה מהשירות (${e.message}). ייתכן שהפעולה בוצעה; לא מנסה שוב אוטומטית.`)
+    }
+    if (!done?.confirmed) return outcome('unknown', `${done?.text || 'השירות לא החזיר אישור'}. לא ידוע בוודאות שהשינוי בוצע.`)
+    if (!repeatable) writeLedger(digest, { tool, state: 'done', at: now(), ref: String(done.ref || '').slice(0, 200) })
+    return outcome('done', done.text, { ref: done.ref })
+  } finally {
+    open.delete(digest)
   }
-  if (!done?.confirmed) return outcome('unknown', `${done?.text || 'השירות לא החזיר אישור'}. לא ידוע בוודאות שהשינוי בוצע.`)
-  if (!repeatable) writeLedger(digest, { tool, state: 'done', at: now(), ref: String(done.ref || '').slice(0, 200) })
-  return outcome('done', done.text, { ref: done.ref })
 }
 
 // ---- Google accounts for writing ----
