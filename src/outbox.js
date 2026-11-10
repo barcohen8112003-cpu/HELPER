@@ -44,11 +44,16 @@ export function createOutbox(send, sendFile) {
       while (state.owner) {
         const i = state.outbox.findIndex((m) => m.urgent || !inQuietHours())
         if (i < 0) break
-        await send(state.outbox[i].text)
+        // The message itself, not its position: while send is awaited, notify can push the queue past its cap and
+        // shift everything by one, so state.outbox[i] may be another message by the time send returns.
+        const m = state.outbox[i]
+        await send(m.text)
         // A plain record of every message the assistant sent on its own initiative, and when.
-        fs.appendFileSync(SENT_LOG, `${new Date().toLocaleString('sv-SE')} ${state.outbox[i].urgent ? '[urgent] ' : ''}${state.outbox[i].text.replace(/\n/g, ' | ')}\n`)
-        ledger('outboxSent', state.outbox[i].key)
-        state.outbox.splice(i, 1)
+        fs.appendFileSync(SENT_LOG, `${new Date().toLocaleString('sv-SE')} ${m.urgent ? '[urgent] ' : ''}${m.text.replace(/\n/g, ' | ')}\n`)
+        ledger('outboxSent', m.key)
+        // Taken out only if it is still queued; if the cap pushed it out meanwhile, it already left the queue.
+        const j = state.outbox.indexOf(m)
+        if (j >= 0) state.outbox.splice(j, 1)
         save()
       }
       state.fileOutbox ??= []

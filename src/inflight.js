@@ -29,20 +29,41 @@ export const MAX_ITEMS = 50 // entries kept in state per incident; the rest are 
 export const STUCK_MS = 10 * 60000
 export const ARCHIVE = () => path.join(DATA_DIR, 'inflight-archive.jsonl')
 
-// Writes lines to the archive and makes sure they are on disk. Returns false on any error. Tests can swap it.
+// Writes lines to the archive and makes sure they are on disk. Returns true only when every byte was written and
+// fsync'd. writeSync may write fewer bytes than asked without throwing, so it is called again from the offset it
+// reached; a call that makes no progress, or a throw at any point, counts as failure (the caller then keeps the
+// entries in state). A line cut short by an earlier failure or crash is closed with a newline before anything new
+// is appended, so it cannot swallow the next record; the reader skips the broken line, and its entries were never
+// taken out of state. Tests can swap the whole writer.
 const realWriter = (lines) => {
+  let fd
   try {
-    const fd = fs.openSync(ARCHIVE(), 'a')
-    try {
-      fs.writeSync(fd, lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
-      fs.fsyncSync(fd)
-    } finally {
-      fs.closeSync(fd)
+    fd = fs.openSync(ARCHIVE(), 'a+')
+    const size = fs.fstatSync(fd).size
+    let lead = ''
+    if (size > 0) {
+      const last = Buffer.alloc(1)
+      fs.readSync(fd, last, 0, 1, size - 1)
+      if (last[0] !== 0x0a) lead = '\n'
     }
+    const buf = Buffer.from(lead + lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8')
+    let off = 0
+    while (off < buf.length) {
+      const n = fs.writeSync(fd, buf, off, buf.length - off)
+      if (!(n > 0)) throw new Error(`archive write made no progress at ${off}/${buf.length} bytes`)
+      off += n
+    }
+    fs.fsyncSync(fd)
     return true
   } catch (e) {
     console.log(`[inflight] archive not written, keeping the entries in state: ${e.message}`)
     return false
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd)
+      } catch {}
+    }
   }
 }
 let writeArchive = realWriter

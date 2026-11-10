@@ -260,6 +260,138 @@ function archivedClosedCount() {
   ok(!/unlinkSync|rmSync|truncate/.test(src), 'the archive is never deleted or trimmed by Helper')
 }
 
+// ---------- Round 4 ----------
+
+// R4-1. The outbox shifts while a send is awaited: the first general notice is being sent (deferred), the recovery
+//       notice and 99 keyed general notices are queued behind it, the cap pushes the first one out, then the first
+//       send resolves and every later send fails. Only what send really accepted may be recorded as sent; the
+//       recovery notice must stay queued and pending.
+{
+  const calls = []
+  let release
+  const gate = new Promise((r) => (release = r))
+  let n = 0
+  const { ob, notify } = realOutbox(async (text) => {
+    calls.push(text)
+    if (++n === 1) return gate // first send waits
+    throw new Error('send failed') // every later send fails
+  })
+  state.owner = { jid: 'x@s.whatsapp.net' }
+  const running = ob.notify('GENERAL FIRST', false, 'general:first')
+  await new Promise((r) => setTimeout(r, 5))
+  wa = { seen: [], lastAt: 0 }
+  inflight.track(wa, 'R4', now - 5000, now - 5000)
+  inflight.strand(wa, { all: true, now })
+  flush(wa, notify)
+  const recoveryKey = wa.recovery[0].handedKey
+  for (let i = 0; i < 99; i++) ob.notify(`general ${i}`, false, `general:${i}`)
+  ok(state.outbox.length === 100 && state.outbox[0].key === recoveryKey, 'shift: the cap pushed the first message out while its send was awaited')
+  release()
+  await running
+  await ob.flush()
+  const accepted = calls.slice(0, 1) // only the first send resolved
+  ok(accepted[0] === 'GENERAL FIRST', 'shift: the only accepted send was GENERAL FIRST')
+  ok(!(state.outboxSent || []).includes(recoveryKey), 'shift: the recovery notice is not recorded as sent')
+  ok((state.outboxSent || []).join() === 'general:first', `shift: outboxSent holds exactly what send accepted (${(state.outboxSent || []).join()})`)
+  ok(state.outbox.some((o) => o.key === recoveryKey), 'shift: the recovery notice is still queued')
+  ok(!inflight.reconcile(wa) && wa.recovery[0].state === 'handed', 'shift: reconcile does not take it as delivered')
+  ok(state.outbox.length === 100 && state.outbox.some((o) => o.key === 'general:0'), 'shift: the general notice behind it was not removed in its place')
+  // The owner's WhatsApp works again: it goes out, and only then is it delivered.
+  const later = []
+  await createOutbox(async (t) => later.push(t)).flush()
+  ok(later.some((t) => /באמצע טיפול/.test(t)) && inflight.reconcile(wa) && wa.recovery[0].state === 'delivered', 'shift: delivered only after its own send was accepted')
+  state.owner = null
+}
+
+// R4-2. The archive is written completely or not at all as far as state is concerned.
+const realWriteSync = fs.writeSync
+// Calls the real writeSync with at most `cap(len)` bytes, for both call forms (buffer+offset, or a string).
+const limitedWrite = (cap) => (fd, buf, off, len, ...rest) => {
+  if (typeof buf === 'string') {
+    const b = Buffer.from(buf, 'utf8')
+    return realWriteSync(fd, b, 0, cap(b.length))
+  }
+  off ??= 0
+  len ??= buf.length - off
+  return realWriteSync(fd, buf, off, cap(len), ...rest)
+}
+const strand100 = (prefix) => {
+  wa = { seen: [], lastAt: 0 }
+  for (let i = 0; i < 100; i++) inflight.track(wa, `${prefix}${i}`, now + i, now + i)
+  inflight.strand(wa, { all: true, now })
+  return [...Array(100).keys()].map((i) => `${prefix}${i}`)
+}
+const parsedLines = () => fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => {
+  try {
+    return JSON.parse(l)
+  } catch {
+    return null
+  }
+})
+inflight._setArchiveWriter?.(undefined)
+
+// Short writes (half of what was asked each call, no throw): the writer keeps going until all bytes are written.
+{
+  freshArchive()
+  fs.writeSync = limitedWrite((len) => Math.max(1, Math.floor(len / 2)))
+  let all
+  try {
+    all = strand100('SHORT')
+  } finally {
+    fs.writeSync = realWriteSync
+  }
+  const got = recoverable(wa)
+  ok(all.every((id) => got.has(id)), `short writes: every id recoverable (${all.filter((id) => got.has(id)).length}/100)`)
+  ok(wa.recovery[0].items.length === 50 && wa.recovery[0].archived === 50 && parsedLines().filter((x) => x?.id).length === 50, 'short writes: 50 in state, 50 complete lines in the archive')
+}
+
+// Zero progress: treated as failure; nothing leaves state.
+{
+  freshArchive()
+  fs.writeSync = () => 0
+  let all
+  try {
+    all = strand100('ZERO')
+  } finally {
+    fs.writeSync = realWriteSync
+  }
+  ok(wa.recovery[0].items.length === 100 && !wa.recovery[0].archived, 'zero write: all 100 stay in state, none marked archived')
+  ok(all.every((id) => recoverable(wa).has(id)), 'zero write: every id recoverable')
+}
+
+// Error after a partial write: the file is left with a broken last line; state keeps everything; the next archive
+// write closes the broken line first, and everything after it reads fine.
+{
+  freshArchive()
+  let calls = 0
+  const partial = limitedWrite((len) => Math.min(len, 17))
+  fs.writeSync = (...args) => {
+    if (++calls === 1) return partial(...args)
+    throw new Error('EIO')
+  }
+  let first
+  try {
+    first = strand100('PART')
+  } finally {
+    fs.writeSync = realWriteSync
+  }
+  const waFirst = wa
+  ok(waFirst.recovery[0].items.length === 100 && !fs.readFileSync(archiveFile(), 'utf8').endsWith('\n'), 'error after partial: all in state, archive ends in a broken line')
+  const second = strand100('AFTER')
+  const got = new Set([...recoverable(waFirst), ...recoverable(wa)])
+  ok([...first, ...second].every((id) => got.has(id)), 'error after partial: every id of both batches recoverable')
+  ok(parsedLines().filter((x) => x?.id?.startsWith('AFTER')).length === 50, 'error after partial: the next records are whole lines, not glued to the broken one')
+}
+
+// A crash left half a line at the end of the archive (restart): the next append starts on a new line.
+{
+  freshArchive()
+  fs.writeFileSync(archiveFile(), '{"incident":"boot-1-1","id":"CRASHED-HALF","sen')
+  const all = strand100('TAIL')
+  const got = recoverable(wa)
+  ok(all.every((id) => got.has(id)) && parsedLines().filter((x) => x?.id?.startsWith('TAIL')).length === 50, 'partial tail: later records stay recoverable')
+}
+
 // Old state without the new fields, and entries in the old {id, at} shape, still work.
 wa = { seen: ['x'], lastAt: 5, inflight: [{ id: 'old', at: now - 1000 }] }
 ok(inflight.strand(wa, { all: true, now }) === 1 && wa.recovery[0].firstSentAt === now - 1000 && wa.seen[0] === 'x', 'old state ({id, at}, no recovery) reads fine')
