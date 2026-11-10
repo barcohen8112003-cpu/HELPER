@@ -78,6 +78,7 @@ const TESTS = [
   'src/office-edit-selftest.js',
   'src/gmail-plus-selftest.js',
   'src/calendar-plus-selftest.js',
+  'src/github-write-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

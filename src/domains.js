@@ -100,8 +100,8 @@ export const DOMAINS = [
   {
     id: 'dev',
     label: 'קוד ובנייה: GitHub, מכונת לינוקס, Claude Code',
-    has: named('github_get', 'vm_run', 'vm_send_file', 'claude_code'),
-    words: /קוד|github|גיטהאב|ריפו|סקריפט|תבנה|אתר|דף נחיתה|משחק|פייתון|python|javascript|תכנ(ת|ות)|באג|לינוקס|linux|claude/i,
+    has: named('github_get', 'github_create_issue', 'github_create_pr', 'github_comment', 'vm_run', 'vm_send_file', 'claude_code'),
+    words: /קוד|github|גיטהאב|ריפו|issue|אישיו|pull request|\bpr\b|סקריפט|תבנה|אתר|דף נחיתה|משחק|פייתון|python|javascript|תכנ(ת|ות)|באג|לינוקס|linux|claude/i,
   },
   {
     id: 'people',
