@@ -30,3 +30,8 @@ for (const [rel, data] of Object.entries(backup.files)) {
   fs.writeFileSync(out, Buffer.from(data, 'base64'))
 }
 console.log(`שוחזרו ${Object.keys(backup.files).length} קבצים מגיבוי של ${backup.createdAt} אל ${target}`)
+// The recovery archive (ids of messages that may not have been answered, no text) has to go back next to
+// state.json, in the same data folder, or the ids that left state are no longer recoverable.
+const archive = backup.files['data/inflight-archive.jsonl']
+if (archive) console.log(`כולל ארכיון ההודעות שאולי לא נענו: ${Buffer.from(archive, 'base64').toString('utf8').split('\n').filter(Boolean).length} שורות (data/inflight-archive.jsonl)`)
+else console.log('אין בגיבוי ארכיון של הודעות שאולי לא נענו (data/inflight-archive.jsonl). גיבוי ישן, או שלא היה ארכיון.')
