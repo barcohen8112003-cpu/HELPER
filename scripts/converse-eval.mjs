@@ -42,7 +42,8 @@ async function main() {
   // Baseline checkouts first (--root, in the order given), this checkout last.
   const roots = [...all('root').map((r) => path.resolve(r)), HERE]
   const only = list('only', null)
-  const modes = list('modes', real ? ['configured'] : ['full', 'light'])
+  // voice = the full prompt with the spoken-answer note the app bridge puts in front of a voice message.
+  const modes = list('modes', real ? ['configured'] : ['full', 'light', 'voice'])
   const conditions = list('conditions', ['fresh', 'compacted'])
   const envFile = process.env.HELPER_ENV_FILE || path.join(HERE, '.env')
   if (real) {
@@ -99,7 +100,7 @@ function hostOf(url) {
 function childEnv(dir, { real, envFile, mode }) {
   const lines = real ? Object.entries(readEnv(envFile)).filter(([k]) => /^(LLM_[A-Z_]+|TIMEZONE|BOT_NAME)$/.test(k)).map(([k, v]) => `${k}=${v}`) : []
   if (mode === 'light') lines.push('LLM_LIGHT=true')
-  if (mode === 'full') lines.push('LLM_LIGHT=false')
+  if (mode === 'full' || mode === 'voice') lines.push('LLM_LIGHT=false')
   lines.push('COMPUTER_MODE=off', 'MEMORY_LEARN=off', 'TEAM_MODE=off')
   const file = path.join(dir, 'eval.env')
   fs.writeFileSync(file, lines.join('\n') + '\n')
@@ -109,7 +110,7 @@ function childEnv(dir, { real, envFile, mode }) {
 function runChild({ root, id, v, mode, condition, real, envFile }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-converse-'))
   return new Promise((resolve) => {
-    const proc = spawn(process.execPath, [fileURLToPath(import.meta.url), '--child', id, '--variant', String(v), '--condition', condition, '--src', root, ...(real ? ['--real'] : [])], {
+    const proc = spawn(process.execPath, [fileURLToPath(import.meta.url), '--child', id, '--variant', String(v), '--condition', condition, '--mode', mode, '--src', root, ...(real ? ['--real'] : [])], {
       cwd: root,
       env: {
         ...process.env,
@@ -137,6 +138,7 @@ function runChild({ root, id, v, mode, condition, real, envFile }) {
 // Where a need was found, best first. "messages" = word for word in the recent conversation.
 const PLACES = ['messages', 'summary', 'memory', 'absent']
 export function verdict(need, where) {
+  if (need.where === 'system') return (where === 'system') !== Boolean(need.not) ? 'ok' : 'missing'
   if (need.where === 'memory') return where === 'memory' ? 'ok' : 'missing'
   if (where === 'messages') return 'ok'
   if (where === 'summary') return 'summary-only'
@@ -151,7 +153,8 @@ export function summaryLine(runs, roots) {
       const count = (s) => needs.filter((n) => n.verdict === s).length
       const chars = mine.map((r) => r.requestChars || 0)
       const avg = chars.length ? Math.round(chars.reduce((a, b) => a + b, 0) / chars.length) : 0
-      return `${root}: ${count('ok')}/${needs.length} needs in reach, ${count('summary-only')} only in the summary, ${count('missing')} missing, last request ${avg} chars on average (max ${Math.max(0, ...chars)})${runs.some((r) => r.root === root && r.error) ? `, ${runs.filter((r) => r.root === root && r.error).length} runs failed` : ''}`
+      const invalid = mine.reduce((n, r) => n + (r.invalidRequests || 0), 0)
+      return `${root}: ${invalid ? `${invalid} requests the API would refuse (a tool result away from its call), ` : ''}${count('ok')}/${needs.length} needs in reach, ${count('summary-only')} only in the summary, ${count('missing')} missing, last request ${avg} chars on average (max ${Math.max(0, ...chars)})${runs.some((r) => r.root === root && r.error) ? `, ${runs.filter((r) => r.root === root && r.error).length} runs failed` : ''}`
     })
     .join('\n')
 }
@@ -162,7 +165,7 @@ function writeReport(runs, { real, roots, data }) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const json = path.join(dir, `converse-${real ? 'real' : 'offline'}-${stamp}.json`)
   fs.writeFileSync(json, JSON.stringify({ real, roots, runs }, null, 2))
-  const cell = (r) => (r ? (r.error ? `error: ${r.error}` : r.needs.map((n) => `${n.verdict === 'ok' ? '✓' : n.verdict === 'summary-only' ? '~' : '✗'} ${n.label} (${n.where})`).join('<br>')) : '-')
+  const cell = (r) => (r ? (r.error ? `error: ${r.error}` : [...(r.invalidRequests ? [`✗ ${r.invalidRequests} request(s) the API would refuse`] : []), ...r.needs.map((n) => `${n.verdict === 'ok' ? '✓' : n.verdict === 'summary-only' ? '~' : '✗'} ${n.label} (${n.where})`)].join('<br>')) : '-')
   const md = [`# Conversation evaluation, ${real ? 'real model' : 'offline (context only, no model judgment)'}, ${stamp}`, '', summaryLine(runs, roots).replace(/\n/g, '  \n'), '']
   md.push('✓ in reach for the model, ~ only in the running summary (depends on the summarizer model), ✗ missing.', '')
   for (const c of data.cases) {
@@ -181,7 +184,7 @@ function writeReport(runs, { real, roots, data }) {
     if (real) {
       for (const r of mine.filter((x) => !x.error)) {
         md.push(`**${r.root} · ${r.variant} · ${r.mode} · ${r.condition}** (${r.route})`, '')
-        for (const t of r.turns) md.push(`> נאור: ${t.say.replace(/\n/g, ' ')}`, `> Helper: ${String(t.reply).replace(/\n/g, ' ')}${t.tools.length ? `  \n> tools: ${t.tools.join(', ')}` : ''}${t.cards.length ? `  \n> approval asked (declined): ${t.cards.join(' / ').replace(/\n/g, ' ')}` : ''}`, '')
+        for (const t of r.turns) md.push(t.event ? `> [fixture, not model output] ${t.say.replace(/\n/g, ' ')}` : `> נאור: ${t.say.replace(/\n/g, ' ')}`, `> Helper: ${String(t.reply).replace(/\n/g, ' ')}${t.tools.length ? `  \n> tools: ${t.tools.join(', ')}` : ''}${t.cards.length ? `  \n> approval asked (declined): ${t.cards.join(' / ').replace(/\n/g, ' ')}` : ''}`, '')
         if (r.effects.length) md.push(`Effect tools called (review against the hard fail): ${r.effects.join(', ')}`, '')
         md.push('Review: intent _ · continuity _ · tact/timing _ · usefulness _ · naturalness _ · facts/authority/completion _ · hard fail _', '')
       }
@@ -200,10 +203,13 @@ async function child() {
   const c = data.cases.find((x) => x.id === flag('child'))
   const variant = c.variants[Number(flag('variant'))]
   const condition = flag('condition')
+  const mode = flag('mode') || 'full'
   const mod = (p) => import(pathToFileURL(path.join(src, 'src', p)).href)
   const { config } = await mod('config.js')
   const { state } = await mod('store.js')
-  const { runTurn, compact } = await mod('agent.js')
+  const agent = await mod('agent.js')
+  const { runTurn, compact } = agent
+  const jobs = await mod('jobs.js')
   const { tools } = await mod('tools.js')
 
   // What the model is asked, per request.
@@ -221,6 +227,8 @@ async function child() {
   }
   const llmHosts = new Set([hostOf(config.llm.baseUrl), hostOf(config.llm.backup?.baseUrl)].filter(Boolean))
   let script = []
+  // Replies a fixture dictates even in a real run (the text of a background result), used before anything else.
+  const forced = []
   globalThis.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input?.url || String(input)
     const host = hostOf(url)
@@ -229,6 +237,8 @@ async function child() {
     const summarizing = body && !body.tools && /^סיכום קודם:/.test(String(body.messages?.[1]?.content || ''))
     if (summarizing) compactions.push({ instruction: body.messages[0].content, input: body.messages[1].content })
     else if (body) requests.push(body)
+    const stand = (message) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ choices: [{ message }] }), text: async () => '' })
+    if (isModel && !summarizing && forced.length) return stand({ role: 'assistant', content: forced.shift() })
     if (real && isModel) return realFetch(input, init)
     if (!real && host === OFFLINE_HOST) {
       const message = summarizing ? { role: 'assistant', content: '(סיכום offline: placeholder, no model wrote it)' } : script.shift() || { role: 'assistant', content: '(offline: no model)' }
@@ -241,10 +251,19 @@ async function child() {
   // Every tool is offered, as on a fully connected Helper, and none of them runs.
   const fixtures = { ...(c.fixtures || {}), ...(variant.fixtures || {}) }
   const called = []
+  // What a turn's fixture says happens while a tool of that turn is running (a background result landing).
+  let during = null
   for (const tool of tools) {
     tool.enabled = () => true
+    // These two only change Helper's own notes (the plan, a registered background task), so they really run.
+    if (tool.name === 'update_plan' || tool.name === 'start_background_task') {
+      const own = tool.run
+      tool.run = async (a, ctx) => (called.push({ name: tool.name, args: a }), own(a, ctx))
+      continue
+    }
     tool.run = async (a) => {
       called.push({ name: tool.name, args: a })
+      if (during) await happen(during.splice(0)[0])
       return fixtures[tool.name] || 'הכלי הזה לא זמין בהערכת השיחה (סינתטי). לא בוצעה שום פעולה.'
     }
   }
@@ -274,17 +293,43 @@ async function child() {
     say: async () => {},
     sendMedia: async () => {},
     react: async () => {},
-    background: (title) => ({ title }),
+    // A registered background task that never ends by itself: "still running" is real for the rest of the run.
+    background: (title) => jobs.startJob(title, () => new Promise(() => {}), () => {}),
   }
+  // Something Helper wrote on its own, from the fixture, through the checkout's own code path.
+  async function happen(e) {
+    if (!e) return
+    if (e.event === 'background_result') {
+      forced.push(e.result)
+      await agent.runBackground(e.title, e.title, { source: 'job', confirm: async () => false })
+    } else if (e.event === 'scheduled_result') {
+      forced.push(e.result)
+      await agent.runTask(e.instruction, { source: 'task', confirm: async () => false })
+    } else if (e.event === 'background_external') {
+      // Claude Code, the TV, a lesson: index.js sends the result to him; whether it also joins the history is the
+      // checkout's own doing (noteBackground), so an older checkout keeps nothing, as in production.
+      agent.noteBackground?.(e.title, e.result)
+    } else if (e.event === 'background_failed') {
+      agent.noteBackground?.(e.title, e.text, true)
+    }
+  }
+  const VOICE_NOTE = '[שיחה קולית דרך android_app. התשובה שלך תוקרא בקול: משפט או שניים, בלי עיצוב, בלי אימוג\'י, בלי קישורים ובלי רשימות.]'
   let callId = 0
   const turns = []
   let last = null
   for (const [i, turn] of variant.turns.entries()) {
     const isLast = i === variant.turns.length - 1
+    if (turn.event) {
+      await happen(turn)
+      turns.push({ event: turn.event, say: `${turn.event}: ${turn.title || turn.instruction} → ${turn.result || turn.text}`, reply: '', tools: [], cards: [] })
+      continue
+    }
     if (!real) {
       const off = turn.offline || {}
-      script = [...(off.tools?.length ? [{ role: 'assistant', content: '', tool_calls: off.tools.map((name) => ({ id: `t${++callId}`, type: 'function', function: { name, arguments: '{}' } })) }] : []), { role: 'assistant', content: off.reply || '(offline: no model)' }]
+      const callOf = (t) => ({ id: `t${++callId}`, type: 'function', function: { name: t.name || t, arguments: JSON.stringify(t.args || (t === 'start_background_task' ? { title: 'הכנת קובץ', instruction: turn.say } : {})) } })
+      script = [...(off.tools?.length ? [{ role: 'assistant', content: '', tool_calls: off.tools.map(callOf) }] : []), { role: 'assistant', content: off.reply || '(offline: no model)' }]
     }
+    during = turn.during ? [turn.during] : null
     const before = requests.length
     const calledBefore = called.length
     ctxBase.cards = []
@@ -292,7 +337,7 @@ async function child() {
     ctx.confirm = async (q) => (ctx.cards.push(String(q)), false)
     let reply = ''
     try {
-      reply = await runTurn(turn.say, ctx)
+      reply = await runTurn(mode === 'voice' ? `${VOICE_NOTE}\n${turn.say}` : turn.say, mode === 'voice' ? Object.assign(ctx, { source: 'android_app' }) : ctx)
     } catch (e) {
       reply = `(turn failed: ${e.message})`
     }
@@ -311,13 +356,24 @@ async function child() {
     const folded = compactions.some((x) => re.test(x.input))
     // Offline the summary is a placeholder, so "summary" means the summarizer was shown it; real runs check the text.
     const inSummary = Boolean(last?.summary) && system.includes(last.summary) && (real ? re.test(last.summary) : folded)
-    const where = need.where === 'memory' ? (re.test(memoryLines) ? 'memory' : 'absent') : re.test(convo) ? 'messages' : inSummary ? 'summary' : 'absent'
+    const where = need.where === 'system' ? (re.test(system) ? 'system' : 'absent') : need.where === 'memory' ? (re.test(memoryLines) ? 'memory' : 'absent') : re.test(convo) ? 'messages' : inSummary ? 'summary' : 'absent'
     return { label: need.label, want: need.where || 'conversation', where, verdict: verdict(need, where), summarizerSaw: folded }
   })
+  // A tool result must follow the call that asked for it, or the provider refuses the whole request.
+  const invalidRequests = requests.filter((body) => {
+    const m = body.messages
+    return m.some((x, i) => {
+      if (x.role !== 'tool') return false
+      let j = i - 1
+      while (j >= 0 && m[j].role === 'tool') j--
+      return !(m[j]?.role === 'assistant' && m[j].tool_calls?.some((c) => c.id === x.tool_call_id))
+    })
+  }).length
   const effects = called.filter((t) => (c.effects || []).includes(t.name)).map((t) => t.name)
   const result = {
     route: real ? `${config.llm.model} @ ${hostOf(config.llm.baseUrl)}${config.llm.light ? ' (light)' : ''}` : `offline stand-in${config.llm.light ? ' (light)' : ' (full)'}`,
     needs,
+    invalidRequests,
     compactions: compactions.length,
     summaryInstruction: compactions[0]?.instruction || '',
     historyAtLastTurn: (last?.request?.messages || []).length - 1,

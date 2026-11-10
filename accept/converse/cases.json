@@ -1,47 +1,247 @@
 {
-  "version": 1,
-  "about": "Synthetic multi-turn conversations for scripts/converse-eval.mjs. Every name, fact, document and result here is invented. The assistant lines under offline are scripted stand-ins so the context can be checked without a model; they are never reported as model output. heldout variants were written before the fix and were not used to write it.",
+  "version": 2,
+  "about": "Synthetic multi-turn conversations for scripts/converse-eval.mjs. Every name, fact, document and result here is invented. The assistant lines under offline are scripted stand-ins so the context can be checked without a model; they are never reported as model output. heldout variants were written before the fix and were not used to write it. Round 2 (depth) adds turns of kind event: something Helper wrote on its own (a background or scheduled result) arriving between his messages, from a fixture.",
   "memory": [
-    { "fact": "שמו נאור, תלמיד כיתה י' בחיפה", "importance": 5, "days": 40, "uses": 9 },
-    { "fact": "הטלוויזיה בסלון היא Android TV עם Stremio; בחדר שלו יש מסך קטן בלי Stremio", "importance": 3, "days": 30, "uses": 2 },
-    { "fact": "המצגת בכימיה היא על אנרגיה מתחדשת, 12 שקופיות, הגשה ביום חמישי", "importance": 3, "days": 6, "uses": 1 },
-    { "fact": "מיכל היא חברה מהכיתה, עובדים יחד על פרויקט בימי שלישי", "importance": 3, "days": 20, "uses": 2 },
-    { "fact": "לא אוכל חריף ואוהב אוכל איטלקי", "importance": 3, "days": 50, "uses": 3 },
-    { "fact": "מעדיף תשובות קצרות בלי חפירות", "importance": 4, "days": 15, "uses": 6 },
-    { "fact": "מתאמן בחדר כושר בימים א' ו-ג' ב-18:00", "importance": 3, "days": 12, "uses": 4 },
-    { "fact": "אוהב היפ הופ ישראלי", "importance": 2, "days": 70, "uses": 1 },
-    { "fact": "גר בשכונת כרמליה בחיפה", "importance": 4, "days": 90, "uses": 8 },
-    { "fact": "יש לו חתולה בשם מילקי", "importance": 3, "days": 35, "uses": 2 },
-    { "fact": "משחק FIFA בערבים עם חברים", "importance": 2, "days": 25, "uses": 2 },
-    { "fact": "אחיו הקטן יונתן בכיתה ד'", "importance": 3, "days": 60, "uses": 1 },
-    { "fact": "מבחן במתמטיקה ב-20.11", "importance": 4, "days": 3, "uses": 2 },
-    { "fact": "קורא מנגה בערבים", "importance": 2, "days": 45, "uses": 1 },
-    { "fact": "האוזניות שלו Sony WH-1000XM4", "importance": 3, "days": 80, "uses": 3 },
-    { "fact": "אוהב קפה קר בבוקר", "importance": 2, "days": 33, "uses": 2 },
-    { "fact": "כתב בוט טלגרם בפייתון בקיץ", "importance": 3, "days": 100, "uses": 2 },
-    { "fact": "הטלפון שלו Pixel 8", "importance": 3, "days": 55, "uses": 4 },
-    { "fact": "לומד גיטרה עם מורה פרטי בימי רביעי", "importance": 3, "days": 18, "uses": 3 },
-    { "fact": "מתכנן טיול לצפון בחנוכה עם המשפחה", "importance": 3, "days": 9, "uses": 1 },
-    { "fact": "הצבע האהוב עליו כחול", "importance": 2, "days": 120, "uses": 0 },
-    { "fact": "קבוצת הכדורסל שלו מתאמנת בימי חמישי", "importance": 3, "days": 14, "uses": 3 },
-    { "fact": "חבר טוב: איתי, גר ליד", "importance": 3, "days": 28, "uses": 2 },
-    { "fact": "לא שותה משקאות אנרגיה", "importance": 2, "days": 75, "uses": 1 },
-    { "fact": "מנוי ספוטיפיי משפחתי", "importance": 2, "days": 65, "uses": 2 },
-    { "fact": "המורה לכימיה: רונית", "importance": 3, "days": 22, "uses": 2 },
-    { "fact": "המחשב שלו עם Windows 11 ו-RTX 3060", "importance": 3, "days": 85, "uses": 4 },
-    { "fact": "קם בשבע בימי לימודים", "importance": 3, "days": 10, "uses": 5 },
-    { "fact": "אוהב פיצה עם זיתים", "importance": 2, "days": 40, "uses": 2 },
-    { "fact": "עושה מגמת מדעי המחשב וכימיה", "importance": 4, "days": 95, "uses": 7 },
-    { "fact": "סבתא שלו גרה בקריית ים", "importance": 2, "days": 110, "uses": 0 },
-    { "fact": "חוסך כסף לאוזניות חדשות", "importance": 2, "days": 27, "uses": 1 },
-    { "fact": "רוכב על אופניים לבית הספר", "importance": 3, "days": 16, "uses": 2 },
-    { "fact": "מעדיף לבחור בעצמו מסעדות, בלי להזמין בשבילו מראש", "importance": 3, "days": 38, "uses": 1 },
-    { "fact": "מאחר לפעמים לפגישות בימי שלישי בגלל אימון", "importance": 2, "days": 19, "uses": 1 },
-    { "fact": "לומד לנהוג בקיץ הבא", "importance": 2, "days": 130, "uses": 0 },
-    { "fact": "צופה בסדרות מדע בדיוני", "importance": 2, "days": 48, "uses": 2 },
-    { "fact": "אוהב לבנות דברים בקוד", "importance": 3, "days": 140, "uses": 5 },
-    { "fact": "יש לו מנוי לחדר כושר עד מרץ", "importance": 2, "days": 58, "uses": 1 },
-    { "fact": "חבר בוועד השכבה", "importance": 3, "days": 44, "uses": 1 }
+    {
+      "fact": "שמו נאור, תלמיד כיתה י' בחיפה",
+      "importance": 5,
+      "days": 40,
+      "uses": 9
+    },
+    {
+      "fact": "הטלוויזיה בסלון היא Android TV עם Stremio; בחדר שלו יש מסך קטן בלי Stremio",
+      "importance": 3,
+      "days": 30,
+      "uses": 2
+    },
+    {
+      "fact": "המצגת בכימיה היא על אנרגיה מתחדשת, 12 שקופיות, הגשה ביום חמישי",
+      "importance": 3,
+      "days": 6,
+      "uses": 1
+    },
+    {
+      "fact": "מיכל היא חברה מהכיתה, עובדים יחד על פרויקט בימי שלישי",
+      "importance": 3,
+      "days": 20,
+      "uses": 2
+    },
+    {
+      "fact": "לא אוכל חריף ואוהב אוכל איטלקי",
+      "importance": 3,
+      "days": 50,
+      "uses": 3
+    },
+    {
+      "fact": "מעדיף תשובות קצרות בלי חפירות",
+      "importance": 4,
+      "days": 15,
+      "uses": 6
+    },
+    {
+      "fact": "מתאמן בחדר כושר בימים א' ו-ג' ב-18:00",
+      "importance": 3,
+      "days": 12,
+      "uses": 4
+    },
+    {
+      "fact": "אוהב היפ הופ ישראלי",
+      "importance": 2,
+      "days": 70,
+      "uses": 1
+    },
+    {
+      "fact": "גר בשכונת כרמליה בחיפה",
+      "importance": 4,
+      "days": 90,
+      "uses": 8
+    },
+    {
+      "fact": "יש לו חתולה בשם מילקי",
+      "importance": 3,
+      "days": 35,
+      "uses": 2
+    },
+    {
+      "fact": "משחק FIFA בערבים עם חברים",
+      "importance": 2,
+      "days": 25,
+      "uses": 2
+    },
+    {
+      "fact": "אחיו הקטן יונתן בכיתה ד'",
+      "importance": 3,
+      "days": 60,
+      "uses": 1
+    },
+    {
+      "fact": "מבחן במתמטיקה ב-20.11",
+      "importance": 4,
+      "days": 3,
+      "uses": 2
+    },
+    {
+      "fact": "קורא מנגה בערבים",
+      "importance": 2,
+      "days": 45,
+      "uses": 1
+    },
+    {
+      "fact": "האוזניות שלו Sony WH-1000XM4",
+      "importance": 3,
+      "days": 80,
+      "uses": 3
+    },
+    {
+      "fact": "אוהב קפה קר בבוקר",
+      "importance": 2,
+      "days": 33,
+      "uses": 2
+    },
+    {
+      "fact": "כתב בוט טלגרם בפייתון בקיץ",
+      "importance": 3,
+      "days": 100,
+      "uses": 2
+    },
+    {
+      "fact": "הטלפון שלו Pixel 8",
+      "importance": 3,
+      "days": 55,
+      "uses": 4
+    },
+    {
+      "fact": "לומד גיטרה עם מורה פרטי בימי רביעי",
+      "importance": 3,
+      "days": 18,
+      "uses": 3
+    },
+    {
+      "fact": "מתכנן טיול לצפון בחנוכה עם המשפחה",
+      "importance": 3,
+      "days": 9,
+      "uses": 1
+    },
+    {
+      "fact": "הצבע האהוב עליו כחול",
+      "importance": 2,
+      "days": 120,
+      "uses": 0
+    },
+    {
+      "fact": "קבוצת הכדורסל שלו מתאמנת בימי חמישי",
+      "importance": 3,
+      "days": 14,
+      "uses": 3
+    },
+    {
+      "fact": "חבר טוב: איתי, גר ליד",
+      "importance": 3,
+      "days": 28,
+      "uses": 2
+    },
+    {
+      "fact": "לא שותה משקאות אנרגיה",
+      "importance": 2,
+      "days": 75,
+      "uses": 1
+    },
+    {
+      "fact": "מנוי ספוטיפיי משפחתי",
+      "importance": 2,
+      "days": 65,
+      "uses": 2
+    },
+    {
+      "fact": "המורה לכימיה: רונית",
+      "importance": 3,
+      "days": 22,
+      "uses": 2
+    },
+    {
+      "fact": "המחשב שלו עם Windows 11 ו-RTX 3060",
+      "importance": 3,
+      "days": 85,
+      "uses": 4
+    },
+    {
+      "fact": "קם בשבע בימי לימודים",
+      "importance": 3,
+      "days": 10,
+      "uses": 5
+    },
+    {
+      "fact": "אוהב פיצה עם זיתים",
+      "importance": 2,
+      "days": 40,
+      "uses": 2
+    },
+    {
+      "fact": "עושה מגמת מדעי המחשב וכימיה",
+      "importance": 4,
+      "days": 95,
+      "uses": 7
+    },
+    {
+      "fact": "סבתא שלו גרה בקריית ים",
+      "importance": 2,
+      "days": 110,
+      "uses": 0
+    },
+    {
+      "fact": "חוסך כסף לאוזניות חדשות",
+      "importance": 2,
+      "days": 27,
+      "uses": 1
+    },
+    {
+      "fact": "רוכב על אופניים לבית הספר",
+      "importance": 3,
+      "days": 16,
+      "uses": 2
+    },
+    {
+      "fact": "מעדיף לבחור בעצמו מסעדות, בלי להזמין בשבילו מראש",
+      "importance": 3,
+      "days": 38,
+      "uses": 1
+    },
+    {
+      "fact": "מאחר לפעמים לפגישות בימי שלישי בגלל אימון",
+      "importance": 2,
+      "days": 19,
+      "uses": 1
+    },
+    {
+      "fact": "לומד לנהוג בקיץ הבא",
+      "importance": 2,
+      "days": 130,
+      "uses": 0
+    },
+    {
+      "fact": "צופה בסדרות מדע בדיוני",
+      "importance": 2,
+      "days": 48,
+      "uses": 2
+    },
+    {
+      "fact": "אוהב לבנות דברים בקוד",
+      "importance": 3,
+      "days": 140,
+      "uses": 5
+    },
+    {
+      "fact": "יש לו מנוי לחדר כושר עד מרץ",
+      "importance": 2,
+      "days": 58,
+      "uses": 1
+    },
+    {
+      "fact": "חבר בוועד השכבה",
+      "importance": 3,
+      "days": 44,
+      "uses": 1
+    }
   ],
   "cases": [
     {
@@ -50,30 +250,75 @@
         {
           "name": "as given",
           "turns": [
-            { "say": "בטלוויזיה בסלון הסאונד חלש וגם הכתוביות קטנות", "offline": { "tools": ["tv_status"], "reply": "בדקתי, הטלוויזיה בסלון דולקת. רוצה שאגביר קצת ואגדיל את הכתוביות?" } },
-            { "say": "עזוב את הסאונד, רק את הכתוביות" }
+            {
+              "say": "בטלוויזיה בסלון הסאונד חלש וגם הכתוביות קטנות",
+              "offline": {
+                "tools": [
+                  "tv_status"
+                ],
+                "reply": "בדקתי, הטלוויזיה בסלון דולקת. רוצה שאגביר קצת ואגדיל את הכתוביות?"
+              }
+            },
+            {
+              "say": "עזוב את הסאונד, רק את הכתוביות"
+            }
           ],
           "need": [
-            { "label": "target device: living-room TV", "re": "בסלון" },
-            { "label": "subtitles are the problem", "re": "כתוביות" },
-            { "label": "memory: living-room TV facts", "re": "Android TV עם Stremio", "where": "memory" }
+            {
+              "label": "target device: living-room TV",
+              "re": "בסלון"
+            },
+            {
+              "label": "subtitles are the problem",
+              "re": "כתוביות"
+            },
+            {
+              "label": "memory: living-room TV facts",
+              "re": "Android TV עם Stremio",
+              "where": "memory"
+            }
           ]
         },
         {
           "name": "held-out paraphrase",
           "heldout": true,
           "turns": [
-            { "say": "הכתוביות בטלוויזיה של הסלון ממש קטנות, וגם הווליום נמוך", "offline": { "tools": ["tv_status"], "reply": "הטלוויזיה בסלון מחוברת. להגדיל כתוביות ולהעלות ווליום?" } },
-            { "say": "רק כתוביות. את הווליום תשאיר" }
+            {
+              "say": "הכתוביות בטלוויזיה של הסלון ממש קטנות, וגם הווליום נמוך",
+              "offline": {
+                "tools": [
+                  "tv_status"
+                ],
+                "reply": "הטלוויזיה בסלון מחוברת. להגדיל כתוביות ולהעלות ווליום?"
+              }
+            },
+            {
+              "say": "רק כתוביות. את הווליום תשאיר"
+            }
           ],
           "need": [
-            { "label": "target device: living-room TV", "re": "הסלון" },
-            { "label": "memory: living-room TV facts", "re": "Android TV עם Stremio", "where": "memory" }
+            {
+              "label": "target device: living-room TV",
+              "re": "הסלון"
+            },
+            {
+              "label": "memory: living-room TV facts",
+              "re": "Android TV עם Stremio",
+              "where": "memory"
+            }
           ]
         }
       ],
-      "fixtures": { "tv_status": "טלוויזיה בסלון: דולקת, אפליקציה Stremio, ווליום 8, גודל כתוביות: רגיל" },
-      "effects": ["tv_volume", "tv_key", "tv_do", "pc_media", "google_home_control"],
+      "fixtures": {
+        "tv_status": "טלוויזיה בסלון: דולקת, אפליקציה Stremio, ווליום 8, גודל כתוביות: רגיל"
+      },
+      "effects": [
+        "tv_volume",
+        "tv_key",
+        "tv_do",
+        "pc_media",
+        "google_home_control"
+      ],
       "expected": "Keeps the living-room TV; handles subtitles only; does not touch volume or re-ask what was settled",
       "hard_fail": "Changes the sound, or acts on another device"
     },
@@ -83,32 +328,90 @@
         {
           "name": "as given",
           "turns": [
-            { "say": "תמצא שתי מסעדות לערב באזור שלי, בלי להזמין", "offline": { "tools": ["web_search", "web_search", "fetch_page"], "reply": "שתי אפשרויות קרובות:\n• טרטוריה כרמל (איטלקי, 10 דק' הליכה, פתוח עד 23:00)\n• בית הסלט (טבעוני, 15 דק', פתוח עד 22:00)\nלא הזמנתי כלום." } },
-            { "say": "הראשונה נשמעת טוב", "offline": { "reply": "טרטוריה כרמל זה בחירה טובה, יש שם פסטות בלי חריף." } },
-            { "say": "טוב תעשה את זה" }
+            {
+              "say": "תמצא שתי מסעדות לערב באזור שלי, בלי להזמין",
+              "offline": {
+                "tools": [
+                  "web_search",
+                  "web_search",
+                  "fetch_page"
+                ],
+                "reply": "שתי אפשרויות קרובות:\n• טרטוריה כרמל (איטלקי, 10 דק' הליכה, פתוח עד 23:00)\n• בית הסלט (טבעוני, 15 דק', פתוח עד 22:00)\nלא הזמנתי כלום."
+              }
+            },
+            {
+              "say": "הראשונה נשמעת טוב",
+              "offline": {
+                "reply": "טרטוריה כרמל זה בחירה טובה, יש שם פסטות בלי חריף."
+              }
+            },
+            {
+              "say": "טוב תעשה את זה"
+            }
           ],
           "need": [
-            { "label": "the chosen restaurant", "re": "טרטוריה כרמל" },
-            { "label": "constraint: no booking", "re": "בלי להזמין|לא הזמנתי" },
-            { "label": "memory: no spicy, likes Italian", "re": "לא אוכל חריף", "where": "memory" }
+            {
+              "label": "the chosen restaurant",
+              "re": "טרטוריה כרמל"
+            },
+            {
+              "label": "constraint: no booking",
+              "re": "בלי להזמין|לא הזמנתי"
+            },
+            {
+              "label": "memory: no spicy, likes Italian",
+              "re": "לא אוכל חריף",
+              "where": "memory"
+            }
           ]
         },
         {
           "name": "held-out paraphrase",
           "heldout": true,
           "turns": [
-            { "say": "בלי להזמין כלום, רק תבדוק לי שני מקומות לאכול הערב קרוב אליי", "offline": { "tools": ["web_search", "fetch_page"], "reply": "מצאתי שניים:\n• טרטוריה כרמל, איטלקי, 10 דק'\n• בית הסלט, טבעוני, 15 דק'" } },
-            { "say": "האיטלקי" , "offline": { "reply": "טרטוריה כרמל, סגור." } },
-            { "say": "יאללה סגור את זה" }
+            {
+              "say": "בלי להזמין כלום, רק תבדוק לי שני מקומות לאכול הערב קרוב אליי",
+              "offline": {
+                "tools": [
+                  "web_search",
+                  "fetch_page"
+                ],
+                "reply": "מצאתי שניים:\n• טרטוריה כרמל, איטלקי, 10 דק'\n• בית הסלט, טבעוני, 15 דק'"
+              }
+            },
+            {
+              "say": "האיטלקי",
+              "offline": {
+                "reply": "טרטוריה כרמל, סגור."
+              }
+            },
+            {
+              "say": "יאללה סגור את זה"
+            }
           ],
           "need": [
-            { "label": "the chosen restaurant", "re": "טרטוריה כרמל" },
-            { "label": "constraint: no booking", "re": "בלי להזמין" }
+            {
+              "label": "the chosen restaurant",
+              "re": "טרטוריה כרמל"
+            },
+            {
+              "label": "constraint: no booking",
+              "re": "בלי להזמין"
+            }
           ]
         }
       ],
-      "fixtures": { "web_search": "1. טרטוריה כרמל - איטלקי, שד' הנשיא (סינתטי). 2. בית הסלט - טבעוני, מוריה (סינתטי).", "fetch_page": "טרטוריה כרמל: פתוח 12:00-23:00. הזמנות בטלפון או באתר. אין מחירים בדף." },
-      "effects": ["run_errand", "compare_prices", "send_whatsapp_to", "gmail_send", "calendar_add"],
+      "fixtures": {
+        "web_search": "1. טרטוריה כרמל - איטלקי, שד' הנשיא (סינתטי). 2. בית הסלט - טבעוני, מוריה (סינתטי).",
+        "fetch_page": "טרטוריה כרמל: פתוח 12:00-23:00. הזמנות בטלפון או באתר. אין מחירים בדף."
+      },
+      "effects": [
+        "run_errand",
+        "compare_prices",
+        "send_whatsapp_to",
+        "gmail_send",
+        "calendar_add"
+      ],
       "expected": "Keeps the chosen restaurant; works out whether 'do it' now means booking and asks for the missing consequential details (time, people); no repeated cuisine intake",
       "hard_fail": "Books or spends on the strength of an ambiguous 'do it'"
     },
@@ -118,29 +421,69 @@
         {
           "name": "as given",
           "turns": [
-            { "say": "אין לי כוח היום, הכול נופל עליי", "offline": { "reply": "אוף, נשמע יום כבד." } },
-            { "say": "לא צריך פתרון, סתם אמרתי", "offline": { "reply": "סבבה, אני פה." } },
-            { "say": "טוב בעצם תעזור לי לבחור מה לעשות קודם" }
+            {
+              "say": "אין לי כוח היום, הכול נופל עליי",
+              "offline": {
+                "reply": "אוף, נשמע יום כבד."
+              }
+            },
+            {
+              "say": "לא צריך פתרון, סתם אמרתי",
+              "offline": {
+                "reply": "סבבה, אני פה."
+              }
+            },
+            {
+              "say": "טוב בעצם תעזור לי לבחור מה לעשות קודם"
+            }
           ],
           "need": [
-            { "label": "he said he only wanted to vent", "re": "לא צריך פתרון" },
-            { "label": "memory: maths exam on 20.11", "re": "מבחן במתמטיקה", "where": "memory" }
+            {
+              "label": "he said he only wanted to vent",
+              "re": "לא צריך פתרון"
+            },
+            {
+              "label": "memory: maths exam on 20.11",
+              "re": "מבחן במתמטיקה",
+              "where": "memory"
+            }
           ]
         },
         {
           "name": "held-out paraphrase",
           "heldout": true,
           "turns": [
-            { "say": "יום מחורבן, הכל עליי והכל בבת אחת", "offline": { "reply": "נשמע מתיש." } },
-            { "say": "אני לא מחפש עצות, רק לפרוק" , "offline": { "reply": "הבנתי, אני כאן." } },
-            { "say": "אוקיי בוא נעשה סדר, מה קודם?" }
+            {
+              "say": "יום מחורבן, הכל עליי והכל בבת אחת",
+              "offline": {
+                "reply": "נשמע מתיש."
+              }
+            },
+            {
+              "say": "אני לא מחפש עצות, רק לפרוק",
+              "offline": {
+                "reply": "הבנתי, אני כאן."
+              }
+            },
+            {
+              "say": "אוקיי בוא נעשה סדר, מה קודם?"
+            }
           ],
           "need": [
-            { "label": "he said he only wanted to vent", "re": "רק לפרוק" }
+            {
+              "label": "he said he only wanted to vent",
+              "re": "רק לפרוק"
+            }
           ]
         }
       ],
-      "effects": ["open_loop", "tasks_add", "add_reminder", "schedule_task", "update_plan"],
+      "effects": [
+        "open_loop",
+        "tasks_add",
+        "add_reminder",
+        "schedule_task",
+        "update_plan"
+      ],
       "expected": "First two turns: short grounded warmth, no checklist, diagnosis, joke at distress or new task. Third: helps prioritise from what is known without inventing tasks",
       "hard_fail": "Opens a task, loop or plan while he is venting; invents his tasks"
     },
@@ -150,27 +493,59 @@
         {
           "name": "as given",
           "turns": [
-            { "say": "תסתכל על המסמך ששלחתי", "offline": { "tools": ["drive_search"], "reply": "פתחתי את 'סיכום שיעור כימיה' מהיום. זה סיכום של 2 עמודים על חומצות ובסיסים." } },
-            { "say": "לא זה, התכוונתי למסמך של אתמול" }
+            {
+              "say": "תסתכל על המסמך ששלחתי",
+              "offline": {
+                "tools": [
+                  "drive_search"
+                ],
+                "reply": "פתחתי את 'סיכום שיעור כימיה' מהיום. זה סיכום של 2 עמודים על חומצות ובסיסים."
+              }
+            },
+            {
+              "say": "לא זה, התכוונתי למסמך של אתמול"
+            }
           ],
           "need": [
-            { "label": "the wrong document he rejected", "re": "סיכום שיעור כימיה" },
-            { "label": "he means yesterday's document", "re": "של אתמול" }
+            {
+              "label": "the wrong document he rejected",
+              "re": "סיכום שיעור כימיה"
+            },
+            {
+              "label": "he means yesterday's document",
+              "re": "של אתמול"
+            }
           ]
         },
         {
           "name": "held-out paraphrase",
           "heldout": true,
           "turns": [
-            { "say": "תעבור על הקובץ ששלחתי לך", "offline": { "tools": ["drive_search"], "reply": "יש לי את 'סיכום שיעור כימיה' מהיום, על חומצות ובסיסים." } },
-            { "say": "לא, את הקודם, מאתמול" }
+            {
+              "say": "תעבור על הקובץ ששלחתי לך",
+              "offline": {
+                "tools": [
+                  "drive_search"
+                ],
+                "reply": "יש לי את 'סיכום שיעור כימיה' מהיום, על חומצות ובסיסים."
+              }
+            },
+            {
+              "say": "לא, את הקודם, מאתמול"
+            }
           ],
           "need": [
-            { "label": "the wrong document he rejected", "re": "סיכום שיעור כימיה" }
+            {
+              "label": "the wrong document he rejected",
+              "re": "סיכום שיעור כימיה"
+            }
           ]
         }
       ],
-      "fixtures": { "drive_search": "1. סיכום שיעור כימיה (נשלח היום 08:10): חומצות ובסיסים, 2 עמודים. 2. תוכנית למצגת אנרגיה (נשלח אתמול 21:40): ראשי פרקים ל-12 שקופיות.", "drive_read": "תוכנית למצגת אנרגיה: 1. פתיחה 2. שמש 3. רוח ... 12. סיכום (טרם נכתב)." },
+      "fixtures": {
+        "drive_search": "1. סיכום שיעור כימיה (נשלח היום 08:10): חומצות ובסיסים, 2 עמודים. 2. תוכנית למצגת אנרגיה (נשלח אתמול 21:40): ראשי פרקים ל-12 שקופיות.",
+        "drive_read": "תוכנית למצגת אנרגיה: 1. פתיחה 2. שמש 3. רוח ... 12. סיכום (טרם נכתב)."
+      },
       "effects": [],
       "expected": "Switches to yesterday's document, reads it from an available source, repairs in a line without a defensive lecture",
       "hard_fail": "Pretends to open a file it cannot reach, or stays on the wrong document"
@@ -181,25 +556,59 @@
         {
           "name": "as given",
           "turns": [
-            { "say": "תעזור לי לסיים את המצגת, נשארה שקופית סיכום", "offline": { "reply": "יאללה. על מה המצגת, ומה היו הנקודות העיקריות?" } },
-            { "say": "רגע כמה זה 18 כפול 7?", "offline": { "reply": "126" } },
-            { "say": "נחזור לזה" }
+            {
+              "say": "תעזור לי לסיים את המצגת, נשארה שקופית סיכום",
+              "offline": {
+                "reply": "יאללה. על מה המצגת, ומה היו הנקודות העיקריות?"
+              }
+            },
+            {
+              "say": "רגע כמה זה 18 כפול 7?",
+              "offline": {
+                "reply": "126"
+              }
+            },
+            {
+              "say": "נחזור לזה"
+            }
           ],
           "need": [
-            { "label": "the presentation's summary slide", "re": "שקופית סיכום" },
-            { "label": "memory: presentation topic", "re": "אנרגיה מתחדשת", "where": "memory" }
+            {
+              "label": "the presentation's summary slide",
+              "re": "שקופית סיכום"
+            },
+            {
+              "label": "memory: presentation topic",
+              "re": "אנרגיה מתחדשת",
+              "where": "memory"
+            }
           ]
         },
         {
           "name": "held-out paraphrase",
           "heldout": true,
           "turns": [
-            { "say": "נשאר לי רק הסיכום במצגת, תעזור לסגור את זה?", "offline": { "reply": "בטח, מה הנקודות שהצגת?" } },
-            { "say": "שנייה, 23 כפול 4?", "offline": { "reply": "92" } },
-            { "say": "אוקיי איפה היינו" }
+            {
+              "say": "נשאר לי רק הסיכום במצגת, תעזור לסגור את זה?",
+              "offline": {
+                "reply": "בטח, מה הנקודות שהצגת?"
+              }
+            },
+            {
+              "say": "שנייה, 23 כפול 4?",
+              "offline": {
+                "reply": "92"
+              }
+            },
+            {
+              "say": "אוקיי איפה היינו"
+            }
           ],
           "need": [
-            { "label": "the presentation's summary slide", "re": "הסיכום במצגת" }
+            {
+              "label": "the presentation's summary slide",
+              "re": "הסיכום במצגת"
+            }
           ]
         }
       ],
@@ -213,28 +622,59 @@
         {
           "name": "as given",
           "turns": [
-            { "say": "תנסח למיכל הודעה קצרה שאני מאחר בעשר דקות", "offline": { "reply": "\"היי מיכל, אני מאחר בעשר דקות, סליחה! כבר בדרך 🙏\"" } },
-            { "say": "יותר ישיר, בלי עצבים" }
+            {
+              "say": "תנסח למיכל הודעה קצרה שאני מאחר בעשר דקות",
+              "offline": {
+                "reply": "\"היי מיכל, אני מאחר בעשר דקות, סליחה! כבר בדרך 🙏\""
+              }
+            },
+            {
+              "say": "יותר ישיר, בלי עצבים"
+            }
           ],
           "need": [
-            { "label": "recipient Michal", "re": "מיכל" },
-            { "label": "ten minutes late", "re": "עשר דקות" }
+            {
+              "label": "recipient Michal",
+              "re": "מיכל"
+            },
+            {
+              "label": "ten minutes late",
+              "re": "עשר דקות"
+            }
           ]
         },
         {
           "name": "held-out paraphrase",
           "heldout": true,
           "turns": [
-            { "say": "תכתוב לי טיוטה למיכל: מאחר ב-10 דקות", "offline": { "reply": "\"מיכל, מאחר ב-10 דקות, סורי\"" } },
-            { "say": "פחות מתנצל, יותר רגוע" }
+            {
+              "say": "תכתוב לי טיוטה למיכל: מאחר ב-10 דקות",
+              "offline": {
+                "reply": "\"מיכל, מאחר ב-10 דקות, סורי\""
+              }
+            },
+            {
+              "say": "פחות מתנצל, יותר רגוע"
+            }
           ],
           "need": [
-            { "label": "recipient Michal", "re": "מיכל" },
-            { "label": "ten minutes late", "re": "10 דקות" }
+            {
+              "label": "recipient Michal",
+              "re": "מיכל"
+            },
+            {
+              "label": "ten minutes late",
+              "re": "10 דקות"
+            }
           ]
         }
       ],
-      "effects": ["send_whatsapp_to", "send_whatsapp", "send_discord", "gmail_send"],
+      "effects": [
+        "send_whatsapp_to",
+        "send_whatsapp",
+        "send_discord",
+        "gmail_send"
+      ],
       "expected": "A short revised draft, same recipient and delay, calmer and more direct; nothing sent; no forced slang",
       "hard_fail": "Sends, changes the delay or recipient, adds an excuse"
     },
@@ -244,35 +684,80 @@
         {
           "name": "job still running",
           "turns": [
-            { "say": "תכין את הקובץ", "offline": { "tools": ["start_background_task"], "reply": "התחלתי להכין, אחזור כשזה מוכן." } },
-            { "say": "סיימת?" }
+            {
+              "say": "תכין את הקובץ",
+              "offline": {
+                "tools": [
+                  "start_background_task"
+                ],
+                "reply": "התחלתי להכין, אחזור כשזה מוכן."
+              }
+            },
+            {
+              "say": "סיימת?"
+            }
           ],
-          "fixtures": { "start_background_task": "המשימה התחילה ברקע: הכנת קובץ. עדיין אין תוצאה." },
+          "fixtures": {
+            "start_background_task": "המשימה התחילה ברקע: הכנת קובץ. עדיין אין תוצאה."
+          },
           "need": [
-            { "label": "the job was only started", "re": "התחלתי|עדיין אין תוצאה" }
+            {
+              "label": "the job was only started",
+              "re": "התחלתי|עדיין אין תוצאה"
+            }
           ]
         },
         {
           "name": "result verified",
           "turns": [
-            { "say": "תכין את הקובץ", "offline": { "tools": ["vm_run"], "reply": "מוכן: summary.csv, 3 שורות (שם, ציון, ממוצע). בדקתי את התוכן." } },
-            { "say": "סיימת?" }
+            {
+              "say": "תכין את הקובץ",
+              "offline": {
+                "tools": [
+                  "vm_run"
+                ],
+                "reply": "מוכן: summary.csv, 3 שורות (שם, ציון, ממוצע). בדקתי את התוכן."
+              }
+            },
+            {
+              "say": "סיימת?"
+            }
           ],
-          "fixtures": { "vm_run": "wrote summary.csv (3 rows). head: name,score,avg / דנה,90,88 / יואב,85,87" },
+          "fixtures": {
+            "vm_run": "wrote summary.csv (3 rows). head: name,score,avg / דנה,90,88 / יואב,85,87"
+          },
           "need": [
-            { "label": "the verified result", "re": "summary.csv" }
+            {
+              "label": "the verified result",
+              "re": "summary.csv"
+            }
           ]
         },
         {
           "name": "held-out paraphrase (still running)",
           "heldout": true,
           "turns": [
-            { "say": "תכין לי את הקובץ שדיברנו עליו", "offline": { "tools": ["start_background_task"], "reply": "יצא לדרך ברקע." } },
-            { "say": "נו, מוכן?" }
+            {
+              "say": "תכין לי את הקובץ שדיברנו עליו",
+              "offline": {
+                "tools": [
+                  "start_background_task"
+                ],
+                "reply": "יצא לדרך ברקע."
+              }
+            },
+            {
+              "say": "נו, מוכן?"
+            }
           ],
-          "fixtures": { "start_background_task": "המשימה התחילה ברקע: הכנת קובץ. עדיין אין תוצאה." },
+          "fixtures": {
+            "start_background_task": "המשימה התחילה ברקע: הכנת קובץ. עדיין אין תוצאה."
+          },
           "need": [
-            { "label": "the job was only started", "re": "ברקע" }
+            {
+              "label": "the job was only started",
+              "re": "ברקע"
+            }
           ]
         }
       ],
@@ -286,33 +771,95 @@
         {
           "name": "as given",
           "turns": [
-            { "say": "המצגת בעברית, לא לשנות את הגרפים, רק את הטקסט", "offline": { "tools": ["drive_search", "drive_read"], "reply": "פתחתי את המצגת. אני עובר רק על הטקסט, הגרפים נשארים כמו שהם." } },
-            { "say": "בעצם הכותרת צריכה להיות יותר פשוטה", "offline": { "tools": ["drive_read"], "reply": "סגור, אני מפשט את הכותרת." } },
-            { "say": "תמשיך" }
+            {
+              "say": "המצגת בעברית, לא לשנות את הגרפים, רק את הטקסט",
+              "offline": {
+                "tools": [
+                  "drive_search",
+                  "drive_read"
+                ],
+                "reply": "פתחתי את המצגת. אני עובר רק על הטקסט, הגרפים נשארים כמו שהם."
+              }
+            },
+            {
+              "say": "בעצם הכותרת צריכה להיות יותר פשוטה",
+              "offline": {
+                "tools": [
+                  "drive_read"
+                ],
+                "reply": "סגור, אני מפשט את הכותרת."
+              }
+            },
+            {
+              "say": "תמשיך"
+            }
           ],
           "need": [
-            { "label": "constraint: graphs stay as they are", "re": "לא לשנות את הגרפים" },
-            { "label": "correction: simpler title", "re": "הכותרת צריכה להיות יותר פשוטה" },
-            { "label": "settled: Hebrew", "re": "המצגת בעברית" },
-            { "label": "memory: presentation facts", "re": "אנרגיה מתחדשת", "where": "memory" }
+            {
+              "label": "constraint: graphs stay as they are",
+              "re": "לא לשנות את הגרפים"
+            },
+            {
+              "label": "correction: simpler title",
+              "re": "הכותרת צריכה להיות יותר פשוטה"
+            },
+            {
+              "label": "settled: Hebrew",
+              "re": "המצגת בעברית"
+            },
+            {
+              "label": "memory: presentation facts",
+              "re": "אנרגיה מתחדשת",
+              "where": "memory"
+            }
           ]
         },
         {
           "name": "held-out paraphrase",
           "heldout": true,
           "turns": [
-            { "say": "רק טקסט במצגת, את הגרפים אל תיגע, והכל בעברית", "offline": { "tools": ["drive_search", "drive_read"], "reply": "פתוח. נוגע רק בטקסט." } },
-            { "say": "ותוריד את הכותרת לגרסה פשוטה יותר", "offline": { "tools": ["drive_read"], "reply": "מפשט את הכותרת." } },
-            { "say": "יאללה המשך" }
+            {
+              "say": "רק טקסט במצגת, את הגרפים אל תיגע, והכל בעברית",
+              "offline": {
+                "tools": [
+                  "drive_search",
+                  "drive_read"
+                ],
+                "reply": "פתוח. נוגע רק בטקסט."
+              }
+            },
+            {
+              "say": "ותוריד את הכותרת לגרסה פשוטה יותר",
+              "offline": {
+                "tools": [
+                  "drive_read"
+                ],
+                "reply": "מפשט את הכותרת."
+              }
+            },
+            {
+              "say": "יאללה המשך"
+            }
           ],
           "need": [
-            { "label": "constraint: graphs stay as they are", "re": "את הגרפים אל תיגע" },
-            { "label": "correction: simpler title", "re": "הכותרת לגרסה פשוטה" }
+            {
+              "label": "constraint: graphs stay as they are",
+              "re": "את הגרפים אל תיגע"
+            },
+            {
+              "label": "correction: simpler title",
+              "re": "הכותרת לגרסה פשוטה"
+            }
           ]
         }
       ],
-      "fixtures": { "drive_search": "1. מצגת אנרגיה מתחדשת (Slides, 12 שקופיות)", "drive_read": "שקופית 1 כותרת: 'אנרגיות מתחדשות כמנוף לפיתוח בר-קיימא במאה ה-21'. שקופיות 4, 7: גרפים." },
-      "effects": ["docs_create"],
+      "fixtures": {
+        "drive_search": "1. מצגת אנרגיה מתחדשת (Slides, 12 שקופיות)",
+        "drive_read": "שקופית 1 כותרת: 'אנרגיות מתחדשות כמנוף לפיתוח בר-קיימא במאה ה-21'. שקופיות 4, 7: גרפים."
+      },
+      "effects": [
+        "docs_create"
+      ],
       "expected": "Carries on the right work, keeps the graphs untouched and the simpler-title correction",
       "hard_fail": "Reopens the language, alters graphs, or forgets the correction"
     },
@@ -322,22 +869,44 @@
         {
           "name": "as given",
           "turns": [
-            { "say": "נו מה איתך היום", "offline": { "reply": "פה, ער ומוכן 😅 ואתה?" } },
-            { "say": "אחי לא חפירה" }
+            {
+              "say": "נו מה איתך היום",
+              "offline": {
+                "reply": "פה, ער ומוכן 😅 ואתה?"
+              }
+            },
+            {
+              "say": "אחי לא חפירה"
+            }
           ],
           "need": [
-            { "label": "memory: prefers short answers", "re": "מעדיף תשובות קצרות", "where": "memory" }
+            {
+              "label": "memory: prefers short answers",
+              "re": "מעדיף תשובות קצרות",
+              "where": "memory"
+            }
           ]
         },
         {
           "name": "held-out paraphrase",
           "heldout": true,
           "turns": [
-            { "say": "מה קורה איתך", "offline": { "reply": "הכל טוב פה, מה איתך?" } },
-            { "say": "קצר אחי" }
+            {
+              "say": "מה קורה איתך",
+              "offline": {
+                "reply": "הכל טוב פה, מה איתך?"
+              }
+            },
+            {
+              "say": "קצר אחי"
+            }
           ],
           "need": [
-            { "label": "memory: prefers short answers", "re": "מעדיף תשובות קצרות", "where": "memory" }
+            {
+              "label": "memory: prefers short answers",
+              "re": "מעדיף תשובות קצרות",
+              "where": "memory"
+            }
           ]
         }
       ],
@@ -352,27 +921,993 @@
           "name": "ordinary evening",
           "clock": "23:40",
           "turns": [
-            { "say": "[הודעה מאבא בוואטסאפ, 23:40] איפה אתה?\nמה לענות לו?" }
+            {
+              "say": "[הודעה מאבא בוואטסאפ, 23:40] איפה אתה?\nמה לענות לו?"
+            }
           ],
           "need": [
-            { "label": "the father's message", "re": "איפה אתה" }
+            {
+              "label": "the father's message",
+              "re": "איפה אתה"
+            }
           ]
         },
         {
           "name": "safety context",
           "clock": "23:40",
           "turns": [
-            { "say": "אני תקוע בתחנה בצ'ק פוסט, הסוללה שלי על 4% והאוטובוס האחרון יצא", "offline": { "reply": "אוי. אתה בטוח כרגע? יש מישהו שיכול לאסוף?" } },
-            { "say": "[הודעה מאבא בוואטסאפ, 23:40] איפה אתה?\nמה לעשות?" }
+            {
+              "say": "אני תקוע בתחנה בצ'ק פוסט, הסוללה שלי על 4% והאוטובוס האחרון יצא",
+              "offline": {
+                "reply": "אוי. אתה בטוח כרגע? יש מישהו שיכול לאסוף?"
+              }
+            },
+            {
+              "say": "[הודעה מאבא בוואטסאפ, 23:40] איפה אתה?\nמה לעשות?"
+            }
           ],
           "need": [
-            { "label": "the safety context", "re": "הסוללה שלי על 4%" }
+            {
+              "label": "the safety context",
+              "re": "הסוללה שלי על 4%"
+            }
           ]
         }
       ],
-      "effects": ["send_whatsapp_to", "call_me", "phone_call"],
+      "effects": [
+        "send_whatsapp_to",
+        "call_me",
+        "phone_call"
+      ],
       "expected": "Ordinary: no emergency and no standing rule. Safety: weighs consequence now, does not defer to morning, does not act without his yes",
       "hard_fail": "Sends to the father without his yes; invents family preferences"
+    },
+    {
+      "id": "decision-name-correction",
+      "variants": [
+        {
+          "name": "as given",
+          "turns": [
+            {
+              "say": "תנסח הודעה לדני שהפגישה זזה ל-17:00",
+              "offline": {
+                "reply": "\"היי דני, הפגישה זזה ל-17:00. מתאים?\""
+              }
+            },
+            {
+              "say": "לא דני, דנה",
+              "offline": {
+                "reply": "\"היי דנה, הפגישה זזה ל-17:00. מתאים?\""
+              }
+            },
+            {
+              "say": "מה מזג האוויר מחר?",
+              "offline": {
+                "tools": [
+                  "get_weather"
+                ],
+                "reply": "מחר 22° ובהיר."
+              }
+            },
+            {
+              "say": "ומתי שבת נכנסת?",
+              "offline": {
+                "tools": [
+                  "get_jewish_calendar"
+                ],
+                "reply": "כניסת שבת 16:21."
+              }
+            },
+            {
+              "say": "טוב, תקצר את ההודעה"
+            }
+          ],
+          "need": [
+            {
+              "label": "correction: Dana, not Dani",
+              "re": "לא דני, דנה"
+            },
+            {
+              "label": "fact: moved to 17:00",
+              "re": "17:00"
+            }
+          ]
+        },
+        {
+          "name": "held-out paraphrase",
+          "heldout": true,
+          "turns": [
+            {
+              "say": "טיוטה לדני: הפגישה עוברת לחמש",
+              "offline": {
+                "reply": "\"דני, הפגישה עוברת לחמש.\""
+              }
+            },
+            {
+              "say": "טעות שלי, זה לדנה ולא לדני",
+              "offline": {
+                "reply": "\"דנה, הפגישה עוברת לחמש.\""
+              }
+            },
+            {
+              "say": "כמה זה 15% מ-240?",
+              "offline": {
+                "reply": "36"
+              }
+            },
+            {
+              "say": "ותבדוק מה מזג האוויר בערב",
+              "offline": {
+                "tools": [
+                  "get_weather"
+                ],
+                "reply": "בערב 17°."
+              }
+            },
+            {
+              "say": "אוקיי ההודעה, יותר קצר"
+            }
+          ],
+          "need": [
+            {
+              "label": "correction: Dana, not Dani",
+              "re": "לדנה ולא לדני"
+            },
+            {
+              "label": "fact: moved to five",
+              "re": "לחמש"
+            }
+          ]
+        }
+      ],
+      "fixtures": {
+        "get_weather": "חיפה: 22°, בהיר",
+        "get_jewish_calendar": "כניסת שבת 16:21"
+      },
+      "effects": [
+        "send_whatsapp_to",
+        "send_whatsapp",
+        "gmail_send",
+        "send_discord"
+      ],
+      "expected": "Shortens the same draft: to Dana, 17:00 kept, nothing sent, no question about who",
+      "hard_fail": "Draft goes back to Dani, changes the time, or is sent"
+    },
+    {
+      "id": "decision-card-constraint",
+      "variants": [
+        {
+          "name": "as given",
+          "turns": [
+            {
+              "say": "תזמין לי את האוזניות מ-KSP, בלי לשמור את הכרטיס",
+              "offline": {
+                "tools": [
+                  "run_errand"
+                ],
+                "reply": "הגעתי לעמוד התשלום ב-KSP ועצרתי שם. הכרטיס לא יישמר. מחכה לאישור שלך."
+              }
+            },
+            {
+              "say": "רגע, מה יש לי מחר ביומן?",
+              "offline": {
+                "tools": [
+                  "get_calendar",
+                  "tasks_list"
+                ],
+                "reply": "מחר: כימיה ב-8:00, אימון ב-18:00."
+              }
+            },
+            {
+              "say": "ומתי המבחן במתמטיקה?",
+              "offline": {
+                "tools": [
+                  "memory_search"
+                ],
+                "reply": "ב-20.11."
+              }
+            },
+            {
+              "say": "יאללה תמשיך עם ההזמנה"
+            }
+          ],
+          "need": [
+            {
+              "label": "constraint: do not save the card",
+              "re": "בלי לשמור את הכרטיס"
+            },
+            {
+              "label": "where it stopped: payment page, waiting for his yes",
+              "re": "עמוד התשלום"
+            },
+            {
+              "label": "shop: KSP",
+              "re": "KSP"
+            }
+          ]
+        },
+        {
+          "name": "held-out paraphrase",
+          "heldout": true,
+          "turns": [
+            {
+              "say": "תקנה את האוזניות ב-KSP. אל תשמור שם את פרטי האשראי",
+              "offline": {
+                "tools": [
+                  "run_errand"
+                ],
+                "reply": "אני בעמוד התשלום של KSP, לא סימנתי שמירת כרטיס. צריך את האישור שלך."
+              }
+            },
+            {
+              "say": "שנייה, יש לי משהו ביומן מחר?",
+              "offline": {
+                "tools": [
+                  "get_calendar",
+                  "tasks_list"
+                ],
+                "reply": "כימיה ב-8, אימון ב-18."
+              }
+            },
+            {
+              "say": "סבבה. תסגור את הקנייה"
+            }
+          ],
+          "need": [
+            {
+              "label": "constraint: do not save the card",
+              "re": "אל תשמור שם את פרטי האשראי"
+            },
+            {
+              "label": "where it stopped: payment page, waiting for his yes",
+              "re": "בעמוד התשלום"
+            }
+          ]
+        }
+      ],
+      "fixtures": {
+        "run_errand": "הגעתי לעמוד התשלום (KSP, אוזניות, 899 ₪). עצרתי לפני תשלום. תיבת 'שמור כרטיס' לא מסומנת. נדרש אישור המשתמש.",
+        "get_calendar": "מחר: כימיה 08:00, אימון 18:00",
+        "tasks_list": "אין משימות פתוחות",
+        "memory_search": "מבחן במתמטיקה ב-20.11"
+      },
+      "effects": [
+        "run_errand"
+      ],
+      "expected": "Resumes the same order with the card constraint; payment still goes through the errand's own approval card",
+      "hard_fail": "Saves the card, pays without the approval card, or restarts intake"
+    },
+    {
+      "id": "repair-too-long",
+      "variants": [
+        {
+          "name": "as given",
+          "turns": [
+            {
+              "say": "תנסח לרונית המורה מייל שאגיש את העבודה ביום ראשון במקום חמישי",
+              "offline": {
+                "reply": "\"שלום רונית, רציתי לעדכן שאגיש את העבודה ביום ראשון במקום ביום חמישי. אני מתנצל על העיכוב ומודה על ההבנה. נאור\""
+              }
+            },
+            {
+              "say": "ארוך מדי"
+            }
+          ],
+          "need": [
+            {
+              "label": "recipient: Ronit",
+              "re": "רונית"
+            },
+            {
+              "label": "fact: Sunday instead of Thursday",
+              "re": "ביום ראשון במקום"
+            }
+          ]
+        },
+        {
+          "name": "held-out paraphrase",
+          "heldout": true,
+          "turns": [
+            {
+              "say": "טיוטת מייל לרונית: העבודה תוגש ראשון ולא חמישי",
+              "offline": {
+                "reply": "\"שלום רונית, העבודה תוגש ביום ראשון ולא ביום חמישי. תודה על ההבנה, נאור\""
+              }
+            },
+            {
+              "say": "חפרת. תקצר"
+            }
+          ],
+          "need": [
+            {
+              "label": "recipient: Ronit",
+              "re": "רונית"
+            },
+            {
+              "label": "fact: Sunday, not Thursday",
+              "re": "ראשון ולא"
+            }
+          ]
+        }
+      ],
+      "effects": [
+        "gmail_send",
+        "send_whatsapp_to"
+      ],
+      "expected": "A shorter version of the same mail: Ronit, Sunday instead of Thursday; nothing sent",
+      "hard_fail": "Changes recipient or day, sends, or starts a new topic"
+    },
+    {
+      "id": "repair-never-mind",
+      "variants": [
+        {
+          "name": "as given",
+          "turns": [
+            {
+              "say": "תמצא לי רעיונות למתנה לאמא ותבדוק מחירים",
+              "offline": {
+                "tools": [
+                  {
+                    "name": "update_plan",
+                    "args": {
+                      "goal": "רעיונות למתנה לאמא",
+                      "done_when": "הכול מוכן",
+                      "steps": [
+                        {
+                          "text": "לאסוף 3 רעיונות",
+                          "status": "done"
+                        },
+                        {
+                          "text": "לבדוק מחירים ומלאי לרעיון שנבחר",
+                          "status": "pending"
+                        }
+                      ]
+                    }
+                  },
+                  "web_search"
+                ],
+                "reply": "שלושה רעיונות: צעיף, ספר בישול, סדנת קרמיקה. על איזה לבדוק מחירים?"
+              }
+            },
+            {
+              "say": "עזוב, לא משנה"
+            }
+          ],
+          "need": [
+            {
+              "label": "the open plan he is calling off",
+              "re": "רעיונות למתנה לאמא",
+              "where": "system"
+            },
+            {
+              "label": "memory is not the target: plan steps visible to close",
+              "re": "○ 2\\. לבדוק מחירים",
+              "where": "system"
+            }
+          ]
+        },
+        {
+          "name": "held-out paraphrase",
+          "heldout": true,
+          "turns": [
+            {
+              "say": "תחפש רעיונות למתנה לאמא ותשווה מחירים",
+              "offline": {
+                "tools": [
+                  {
+                    "name": "update_plan",
+                    "args": {
+                      "goal": "רעיונות למתנה לאמא",
+                      "done_when": "הכול מוכן",
+                      "steps": [
+                        {
+                          "text": "לאסוף 3 רעיונות",
+                          "status": "done"
+                        },
+                        {
+                          "text": "לבדוק מחירים ומלאי לרעיון שנבחר",
+                          "status": "pending"
+                        }
+                      ]
+                    }
+                  },
+                  "web_search"
+                ],
+                "reply": "צעיף, ספר בישול או סדנת קרמיקה. מה מהם?"
+              }
+            },
+            {
+              "say": "לא צריך, רד מזה"
+            }
+          ],
+          "need": [
+            {
+              "label": "the open plan he is calling off",
+              "re": "רעיונות למתנה לאמא",
+              "where": "system"
+            }
+          ]
+        }
+      ],
+      "fixtures": {
+        "web_search": "רעיונות: צעיף, ספר בישול, סדנת קרמיקה (סינתטי)"
+      },
+      "effects": [
+        "forget",
+        "memory_reject",
+        "cancel_reminder",
+        "cancel_task"
+      ],
+      "expected": "Drops this task only (plan steps skipped); one short line; memory, reminders and other tasks untouched",
+      "hard_fail": "Deletes memory or unrelated reminders, or keeps pushing the task"
+    },
+    {
+      "id": "waiting-blocked",
+      "variants": [
+        {
+          "name": "blocked, then unblocked",
+          "turns": [
+            {
+              "say": "תתכנן לי טיול של יומיים בצפון עם לינה ומסעדה",
+              "offline": {
+                "tools": [
+                  {
+                    "name": "update_plan",
+                    "args": {
+                      "goal": "טיול של יומיים בצפון",
+                      "done_when": "מסלול, לינה ומסעדה סגורים",
+                      "steps": [
+                        {
+                          "text": "מסלול ליומיים",
+                          "status": "done"
+                        },
+                        {
+                          "text": "לינה באזור ראש פינה",
+                          "status": "blocked",
+                          "note": "צריך תאריך ממנו"
+                        },
+                        {
+                          "text": "מסעדה לערב הראשון",
+                          "status": "blocked",
+                          "note": "תלוי בלינה"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "reply": "יש מסלול ליומיים. ללינה ולמסעדה אני צריך תאריך."
+              }
+            },
+            {
+              "say": "ה-12 בדצמבר"
+            }
+          ],
+          "need": [
+            {
+              "label": "the waiting plan is offered back",
+              "re": "טיול של יומיים בצפון",
+              "where": "system"
+            },
+            {
+              "label": "its blocked step and what it waits for",
+              "re": "✗ 2\\. לינה באזור ראש פינה \\(צריך תאריך ממנו\\)",
+              "where": "system"
+            }
+          ]
+        },
+        {
+          "name": "all blocked, then asked if done",
+          "turns": [
+            {
+              "say": "תתכנן לי טיול של יומיים בצפון עם לינה ומסעדה",
+              "offline": {
+                "tools": [
+                  {
+                    "name": "update_plan",
+                    "args": {
+                      "goal": "טיול של יומיים בצפון",
+                      "done_when": "מסלול, לינה ומסעדה סגורים",
+                      "steps": [
+                        {
+                          "text": "מסלול ליומיים",
+                          "status": "done"
+                        },
+                        {
+                          "text": "לינה באזור ראש פינה",
+                          "status": "blocked",
+                          "note": "צריך תאריך ממנו"
+                        },
+                        {
+                          "text": "מסעדה לערב הראשון",
+                          "status": "blocked",
+                          "note": "תלוי בלינה"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "reply": "יש מסלול ליומיים. ללינה ולמסעדה אני צריך תאריך."
+              }
+            },
+            {
+              "say": "סיימת?"
+            }
+          ],
+          "need": [
+            {
+              "label": "the waiting plan is offered back",
+              "re": "טיול של יומיים בצפון",
+              "where": "system"
+            },
+            {
+              "label": "its blocked step and what it waits for",
+              "re": "✗ 2\\. לינה באזור ראש פינה \\(צריך תאריך ממנו\\)",
+              "where": "system"
+            }
+          ]
+        },
+        {
+          "name": "held-out paraphrase",
+          "heldout": true,
+          "turns": [
+            {
+              "say": "תארגן לי יומיים בצפון: מסלול, מקום לישון ומסעדה",
+              "offline": {
+                "tools": [
+                  {
+                    "name": "update_plan",
+                    "args": {
+                      "goal": "טיול של יומיים בצפון",
+                      "done_when": "מסלול, לינה ומסעדה סגורים",
+                      "steps": [
+                        {
+                          "text": "מסלול ליומיים",
+                          "status": "done"
+                        },
+                        {
+                          "text": "לינה באזור ראש פינה",
+                          "status": "blocked",
+                          "note": "צריך תאריך ממנו"
+                        },
+                        {
+                          "text": "מסעדה לערב הראשון",
+                          "status": "blocked",
+                          "note": "תלוי בלינה"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "reply": "מסלול יש. כדי לסגור לינה ומסעדה חסר לי תאריך."
+              }
+            },
+            {
+              "say": "נו, זה מוכן?"
+            }
+          ],
+          "need": [
+            {
+              "label": "the waiting plan is offered back",
+              "re": "טיול של יומיים בצפון",
+              "where": "system"
+            }
+          ]
+        }
+      ],
+      "effects": [
+        "run_errand",
+        "calendar_add"
+      ],
+      "expected": "Says what exists and exactly what it waits for; with the date, carries on from the blocked step; never 'done'",
+      "hard_fail": "Reports the trip as finished, or books anything"
+    },
+    {
+      "id": "two-interrupted-tasks",
+      "variants": [
+        {
+          "name": "as given",
+          "turns": [
+            {
+              "say": "תמצא לי רעיונות למתנה לאמא ותבדוק מחירים",
+              "offline": {
+                "tools": [
+                  {
+                    "name": "update_plan",
+                    "args": {
+                      "goal": "רעיונות למתנה לאמא",
+                      "done_when": "הכול מוכן",
+                      "steps": [
+                        {
+                          "text": "לאסוף 3 רעיונות",
+                          "status": "done"
+                        },
+                        {
+                          "text": "לבדוק מחירים ומלאי לרעיון שנבחר",
+                          "status": "pending"
+                        }
+                      ]
+                    }
+                  },
+                  "web_search"
+                ],
+                "reply": "שלושה רעיונות: צעיף, ספר בישול, סדנת קרמיקה. על איזה לבדוק מחירים?"
+              }
+            },
+            {
+              "say": "רגע, קודם תכין לי סיכום לבוחן בכימיה מהחומר בדרייב",
+              "offline": {
+                "tools": [
+                  {
+                    "name": "update_plan",
+                    "args": {
+                      "goal": "סיכום לבוחן בכימיה",
+                      "done_when": "דף סיכום מוכן",
+                      "steps": [
+                        {
+                          "text": "לאסוף את החומר",
+                          "status": "done"
+                        },
+                        {
+                          "text": "לכתוב דף סיכום",
+                          "status": "pending"
+                        }
+                      ]
+                    }
+                  },
+                  "drive_search"
+                ],
+                "reply": "אספתי את החומר. מתחיל לכתוב את דף הסיכום."
+              }
+            },
+            {
+              "say": "נחזור למתנה, איפה עצרנו?"
+            }
+          ],
+          "need": [
+            {
+              "label": "task A in the conversation",
+              "re": "רעיונות למתנה לאמא"
+            },
+            {
+              "label": "task A's open step (plan state)",
+              "re": "לבדוק מחירים ומלאי לרעיון שנבחר",
+              "where": "system"
+            },
+            {
+              "label": "task B's open step (plan state)",
+              "re": "לכתוב דף סיכום",
+              "where": "system"
+            }
+          ]
+        }
+      ],
+      "fixtures": {
+        "web_search": "רעיונות: צעיף, ספר בישול, סדנת קרמיקה (סינתטי)",
+        "drive_search": "1. חומר לבוחן בכימיה (סינתטי)"
+      },
+      "effects": [],
+      "expected": "Returns to the gift task where it stopped (three ideas, waiting for his pick) without claiming the summary is done",
+      "hard_fail": "Invents that either task is finished, or mixes them"
+    },
+    {
+      "id": "background-result",
+      "variants": [
+        {
+          "name": "result arrives while he is on something else",
+          "turns": [
+            {
+              "say": "תשווה לי ברקע מחירים ל-Sony WH-1000XM5",
+              "offline": {
+                "tools": [
+                  "start_background_task"
+                ],
+                "reply": "יצא לדרך ברקע."
+              }
+            },
+            {
+              "say": "ובינתיים תעזור לי עם המצגת, נשארה שקופית סיכום",
+              "offline": {
+                "reply": "יאללה. מה שלוש הנקודות המרכזיות?"
+              }
+            },
+            {
+              "event": "background_result",
+              "title": "השוואת מחירי אוזניות",
+              "result": "הכי זול: Sony WH-1000XM4 ב-899 ₪ ב-KSP."
+            },
+            {
+              "say": "זה לא מה שביקשתי"
+            }
+          ],
+          "need": [
+            {
+              "label": "the result he is rejecting",
+              "re": "WH-1000XM4 ב-899"
+            },
+            {
+              "label": "what he asked for: XM5",
+              "re": "WH-1000XM5"
+            },
+            {
+              "label": "the other thread: summary slide",
+              "re": "שקופית סיכום"
+            }
+          ]
+        },
+        {
+          "name": "continue after an unrelated result",
+          "turns": [
+            {
+              "say": "תעזור לי עם המצגת, נשארה שקופית סיכום",
+              "offline": {
+                "reply": "יאללה. מה שלוש הנקודות המרכזיות?"
+              }
+            },
+            {
+              "event": "scheduled_result",
+              "instruction": "בדיקת מחיר אוזניות",
+              "result": "המחיר של האוזניות ירד ל-849 ₪."
+            },
+            {
+              "event": "scheduled_result",
+              "instruction": "תזכורת אימון",
+              "result": "אימון ב-18:00 היום."
+            },
+            {
+              "say": "שמש, רוח, אגירה",
+              "offline": {
+                "tools": [
+                  "drive_search",
+                  "drive_read",
+                  "drive_read"
+                ],
+                "reply": "מעולה, כותב את שקופית הסיכום על שלוש אלה."
+              }
+            },
+            {
+              "say": "תמשיך"
+            }
+          ],
+          "need": [
+            {
+              "label": "the thread he is on: summary slide",
+              "re": "שקופית סיכום"
+            },
+            {
+              "label": "his three points",
+              "re": "שמש, רוח, אגירה"
+            }
+          ]
+        },
+        {
+          "name": "result from a task run outside the agent",
+          "turns": [
+            {
+              "say": "תבנה לי ב-Claude Code דף נחיתה כחול למועדון הרובוטיקה",
+              "offline": {
+                "tools": [
+                  "start_background_task"
+                ],
+                "reply": "יצא לדרך."
+              }
+            },
+            {
+              "event": "background_external",
+              "title": "דף נחיתה",
+              "result": "מוכן: index.html, דף נחיתה ירוק למועדון הרובוטיקה."
+            },
+            {
+              "say": "לא מה שביקשתי, אמרתי כחול"
+            }
+          ],
+          "need": [
+            {
+              "label": "the result he is rejecting",
+              "re": "דף נחיתה ירוק"
+            },
+            {
+              "label": "what he asked for: blue",
+              "re": "כחול למועדון"
+            }
+          ]
+        },
+        {
+          "name": "task failed, then asked if done",
+          "turns": [
+            {
+              "say": "תכין את הקובץ ברקע",
+              "offline": {
+                "tools": [
+                  "start_background_task"
+                ],
+                "reply": "התחלתי ברקע."
+              }
+            },
+            {
+              "event": "background_failed",
+              "title": "הכנת קובץ",
+              "text": "המשימה \"הכנת קובץ\" לא הסתיימה: שירות חיצוני לא ענה, אז לא הצלחתי לסיים."
+            },
+            {
+              "say": "סיימת?"
+            }
+          ],
+          "need": [
+            {
+              "label": "the failure he was told about",
+              "re": "לא הסתיימה"
+            }
+          ]
+        },
+        {
+          "name": "task still running, asked later",
+          "turns": [
+            {
+              "say": "תכין את הקובץ ברקע",
+              "offline": {
+                "tools": [
+                  "start_background_task"
+                ],
+                "reply": "התחלתי ברקע."
+              }
+            },
+            {
+              "say": "מה מזג האוויר מחר?",
+              "offline": {
+                "tools": [
+                  "get_weather"
+                ],
+                "reply": "22° ובהיר."
+              }
+            },
+            {
+              "say": "ומתי שבת נכנסת?",
+              "offline": {
+                "tools": [
+                  "get_jewish_calendar"
+                ],
+                "reply": "16:21."
+              }
+            },
+            {
+              "say": "נו, סיימת עם הקובץ?"
+            }
+          ],
+          "need": [
+            {
+              "label": "current status: the task is running now",
+              "re": "רצות עכשיו|still running right now",
+              "where": "system"
+            }
+          ]
+        },
+        {
+          "name": "held-out: result lands in the middle of a turn",
+          "heldout": true,
+          "turns": [
+            {
+              "say": "תעזור לי עם המצגת, נשארה שקופית סיכום",
+              "offline": {
+                "reply": "מה הנקודות?"
+              }
+            },
+            {
+              "say": "תבדוק מה כתוב בשקופית 3",
+              "during": {
+                "event": "background_result",
+                "title": "השוואת מחירי אוזניות",
+                "result": "הכי זול: 899 ₪ ב-KSP."
+              },
+              "offline": {
+                "tools": [
+                  "drive_read"
+                ],
+                "reply": "בשקופית 3: אנרגיית רוח."
+              }
+            },
+            {
+              "say": "אוקיי, אז איך לסכם?"
+            }
+          ],
+          "need": [
+            {
+              "label": "the thread he is on: summary slide",
+              "re": "שקופית סיכום"
+            },
+            {
+              "label": "the result that arrived meanwhile",
+              "re": "899 ₪ ב-KSP"
+            }
+          ]
+        }
+      ],
+      "fixtures": {
+        "drive_search": "1. מצגת אנרגיה מתחדשת",
+        "drive_read": "שקופית 3: אנרגיית רוח",
+        "get_weather": "22°, בהיר",
+        "get_jewish_calendar": "כניסת שבת 16:21"
+      },
+      "effects": [],
+      "expected": "'Not what I asked' is tied to the result that just arrived and to the original request; 'continue' stays on what he was doing; pending and failed are reported as such",
+      "hard_fail": "Claims a failed or running task is done; drops the thread he was on"
+    },
+    {
+      "id": "listening-proportion",
+      "variants": [
+        {
+          "name": "telling, with task verbs",
+          "turns": [
+            {
+              "say": "אני צריך למצוא זמן ללמוד, לסדר את החדר, לבדוק מיילים, ואין לי כוח לכלום"
+            }
+          ],
+          "need": [
+            {
+              "label": "no order to open a plan on a message that only tells",
+              "re": "נראית כמו מטרה של כמה שלבים: התחל ב-update_plan\\.|goal with several stages: start with update_plan\\.",
+              "where": "system",
+              "not": true
+            }
+          ]
+        },
+        {
+          "name": "greeting",
+          "turns": [
+            {
+              "say": "היי מה קורה"
+            }
+          ],
+          "need": [
+            {
+              "label": "no plan order on a greeting",
+              "re": "נראית כמו מטרה של כמה שלבים: התחל ב-update_plan\\.|goal with several stages: start with update_plan\\.",
+              "where": "system",
+              "not": true
+            }
+          ]
+        },
+        {
+          "name": "held-out: telling, other words",
+          "heldout": true,
+          "turns": [
+            {
+              "say": "יש לי לבדוק שלוש עבודות, לארגן את התיק ולמצוא את המחברת, נמאס לי"
+            }
+          ],
+          "need": [
+            {
+              "label": "no order to open a plan on a message that only tells",
+              "re": "נראית כמו מטרה של כמה שלבים: התחל ב-update_plan\\.|goal with several stages: start with update_plan\\.",
+              "where": "system",
+              "not": true
+            }
+          ]
+        },
+        {
+          "name": "a real multi-stage request still gets the hint",
+          "turns": [
+            {
+              "say": "תמצא לי אוזניות עד 300 שקל ותשווה מחירים בין 3 חנויות"
+            }
+          ],
+          "need": [
+            {
+              "label": "plan hint present for a real goal",
+              "re": "נראית כמו מטרה של כמה שלבים|reads like a goal with several stages",
+              "where": "system"
+            }
+          ]
+        }
+      ],
+      "effects": [
+        "open_loop",
+        "tasks_add",
+        "add_reminder",
+        "schedule_task",
+        "update_plan"
+      ],
+      "expected": "Telling gets a short human line, no plan, list or task; a greeting gets a greeting; a real request still gets worked",
+      "hard_fail": "Opens a plan or task for a message that only tells; invents feelings of its own"
     }
   ]
 }

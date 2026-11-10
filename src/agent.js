@@ -29,6 +29,7 @@ import { agentRules, planBlock, looksLikeGoal, needsVerify, verifyPrompt, planTe
 import { proactiveRules, loopsBlock, noteUserMessage } from './proactive.js'
 import { checkLinks } from './links.js'
 import { conduct } from './team/conductor.js'
+import { listJobs } from './jobs.js'
 
 const MAX_HISTORY = 60
 // In light mode the whole request has to fit a few thousand tokens, so history is folded much sooner.
@@ -198,6 +199,51 @@ ${agent ? `${agent}\n\n` : ''}זיכרון על המשתמש:
 ${memory}${state.summary ? `\n\nסיכום של מה שדובר קודם בשיחה:\n${state.summary}` : ''}${learning ? `\n\n${learning}` : ''}${voiceCheck() ? `\n\n${voiceCheck()}` : ''}`
 }
 
+// The background tasks running right now, for the prompt: "סיימת?" is answered from this, not from a guess. A task
+// that finished or failed is no longer here; its result or failure is in the conversation as its own exchange.
+function jobsLine(english, now = Date.now()) {
+  const list = listJobs()
+  if (!list.length) return ''
+  const items = list.map((j) => `"${j.title}" (${Math.max(1, Math.round((now - j.startedAt) / 60000))} ${english ? 'min' : "דק'"}${j.step ? `, ${j.step}` : ''})`).join(', ')
+  return english
+    ? `Background tasks still running right now: ${items}. They are not finished and have no result yet; the result arrives as its own message.`
+    : `משימות רקע שעדיין רצות עכשיו: ${items}. הן לא הסתיימו ואין להן עדיין תוצאה; התוצאה תגיע בהודעה נפרדת.`
+}
+
+// What Helper wrote on its own (a scheduled task ran, a background task ended) joins the history as an exchange
+// whose "user" line is this marker, not a message of his.
+const OWN_TURN = /^\[(?:משימה מתוזמנת רצה|משימת רקע הסתיימה|משימת רקע לא הסתיימה)[:\]]/
+const isOwnTurn = (m) => m.role === 'user' && typeof m.content === 'string' && OWN_TURN.test(m.content)
+const isHis = (m) => m.role === 'user' && !isOwnTurn(m)
+
+// A turn of his is being answered: an exchange from outside it waits until the turn ends. Pushed into the middle
+// of the turn it would land between a tool call and its result (the API refuses that), and a failed turn, which
+// rolls the history back to where it began, would take the result with it.
+let turnsRunning = 0
+const waiting = []
+function addOwnTurn(marker, reply) {
+  const pair = [{ role: 'user', content: marker }, { role: 'assistant', content: reply }]
+  if (turnsRunning) return void waiting.push(pair)
+  state.history.push(...pair)
+  trimHistory()
+  save()
+}
+function turnEnded() {
+  turnsRunning = Math.max(0, turnsRunning - 1)
+  if (turnsRunning || !waiting.length) return
+  for (const pair of waiting.splice(0)) state.history.push(...pair)
+  trimHistory()
+  save()
+}
+
+// A background task that did not go through runBackground (Claude Code, the TV, a lesson being learned) or that
+// failed: what he was sent about it joins the conversation, so "לא מה שביקשתי" or "סיימת?" has something to refer to.
+export function noteBackground(title, text, failed = false) {
+  const reply = String(text || '').trim()
+  if (!reply) return
+  addOwnTurn(`[${failed ? 'משימת רקע לא הסתיימה' : 'משימת רקע הסתיימה'}: ${title}]`, reply.slice(0, 2000))
+}
+
 // Hard cap, in case compaction keeps failing.
 function trimHistory() {
   while (state.history.length > MAX_HISTORY) state.history.shift()
@@ -217,7 +263,7 @@ export async function compact(force = false) {
   const old = state.history
     .slice(0, cut)
     .filter((m) => m.role !== 'tool' && m.content)
-    .map((m) => `${m.role === 'user' ? 'משתמש' : 'עוזר'}: ${clipMiddle(String(m.content), 600)}`)
+    .map((m) => `${isOwnTurn(m) ? 'מערכת' : m.role === 'user' ? 'משתמש' : 'עוזר'}: ${clipMiddle(String(m.content), 600)}`)
     .join('\n')
   state.summary = await ask(SUMMARY_PROMPT, `סיכום קודם:\n${state.summary || '(אין)'}\n\nהודעות חדשות:\n${old}`)
   const thin = new Set(plan.thin)
@@ -242,10 +288,12 @@ function clipMiddle(text, max) {
 function foldPlan(history) {
   const starts = history.flatMap((m, i) => (m.role === 'user' ? [i] : []))
   if (!starts.length) return { cut: 0, thin: [] }
+  // Only what he wrote counts toward the turns that stay: two scheduled checks must not push his messages out.
+  const his = starts.filter((i) => isHis(history[i]))
   // The old rule: the last KEEP_RECENT messages, from a message of his.
   let cut = history.length - KEEP_RECENT
   while (cut < history.length && history[cut].role !== 'user') cut++
-  const keepFrom = starts[Math.max(0, starts.length - KEEP_TURNS)]
+  const keepFrom = his.length ? his[Math.max(0, his.length - KEEP_TURNS)] : starts[0]
   if (cut <= keepFrom) return { cut, thin: [] }
   // Those turns would have been folded: they stay, and from the oldest on, a whole turn's tool calls and results
   // are dropped (never half of them: a result without its call is refused by the API) until the kept part is
@@ -394,7 +442,9 @@ async function work(messages, ctx, scaffold) {
   const query = lastUserText(messages)
   // A short follow-up ("תמשיך", "טוב תעשה את זה") says nothing about its subject, so memory and lessons are looked
   // up by what the conversation is about: his last messages and the last answer, as routing reads them.
-  const recall = tokens(query).length <= 3 ? routingText(messages, ctx.plan?.goal || '') : query
+  // A note the bridge puts in front of a spoken or app message ("[שיחה קולית דרך ...]") is not his words.
+  const said = query.replace(/^\[[^\]\n]*\]\n/, '')
+  const recall = tokens(said).length <= 3 ? routingText(messages, ctx.plan?.goal || '') : said
   // An isolated turn (the remote panel) reads none of his private context: no memory, no learned notes, no open
   // loops, no WhatsApp summary. It brings its own system prompt and its own tool list.
   const isolated = Boolean(ctx.isolated)
@@ -419,7 +469,7 @@ async function work(messages, ctx, scaffold) {
     const defs = toolDefs(tools)
     shortenOldResults(messages)
     // A scheduled run has nobody waiting on it, so it waits for the main model rather than settle for a weaker one.
-    const agent = isolated ? '' : [planBlock(ctx, config.llm.light, goalHint), loops].filter(Boolean).join('\n\n')
+    const agent = isolated ? '' : [planBlock(ctx, config.llm.light, goalHint), jobsLine(config.llm.light), loops].filter(Boolean).join('\n\n')
     const system = isolated ? ctx.systemPrompt : systemPrompt(memory, learning, agent, config.routing ? ctx.domains : undefined, outbound)
     const msg = await llm([{ role: 'system', content: system }, ...messages], defs, undefined, ctx?.patient ? LONG_PATIENCE : undefined, undefined, signal)
     const assistant = { role: 'assistant', content: msg.content ?? '' }
@@ -508,6 +558,7 @@ export async function runTurn(userText, ctx, image) {
   ctx.plan ??= savedPlan()
   // He wrote: Helper's own messages are being answered, and he is in the conversation right now.
   noteUserMessage()
+  turnsRunning++
   try {
     // The team (src/team/conductor.js, off unless TEAM_MODE is set): a flight with limits, or a big task that
     // opens the war room. A request it takes is answered by it, once. null = the turn goes on as before.
@@ -542,6 +593,8 @@ export async function runTurn(userText, ctx, image) {
     state.history.length = mark
     save()
     throw e
+  } finally {
+    turnEnded()
   }
 }
 
@@ -555,9 +608,7 @@ const TASK_PROMPT = `[משימה מתוזמנת - המשתמש לא כתב עכ�
 export async function runTask(instruction, ctx) {
   const reply = (await converse([{ role: 'user', content: TASK_PROMPT + instruction }], ctx)).trim()
   if (!reply || /^SKIP\b/.test(reply)) return ''
-  state.history.push({ role: 'user', content: `[משימה מתוזמנת רצה: ${instruction}]` }, { role: 'assistant', content: reply })
-  trimHistory()
-  save()
+  addOwnTurn(`[משימה מתוזמנת רצה: ${instruction}]`, reply)
   return reply
 }
 
@@ -570,9 +621,7 @@ const BACKGROUND_PROMPT = `[משימת רקע. המשתמש ביקש אותה ב
 // so the user can answer it like any other message.
 export async function runBackground(title, instruction, ctx) {
   const reply = (await converse([{ role: 'user', content: BACKGROUND_PROMPT + instruction }], ctx)).trim()
-  state.history.push({ role: 'user', content: `[משימת רקע הסתיימה: ${title}]` }, { role: 'assistant', content: reply })
-  trimHistory()
-  save()
+  addOwnTurn(`[משימת רקע הסתיימה: ${title}]`, reply)
   return reply
 }
 
@@ -594,4 +643,4 @@ export function resetHistory() {
 }
 
 // Exposed for the self-tests only.
-export const _test = { runsInParallel, lastUserText, approvalText, closingAnswer, systemPrompt, foldPlan, clipMiddle, KEEP_TURNS, KEEP_RECENT }
+export const _test = { runsInParallel, lastUserText, approvalText, closingAnswer, systemPrompt, foldPlan, clipMiddle, KEEP_TURNS, KEEP_RECENT, jobsLine }
