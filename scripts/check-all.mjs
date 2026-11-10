@@ -76,6 +76,7 @@ const TESTS = [
   'src/panel-selftest.js',
   'src/bound-actions-selftest.js',
   'src/office-edit-selftest.js',
+  'src/gmail-plus-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 
