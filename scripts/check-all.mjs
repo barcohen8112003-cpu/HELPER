@@ -81,6 +81,7 @@ const TESTS = [
   'src/calendar-plus-selftest.js',
   'src/vault-selftest.js',
   'src/vault-leak-selftest.js',
+  'src/github-write-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

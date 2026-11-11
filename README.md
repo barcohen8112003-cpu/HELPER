@@ -724,7 +724,8 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `STAYS_CURRENCY` | מטבע המחירים בלינה (ברירת מחדל ILS) |
 | `YOUTUBE_API_KEY` | חיפוש ביוטיוב דרך ה-API הרשמי (חינם). ריק = קריאת דף התוצאות |
 | `TOOL_ROUTING` | `off` = כל הכלים בכל הודעה (ברירת מחדל: רק התחומים שההודעה עוסקת בהם) |
-| `GITHUB_TOKEN` | קריאה בלבד מ-GitHub |
+| `GITHUB_TOKEN` | קריאה מ-GitHub (github_get) |
+| `GITHUB_WRITE_REPOS` | מאגרים (owner/name, מופרדים בפסיק) שבהם מותר לפתוח issue/PR ולהגיב, אחרי אישור. ריק = אין כתיבה |
 | `COMPUTER_MODE` | `off` / `ask` / `auto` |
 | `PC_BRIDGE_SECRET` / `PC_BRIDGE_PORT` | סוד ופורט של גשר המחשב הביתי, כשהעוזר בענן |
 | `FACE_ENABLED` | `off` (ברירת מחדל) / `on`. פנים בדף `/face` כשהעוזר מדבר |

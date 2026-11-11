@@ -82,6 +82,7 @@
     "check:calendar-plus": "node src/calendar-plus-selftest.js",
     "check:vault": "node src/vault-selftest.js",
     "check:vault-leak": "node src/vault-leak-selftest.js",
+    "check:github-write": "node src/github-write-selftest.js",
     "demo:team": "node scripts/team-demo.mjs"
   },
   "dependencies": {
