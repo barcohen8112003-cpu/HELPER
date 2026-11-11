@@ -32,6 +32,7 @@ import { runSpark, geminiEnabled } from './gemini.js'
 import { downloadSessionFile } from './session.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
+import { vaultTools } from './vault-tools.js'
 import { calendarPlusTools } from './calendar-plus.js'
 import { gmailPlusTools } from './gmail-plus.js'
 import { officeEditTools } from './office-edit.js'
@@ -726,6 +727,8 @@ export { firstYouTubeVideo }
 const isOn = (t) => !t.enabled || t.enabled()
 
 tools.push(...googleTools)
+// Helper's own credential vault: off by default; secrets go in on a local page, never through the chat (src/vault.js).
+tools.push(...vaultTools)
 // Calendar find/update/delete, guests and free/busy, each change through a bound approval (src/calendar-plus.js).
 tools.push(...calendarPlusTools)
 // Gmail replies in the thread, attachments, drafts and labels, each through a bound approval (src/gmail-plus.js).

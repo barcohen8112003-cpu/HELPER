@@ -44,6 +44,12 @@ export const DOMAINS = [
     words: /אזעק|צבע אדום|פיקוד|טיל|חבילה|משלוח|מעקב|tracking|עלי ?אקספרס|aliexpress|דואר ישראל|אוטובוס|קו \d|תחנה|רכבת|תחבורה|שבת|נרות|הבדלה|פרשה|חג|תאריך עברי|דולר|יורו|שקל|מטבע|שער|להמיר|המר/i,
   },
   {
+    id: 'logins',
+    label: 'סיסמאות והתחברות לאתרים (כספת מקומית)',
+    has: starts('credential_'),
+    words: /סיסמ|התחבר(ות)? ל|להתחבר|תתחבר|כניסה לאתר|לוגין|login|password|credential|כספת/i,
+  },
+  {
     id: 'calendar',
     label: 'יומן: לשנות, להזיז, למחוק, להזמין ולבדוק מתי פנוי',
     has: named('calendar_find', 'calendar_update', 'calendar_delete', 'calendar_freebusy'),

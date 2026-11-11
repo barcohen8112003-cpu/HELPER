@@ -248,6 +248,8 @@ the top, cart at the bottom"), add "learned": "<that, one line>".`,
     settings: SETTINGS_LABEL,
     settled: true,
     commit: PHONE_COMMIT,
+    // Its pictures are of the phone, never of this machine's browser, so a vault fill does not withhold them.
+    vaultView: false,
     async screenshot() {
       const image = wantImage || seeing
       wantImage = false

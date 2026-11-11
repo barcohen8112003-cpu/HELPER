@@ -80,6 +80,8 @@
     "check:office-edit": "node src/office-edit-selftest.js",
     "check:gmail-plus": "node src/gmail-plus-selftest.js",
     "check:calendar-plus": "node src/calendar-plus-selftest.js",
+    "check:vault": "node src/vault-selftest.js",
+    "check:vault-leak": "node src/vault-leak-selftest.js",
     "demo:team": "node scripts/team-demo.mjs"
   },
   "dependencies": {
