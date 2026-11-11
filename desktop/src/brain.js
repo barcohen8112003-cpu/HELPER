@@ -318,7 +318,7 @@ function brainName() {
   return 'אין, חסר מפתח'
 }
 
-/** HELPER's own voice for a line, as MP3 bytes (ElevenLabs, on the cloud). */
+/** HELPER's own voice for a line, as MP3 bytes (Edge-TTS on the cloud, unless TTS_PROVIDER says otherwise). */
 async function voiceOf(text) {
   const s = store.settings()
   if (!s.helperUrl || !s.helperToken) return null

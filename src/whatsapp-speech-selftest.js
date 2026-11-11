@@ -212,31 +212,62 @@ try {
   const { config } = await import('./config.js')
   check('new feature is off by default', () => assert.equal(config.whatsappSpokenReplies, false))
   const { speak, spokenText } = await import('./media.js')
+  const { setEdgeExec } = await import('./tts.js')
+  const edgeCalls = []
+  setEdgeExec(async (cmd, args) => {
+    edgeCalls.push({ cmd, args })
+    if (cmd === 'ffmpeg') return Buffer.from('OggS-test-audio')
+    return Buffer.alloc(128)
+  })
+  delete process.env.TTS_PROVIDER
+  process.env.EDGE_TTS_VOICE = 'he-IL-HilaNeural'
+  process.env.EDGE_TTS_RATE = '+0%'
   config.elevenlabs.apiKey = 'offline-test-key'
   config.elevenlabs.voiceId = 'unchanged-test-voice'
   config.elevenlabs.ttsModel = 'unchanged-test-model'
   await speak(plain, { prepared: true })
-  check('prepared TTS sends one exact bounded input, same voice/model, no extra settings', () => {
+  check('prepared TTS uses Edge by default and keeps the exact text, even when an ElevenLabs key is set', () => {
+    assert.equal(calls.length, 0)
+    const spoken = edgeCalls.find((c) => c.cmd === 'edge-tts')
+    assert.ok(spoken)
+    assert.equal(spoken.args[spoken.args.indexOf('--text') + 1], plain)
+    assert.equal(spoken.args[spoken.args.indexOf('--voice') + 1], 'he-IL-HilaNeural')
+    const ff = edgeCalls.find((c) => c.cmd === 'ffmpeg')
+    assert.ok(ff.args.includes('48000') && ff.args.includes('libopus') && ff.args.includes('ogg'))
+  })
+  const identifier = 'file_name_v2 נשאר בדיוק כך.'
+  await speak(identifier, { prepared: true })
+  check('prepared path avoids legacy underscore deletion', () => {
+    const texts = edgeCalls.filter((c) => c.cmd === 'edge-tts').map((c) => c.args[c.args.indexOf('--text') + 1])
+    assert.equal(texts.at(-1), identifier)
+  })
+  check('legacy non-WhatsApp sanitizer is unchanged', () => assert.equal(spokenText('file_name_v2'), 'filenamev2'))
+  const beforeFetch = calls.length
+  const beforeEdge = edgeCalls.length
+  await assert.rejects(speak('א'.repeat(1501), { prepared: true }), /budget/)
+  await speak('', { prepared: true })
+  check('oversize and empty prepared inputs never call provider', () => {
+    assert.equal(calls.length, beforeFetch)
+    assert.equal(edgeCalls.length, beforeEdge)
+  })
+  process.env.TTS_PROVIDER = 'elevenlabs'
+  await speak(plain, { prepared: true })
+  check('TTS_PROVIDER=elevenlabs still sends one exact bounded input, same voice/model, no extra settings', () => {
     assert.equal(calls.length, 1)
     assert.match(calls[0].url, /unchanged-test-voice\?output_format=opus_48000_32$/)
     assert.deepEqual(calls[0].body, { text: plain, model_id: 'unchanged-test-model' })
   })
-  const identifier = 'file_name_v2 נשאר בדיוק כך.'
-  await speak(identifier, { prepared: true })
-  check('prepared path avoids legacy underscore deletion', () => assert.equal(calls.at(-1).body.text, identifier))
-  check('legacy non-WhatsApp sanitizer is unchanged', () => assert.equal(spokenText('file_name_v2'), 'filenamev2'))
-  const before = calls.length
-  await assert.rejects(speak('א'.repeat(1501), { prepared: true }), /budget/)
-  await speak('', { prepared: true })
-  check('oversize and empty prepared inputs never call provider', () => assert.equal(calls.length, before))
   config.elevenlabs.apiKey = ''
+  config.elevenlabs.voiceId = ''
   config.voice.ttsModel = 'existing-compatible-model'
   config.voice.ttsVoice = 'existing-voice'
   config.voice.baseUrl = 'https://offline.invalid/v1'
+  process.env.TTS_PROVIDER = 'openai'
   await speak(plain, { prepared: true })
   check('compatible provider also receives exact text with original settings', () => {
     assert.deepEqual(calls.at(-1).body, { model: 'existing-compatible-model', voice: 'existing-voice', input: plain, response_format: 'opus' })
   })
+  delete process.env.TTS_PROVIDER
   const index = fs.readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   const agent = fs.readFileSync(new URL('./agent.js', import.meta.url), 'utf8')
   check('WhatsApp wiring keeps full reply fallback/companion and matching face transcript', () => {

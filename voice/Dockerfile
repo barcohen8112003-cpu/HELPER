@@ -1,5 +1,6 @@
 # Voice worker. Not part of the default image: `docker compose --profile live-voice build`.
 # Silero VAD is the small CPU model shipped with livekit-agents. No GPU.
+# edge-tts (requirements.txt) is the default speech engine. ffmpeg turns its MP3 into 16 kHz PCM.
 FROM python:3.12-slim-bookworm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates ffmpeg \

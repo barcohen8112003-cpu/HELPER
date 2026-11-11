@@ -358,29 +358,83 @@ $timer.Start()
   return `טיימר ל-${mins} דקות ("${label}") הופעל על המסך`
 }
 
-// Says text out loud on the PC's speakers, in the assistant's ElevenLabs voice, or Windows' own voice without a key.
-export async function speakOnPc(text) {
-  if (remoteActive()) return remoteCall('speakOnPc', [text])
-  const { apiKey, voiceId, ttsModel } = config.elevenlabs
-  if (apiKey && voiceId) {
-    const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_64`, {
-      method: 'POST',
-      headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: String(text).slice(0, 1000), model_id: ttsModel }),
-      signal: AbortSignal.timeout(60000),
-    })
-    if (res.ok) {
-      const file = path.join(os.tmpdir(), `helper-say-${Date.now()}.mp3`)
-      fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()))
-      await ps(`Add-Type -AssemblyName PresentationCore
+async function playMp3File(file) {
+  await ps(`Add-Type -AssemblyName PresentationCore
 $p = New-Object System.Windows.Media.MediaPlayer; $p.Open([uri]${lit(file)}); $p.Volume = 1
 $n = 0; while (-not $p.NaturalDuration.HasTimeSpan -and $n -lt 50) { Start-Sleep -Milliseconds 100; $n++ }
-$p.Play(); Start-Sleep -Milliseconds ([int]$p.NaturalDuration.TimeSpan.TotalMilliseconds + 300); $p.Close()`, 120000)
-      fs.rmSync(file, { force: true })
-      return 'נאמר ברמקולים'
+$p.Play(); if ($p.NaturalDuration.HasTimeSpan) { Start-Sleep -Milliseconds ([int]$p.NaturalDuration.TimeSpan.TotalMilliseconds + 300) } else { Start-Sleep -Seconds 3 }; $p.Close()`, 120000)
+}
+
+// Plays an MP3 the cloud already synthesized (Edge-TTS by default). The PC does not call a speech API.
+export async function playAudio(audio) {
+  if (remoteActive()) return remoteCall('playAudio', [Buffer.isBuffer(audio) ? audio : Buffer.from(String(audio || ''), 'base64')])
+  const buf = Buffer.isBuffer(audio) ? audio : Buffer.from(String(audio || ''), 'base64')
+  if (buf.length < 64) throw new Error('אין שמע לנגן')
+  const file = path.join(os.tmpdir(), `helper-say-${Date.now()}.mp3`)
+  fs.writeFileSync(file, buf)
+  try {
+    await playMp3File(file)
+  } finally {
+    fs.rmSync(file, { force: true })
+  }
+  return 'נאמר ברמקולים'
+}
+
+// Says text on the PC speakers. In the cloud the audio is synthesized here, then only the bytes are played at home.
+export async function speakOnPc(text) {
+  const line = String(text || '').slice(0, 1000)
+  if (!line.trim()) return 'אין מה לומר'
+  if (remoteActive()) {
+    try {
+      const { speakMp3 } = await import('./media.js')
+      const mp3 = await speakMp3(line)
+      if (mp3?.length) {
+        try {
+          return await remoteCall('playAudio', [mp3])
+        } catch (e) {
+          if (!/לא מוכרת/.test(String(e.message || ''))) throw e
+        }
+      }
+    } catch (e) {
+      console.log(`[pc] ${e.message}`)
+    }
+    return remoteCall('speakOnPc', [line])
+  }
+  const { ttsProvider } = await import('./tts.js')
+  if (ttsProvider() === 'elevenlabs') {
+    const { apiKey, voiceId, ttsModel } = config.elevenlabs
+    if (apiKey && voiceId) {
+      try {
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_64`, {
+          method: 'POST',
+          headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: line, model_id: ttsModel }),
+          signal: AbortSignal.timeout(60000),
+        })
+        if (res.ok) {
+          const file = path.join(os.tmpdir(), `helper-say-${Date.now()}.mp3`)
+          fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()))
+          try {
+            await playMp3File(file)
+          } finally {
+            fs.rmSync(file, { force: true })
+          }
+          return 'נאמר ברמקולים'
+        }
+      } catch (e) {
+        console.log(`[pc] ${e.message}`)
+      }
+    }
+  } else {
+    try {
+      const { speakMp3 } = await import('./media.js')
+      const mp3 = await speakMp3(line)
+      if (mp3?.length) return playAudio(mp3)
+    } catch (e) {
+      console.log(`[pc] ${e.message}`)
     }
   }
-  await ps(`Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(${lit(text)})`, 120000)
+  await ps(`Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(${lit(line)})`, 120000)
   return 'נאמר ברמקולים (בקול של Windows)'
 }
 

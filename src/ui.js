@@ -18,7 +18,7 @@ import { pairingInfo, requestPairing } from './whatsapp.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount, checkGoogleAccounts, googleAccountStatus } from './google.js'
 import { handleVaultHttp, setVaultInputBase } from './vault.js'
 import { calendarOn } from './calendar.js'
-import { canHear, canSpeak, elevenSpeakMp3, transcribeAudio } from './media.js'
+import { canHear, canSpeak, speakMp3, transcribeAudio } from './media.js'
 import { chatModel, llmHealth } from './llm.js'
 import { ago } from './status.js'
 import { handleDashboard } from './dashboard/api.js'
@@ -39,6 +39,7 @@ import {
   liveVoiceStatus,
   proxyLiveKit,
   secretOk,
+  elevenPcm,
   synthesize,
   takeSlot,
   wavFromPcm,
@@ -63,7 +64,7 @@ const PLAIN = [
   'LLM_BASE_URL', 'LLM_MODEL', 'LLM_BACKUP_BASE_URL', 'LLM_BACKUP_MODEL', 'LLM_CHEAP_MODEL', 'LLM_STRONG_MODEL', 'LLM_FALLBACK_MODEL', 'LLM_LIGHT', 'IMAGE_MODEL',
   'GEMINI_MODEL', 'BIRD_ENABLED', 'BIRD_WHATSAPP_FROM', 'BIRD_OWNER_NUMBER', 'INSTINCT_NUMBER', 'SELF_LEARNING', 'BACKUP_GOOGLE_ACCOUNT', 'BOT_NAME', 'QUIET_HOURS', 'DAILY_BRIEF_TIME', 'NEWS_BRIEF_TIME', 'NEWS_FEEDS', 'TIMEZONE', 'COMPUTER_MODE',
   'FACE_ENABLED', 'FACE_ENGINE', 'FACE_TV', 'FACE_WEBRTC', 'FACE_LIP_DELAY_MS',
-  'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
+  'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'TTS_PROVIDER', 'EDGE_TTS_VOICE', 'EDGE_TTS_RATE', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
   'MAIL_HOST', 'MAIL_USER', 'MAIL_POLL_MINUTES', 'CALENDAR_ICS_URL', 'WEEKLY_REVIEW_TIME', 'MESSAGE_BUDGET', 'LLM_PRICES', 'MONTHLY_COST_LIMIT',
 ]
 // Read once at startup, so a change only takes effect after a restart.
@@ -265,31 +266,57 @@ async function liveHttp(req, res, url, { bridgeToken, liveTurn, send }) {
   if (!takeSlot('live-worker', 60)) return send(res, 429, { error: 'too many requests' })
   let body = {}
   try {
-    body = JSON.parse(await readBody(req, 20000))
+    const maxBody = url.pathname === '/internal/live/face' ? 8_000_000 : 20000
+    body = JSON.parse(await readBody(req, maxBody))
   } catch (e) {
     return send(res, 400, { error: e.message || 'bad body' })
   }
   const text = String(body.text || '').trim()
-  if (!text) return send(res, 400, { error: 'empty text' })
+  if (!text && url.pathname !== '/internal/live/face') return send(res, 400, { error: 'empty text' })
+  const showLiveFace = async (line, pcm) => {
+    const even = pcm.length - (pcm.length % 2)
+    const clip = pcm.subarray(0, Math.min(even, 1_800_000))
+    if (clip.length < 2) return
+    try {
+      const shown = await presentSpeech({ text: line, audio: wavFromPcm(clip), mime: 'audio/wav', source: 'live', synthesize: false })
+      if (shown?.mode !== 'off' && shown.sessionId) holdLiveFace(attachFaceTrack(shown.sessionId))
+    } catch (e) {
+      console.log(`[face] ${e.message}`)
+    }
+  }
   // A phone call reached the room. Only the owner (and LIVE_VOICE_PHONE_ALLOW) gets HELPER; anyone else is hung up.
   if (url.pathname === '/internal/live/caller') {
     const owner = String(state.owner?.jid || '').split('@')[0]
     return send(res, 200, { allowed: callerAllowed(text, owner) })
   }
+  // The voice worker already spoke with Edge. This only moves the face, and only when FACE_ENABLED is on.
+  if (url.pathname === '/internal/live/face') {
+    const pcm = Buffer.from(String(body.pcm || ''), 'base64')
+    if (pcm.length < 2) return send(res, 400, { error: 'no audio' })
+    await showLiveFace(text, pcm)
+    return send(res, 200, { ok: true })
+  }
   if (url.pathname === '/internal/live/tts') {
+    // The worker asks for this after Edge failed: ElevenLabs PCM only when that key is configured.
+    if (body.fallback === true) {
+      const cfg = liveVoiceFrom()
+      if (!cfg.elevenKey || !cfg.elevenVoice) return send(res, 200, { engine: 'text' })
+      try {
+        const pcm = await elevenPcm(text, { apiKey: cfg.elevenKey, voiceId: cfg.elevenVoice, model: cfg.elevenModel })
+        await showLiveFace(text, pcm)
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': pcm.length, 'Cache-Control': 'no-store' })
+        return res.end(pcm)
+      } catch (e) {
+        return send(res, 200, { engine: 'text', error: e.message || 'tts failed' })
+      }
+    }
     const out = await synthesize(text)
     if (out.engine === 'eleven' && out.pcm) {
-      // Same utterance on the face, only when FACE_ENABLED is on. The PCM reply to the voice worker stays as it was.
-      try {
-        const shown = await presentSpeech({ text, audio: wavFromPcm(out.pcm), mime: 'audio/wav', source: 'live', synthesize: false })
-        if (shown?.mode !== 'off' && shown.sessionId) holdLiveFace(attachFaceTrack(shown.sessionId))
-      } catch (e) {
-        console.log(`[face] ${e.message}`)
-      }
+      await showLiveFace(text, out.pcm)
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': out.pcm.length, 'Cache-Control': 'no-store' })
       return res.end(out.pcm)
     }
-    return send(res, 200, { engine: out.engine, voice: out.voice || '', error: out.error || '' })
+    return send(res, 200, { engine: out.engine, voice: out.voice || '', rate: out.rate || '', lang: out.lang || '', error: out.error || '' })
   }
   if (!liveTurn) return send(res, 503, { error: 'live turn is not wired' })
   const ac = new AbortController()
@@ -497,13 +524,13 @@ export function startUi({ connectedSince, restart, agent, liveTurn, panel = null
           let face = null
           if (body.audio !== false) {
             try {
-              const audioBuffer = await elevenSpeakMp3(reply)
+              const audioBuffer = await speakMp3(reply)
               if (audioBuffer) {
                 audio = audioBuffer.toString('base64')
                 face = await presentSpeech({ text: reply, audio: audioBuffer, mime: 'audio/mpeg', source, synthesize: false })
               }
             } catch (e) {
-              console.error('[ui] ElevenLabs audio generation failed:', e.message)
+              console.error('[ui] speech failed:', e.message)
             }
           }
           status = 200
@@ -527,7 +554,8 @@ export function startUi({ connectedSince, restart, agent, liveTurn, panel = null
         const text = String(body.text || '').trim().slice(0, 2000)
         if (!text) return send(res, 400, { error: 'empty text' })
         try {
-          const mp3 = await elevenSpeakMp3(text)
+          const mp3 = await speakMp3(text)
+          if (!mp3?.length) return send(res, 500, { error: 'לא הצלחתי להקריא' })
           presentSpeech({ text, audio: mp3, mime: 'audio/mpeg', source: 'tts', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
           res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': mp3.length })
           return res.end(mp3)

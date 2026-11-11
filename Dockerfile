@@ -25,6 +25,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       chromium fonts-noto-core ca-certificates tini xvfb xauth unzip curl \
       fluxbox wmctrl x11vnc novnc websockify \
+      ffmpeg python3 python3-venv \
  && curl -fsSL -o /tmp/platform-tools.zip https://dl.google.com/android/repository/platform-tools-latest-linux.zip \
  && unzip -q /tmp/platform-tools.zip -d /opt \
  && ln -sf /opt/platform-tools/adb /usr/local/bin/adb \
@@ -49,6 +50,13 @@ RUN arch="$(dpkg --print-architecture)" \
 
 ENV ADB_PATH=/opt/platform-tools/adb \
     OBSCURA_BIN=/usr/local/bin/obscura
+
+# Edge-TTS is the default voice. No API key. The Node server shells out to this CLI; ffmpeg
+# turns it into the Ogg Opus WhatsApp voice notes. The live-voice image does the same for 16 kHz PCM.
+RUN python3 -m venv /opt/edge-tts \
+ && /opt/edge-tts/bin/pip install --no-cache-dir 'edge-tts==7.3.1' \
+ && ln -sfn /opt/edge-tts/bin/edge-tts /usr/local/bin/edge-tts \
+ && edge-tts --help >/dev/null
 
 # Claude Code: build jobs (sites, scripts) on the user's Claude plan, signed in with CLAUDE_CODE_OAUTH_TOKEN.
 RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force

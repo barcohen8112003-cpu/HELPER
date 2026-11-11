@@ -79,6 +79,8 @@
     "check:team": "node src/team-selftest.js",
     "check:whatsapp-speech": "node src/whatsapp-speech-selftest.js",
     "check:live": "node src/live-voice-selftest.js",
+    "check:tts": "node src/tts-selftest.js",
+    "check:edge-tts-smoke": "node scripts/edge-tts-smoke.mjs",
     "check:bound": "node src/bound-actions-selftest.js",
     "check:office-edit": "node src/office-edit-selftest.js",
     "check:gmail-plus": "node src/gmail-plus-selftest.js",

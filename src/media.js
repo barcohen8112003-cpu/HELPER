@@ -1,6 +1,7 @@
 import mammoth from 'mammoth'
 import { extractText, getDocumentProxy } from 'unpdf'
 import { config } from './config.js'
+import { edgeInstalled, synthesizeSpeech, ttsProvider, voiceFor } from './tts.js'
 import { MAX_WHATSAPP_SPEECH } from './whatsapp-speech.js'
 
 const TEXT_FILE = /\.(txt|md|csv|json|xml|html?|css|jsx?|tsx?|py|java|c|cpp|h|cs|go|rs|rb|php|sql|sh|ps1|ya?ml|ini|log)$/i
@@ -29,7 +30,7 @@ async function elevenTranscribe({ buffer, mime }) {
   return ((await res.json()).text || '').trim()
 }
 
-async function elevenSpeak(text) {
+async function elevenOpus(text) {
   if (!config.elevenlabs.voiceId) throw new Error('חסר ELEVENLABS_VOICE_ID בקובץ .env')
   // Ogg/Opus straight from the API, so no local audio conversion is needed.
   const res = await fetch(`${ELEVEN}/text-to-speech/${config.elevenlabs.voiceId}?output_format=opus_48000_32`, {
@@ -42,7 +43,7 @@ async function elevenSpeak(text) {
   return Buffer.from(await res.arrayBuffer())
 }
 
-export async function elevenSpeakMp3(text) {
+async function elevenMp3(text) {
   if (!config.elevenlabs.apiKey) throw new Error('חסר ELEVENLABS_API_KEY בקובץ .env')
   if (!config.elevenlabs.voiceId) throw new Error('חסר ELEVENLABS_VOICE_ID בקובץ .env')
   const spoken = spokenText(text)
@@ -70,8 +71,17 @@ export async function elevenSpeakMp3(text) {
   throw lastErr || new Error('ElevenLabs speaking failed')
 }
 
+// The old name. Callers get whatever TTS_PROVIDER selects; Edge is the default.
+export const elevenSpeakMp3 = (text) => speakMp3(text)
+
 export const canHear = () => Boolean(config.elevenlabs.apiKey || config.voice.sttModel)
-export const canSpeak = () => Boolean(config.elevenlabs.apiKey || config.voice.ttsModel)
+// Edge needs no key. ElevenLabs and the OpenAI-compatible endpoint are optional providers.
+export const canSpeak = () => {
+  const provider = ttsProvider()
+  if (provider === 'elevenlabs') return Boolean(config.elevenlabs.apiKey && config.elevenlabs.voiceId)
+  if (provider === 'openai') return Boolean(config.voice.ttsModel)
+  return edgeInstalled() || Boolean(config.elevenlabs.apiKey && config.elevenlabs.voiceId)
+}
 
 // Providers pick the decoder by the file name, so a WAV from the TV must not be called voice.ogg.
 const fileName = (mime = '') => (mime.includes('wav') ? 'voice.wav' : mime.includes('mpeg') ? 'voice.mp3' : 'voice.ogg')
@@ -81,7 +91,7 @@ export const transcribeAudio = (buffer, mime = 'audio/wav') => transcribe({ buff
 
 async function transcribe(media) {
   // STT_MODEL, when set, wins over ElevenLabs for understanding speech: it names a transcription model at the
-  // voice provider (Whisper on Groq answers in under a second). ElevenLabs still does the speaking.
+  // voice provider (Whisper on Groq answers in under a second). Speaking is Edge-TTS unless TTS_PROVIDER says otherwise.
   const text = config.voice.sttModel || !config.elevenlabs.apiKey ? await openaiTranscribe(media) : await elevenTranscribe(media)
   if (!text) throw new Error('לא הצלחתי להבין את ההודעה הקולית')
   return text
@@ -113,6 +123,31 @@ export const spokenText = (text) =>
     .slice(0, MAX_SPOKEN)
     .trim()
 
+async function openaiAudio(text, format) {
+  if (!config.voice.ttsModel) throw new Error('TTS_MODEL לא מוגדר')
+  const response_format = format === 'opus' ? 'opus' : format === 'pcm' ? 'pcm' : 'mp3'
+  const res = await fetch(config.voice.baseUrl + '/audio/speech', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.voice.apiKey}` },
+    body: JSON.stringify({ model: config.voice.ttsModel, voice: config.voice.ttsVoice, input: text, response_format }),
+    signal: AbortSignal.timeout(120000),
+  })
+  if (!res.ok) throw new Error(`הקראה נכשלה, HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  return Buffer.from(await res.arrayBuffer())
+}
+
+function synthesizeTo(text, format) {
+  return synthesizeSpeech(text, {
+    format,
+    provider: ttsProvider(),
+    edgeInstalled: edgeInstalled(),
+    voice: voiceFor(text),
+    elevenConfigured: Boolean(config.elevenlabs.apiKey && config.elevenlabs.voiceId),
+    eleven: () => (format === 'mp3' ? elevenMp3(text) : elevenOpus(text)),
+    openai: () => openaiAudio(text, format),
+  })
+}
+
 // Text to an Ogg/Opus buffer, the format WhatsApp plays as a voice note. Null when voice replies are off.
 export async function speak(text, { prepared = false } = {}) {
   if (!canSpeak()) return null
@@ -120,15 +155,15 @@ export async function speak(text, { prepared = false } = {}) {
   // Prepared WhatsApp text must not pass through legacy markup removal or slicing again.
   if (prepared && input.length > MAX_WHATSAPP_SPEECH) throw new Error('Prepared speech exceeds WhatsApp speech budget')
   if (!input) return null
-  if (config.elevenlabs.apiKey) return elevenSpeak(input)
-  const res = await fetch(config.voice.baseUrl + '/audio/speech', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.voice.apiKey}` },
-    body: JSON.stringify({ model: config.voice.ttsModel, voice: config.voice.ttsVoice, input, response_format: 'opus' }),
-    signal: AbortSignal.timeout(120000),
-  })
-  if (!res.ok) throw new Error(`הקראה נכשלה, HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
-  return Buffer.from(await res.arrayBuffer())
+  return synthesizeTo(input, 'opus')
+}
+
+// MP3 for the face, the desktop bridge, and Discord. Edge-TTS audio is already MP3.
+export async function speakMp3(text) {
+  const input = spokenText(String(text ?? ''))
+  if (!input) return null
+  if (!canSpeak()) return null
+  return synthesizeTo(input, 'mp3')
 }
 
 // Turns an incoming message into what the model gets: text, plus an image data URL if one was sent.
