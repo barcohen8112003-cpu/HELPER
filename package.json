@@ -18,6 +18,7 @@
     "google": "node src/google-connect.js",
     "check": "node src/selftest.js",
     "check:all": "node scripts/check-all.mjs",
+    "check:desktop": "node src/desktop-selftest.js",
     "accept:real": "node scripts/accept-real.mjs",
     "check:accept": "node scripts/accept-selftest.mjs",
     "check:backup": "node src/backup-selftest.js",

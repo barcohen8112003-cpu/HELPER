@@ -25,6 +25,7 @@ const TESTS = [
   'src/fast-commands-selftest.js',
   'src/morning-selftest.js',
   'src/errand-selftest.js',
+  'src/desktop-selftest.js',
   'src/monitoring/selftest.js',
   'src/pc-bridge-selftest.js',
   'src/face-selftest.js',
