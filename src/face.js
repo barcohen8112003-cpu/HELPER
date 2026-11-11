@@ -218,9 +218,9 @@ async function resolveAudio(opts, text) {
   }
   if (opts.synthesize === false) return { audio: null, mime: '' }
   try {
-    const { canSpeak, elevenSpeakMp3 } = await import('./media.js')
+    const { canSpeak, speakMp3 } = await import('./media.js')
     if (!canSpeak()) return { audio: null, mime: '' }
-    const audio = await elevenSpeakMp3(text)
+    const audio = await speakMp3(text)
     if (Buffer.isBuffer(audio) && audio.length <= AUDIO_MAX) return { audio, mime: 'audio/mpeg' }
   } catch (e) {
     console.log(`[face] ${e.message}`)

@@ -182,7 +182,7 @@ async function configureExtras() {
   const env = L.parseEnv(L.envText(F.envFile))
   const values = {}
   const extras = [
-    ['ELEVENLABS_API_KEY', 'ElevenLabs: קול אנושי בעברית', 'https://elevenlabs.io/app/settings/api-keys'],
+    ['ELEVENLABS_API_KEY', 'ElevenLabs: אופציונלי (הדיבור עצמו הוא Edge-TTS, בלי מפתח)', 'https://elevenlabs.io/app/settings/api-keys'],
     ['TAVILY_API_KEY', 'Tavily: חיפוש באינטרנט טוב יותר (בלי זה DuckDuckGo)', 'https://app.tavily.com'],
     ['GEMINI_API_KEY', 'Gemini: "תשאל את ג׳מיני", מפתח חינמי', 'https://aistudio.google.com/apikey'],
   ]

@@ -28,7 +28,9 @@ const ok = (cond, name) => {
   }
 }
 
-const today = () => new Date().toLocaleDateString('en-CA')
+// The assistant's day is TIMEZONE (Asia/Jerusalem unless the fixture sets another). The parent process
+// may still be on UTC, and the two dates differ in the evening.
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' })
 const OWNER = '972500000000@s.whatsapp.net'
 const SECRET = 'תוכן-פרטי-שלא-אמור-להופיע'
 

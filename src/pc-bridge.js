@@ -18,6 +18,7 @@ const TIMEOUT_MS = {
   webcamSnap: 30000,
   screenRecord: 120000,
   speakOnPc: 130000,
+  playAudio: 130000,
   wingetSearch: 100000,
   wingetInstall: 620000,
   findFiles: 100000,
@@ -42,7 +43,7 @@ const TIMEOUT_MS = {
 const PC_NAMES = [
   'media', 'screenshot', 'findApps', 'launchApp', 'playSpotify', 'closeApp', 'status', 'lock',
   'sleepMonitors', 'wakeMonitors', 'unlock', 'typeText', 'pressKey', 'setClipboard', 'getClipboard',
-  'popup', 'startTimer', 'speakOnPc', 'power', 'findFiles', 'organizeDownloads', 'wingetSearch',
+  'popup', 'startTimer', 'speakOnPc', 'playAudio', 'power', 'findFiles', 'organizeDownloads', 'wingetSearch',
   'wingetInstall', 'act', 'webcamSnap', 'screenRecord', 'topProcesses', 'killProcess',
   'getBrowserTabs', 'closeBrowserTab', 'openBrowserTab', 'activateBrowserTab',
   'openOnScreen', 'runCommand', 'readTextFile', 'writeTextFile', 'readUserFile',
