@@ -28,7 +28,9 @@ const ok = (cond, name) => {
   }
 }
 
-const today = () => new Date().toLocaleDateString('en-CA')
+// The Helper under test sets TZ from TIMEZONE (default Asia/Jerusalem, config.js), so its "today" is that zone's date.
+// Taking this process's zone instead broke the check every night from 22:00 UTC (already tomorrow in Israel).
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: process.env.TIMEZONE || 'Asia/Jerusalem' })
 const OWNER = '972500000000@s.whatsapp.net'
 const SECRET = 'תוכן-פרטי-שלא-אמור-להופיע'
 
