@@ -854,7 +854,7 @@ const BRIEF = {
   play_youtube: 'Search YouTube and start playing the first video right away on the user\'s screen, no approval needed. For "play X", "put on X on YouTube", "open YouTube, search X and play".',
   wake_pc: 'Turn on the user\'s PC remotely (Wake-on-LAN), no approval needed. It boots within about a minute.',
   open: 'Open a web address (https://...) or a named app on the user\'s screen, at once, no approval needed. Names: youtube, google, gmail, classroom, calendar, drive, whatsapp, spotify, calculator, settings. YouTube search: https://www.youtube.com/results?search_query=...',
-  run_command: 'Run a PowerShell command on the user\'s computer (60s limit).',
+  run_command: 'Run a PowerShell command on the user\'s computer (60s limit). admin=true runs it as Administrator, only when it needs admin rights; the user approves every admin command.',
   read_file: 'Read a text file from the user\'s computer.',
   write_file: 'Write a text file on the user\'s computer (overwrites).',
   pc_media: 'Control PC media and volume: play_pause, next, previous, mute, volume_up, volume_down, set_volume 0-100.',

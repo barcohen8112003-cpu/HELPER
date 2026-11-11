@@ -27,6 +27,7 @@ const TESTS = [
   'src/errand-selftest.js',
   'src/desktop-selftest.js',
   'src/desktop-vault-leak-selftest.js',
+  'src/pc-admin-selftest.js',
   'src/monitoring/selftest.js',
   'src/pc-bridge-selftest.js',
   'src/face-selftest.js',

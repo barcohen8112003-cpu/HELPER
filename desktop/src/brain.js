@@ -88,7 +88,7 @@ function rules() {
     '- אחרי משימה שמסדרת חלונות, אם יש ספק שזה הצליח (חלון שלא נפתח, מסך אחר), בדוק עם windows פעם אחת, ותקן.',
     '- בקשה שיש בה שתי משימות נפרדות ("תפתח את X, ותגיד לי מה השעה"): תעשה את שתיהן ותענה על שתיהן במשפט אחד.',
     '- התשובה של הידיים ("כרום בצד שמאל") היא האישור שזה קרה: אל תוסיף "לא וידאתי". רק כשצעד נכשל, או כשאין לך דרך לדעת, תגיד את זה.',
-    '- שאלות אישיות (מה כתבו לו, מה ביומן, מה הוא סיפר לך פעם): helper.',
+    '- כל מה שלא על המחשב הזה הולך ל-helper: הבית (אורות, טלוויזיה, מזגן, תריסים), וואטסאפ, מייל, יומן, תזכורות, וובטופ, טיסות, חדשות, ומה שהוא סיפר לך פעם. שם יש את כל הכלים של HELPER. תעביר לו את הבקשה במילים שלו, ותגיד מה הוא ענה.',
     '- משימה בתוך חלון קיים ("תלחץ על", "תכתוב בשדה", "תשלח לו", "תסמן", "תבחר", "תעבור לטאב"): קודם look על החלון (לא צילום מסך), ואז press / fill לפי השמות שראית, הכל ב-batch אחד אם אפשר. שם שלא מופיע ב-look: look שוב אחרי רגע (דף שנטען), ורק אז screenshot ו-click בפיקסלים.',
     '- אתר: goto בדפדפן הפתוח, לא web (שפותח חלון חדש). "בטאב חדש" → newtab. אתר שכבר פתוח בטאב → tab.',
     '- שאלה על מה שכתוב בחלון או בדף ("מה כתוב פה", "תסכם את הכתבה", "מה המחיר"): read על החלון. צילום מסך רק כשצריך לראות תמונה, עיצוב או משחק.',
@@ -283,6 +283,41 @@ async function askHelper(text, { voice = false } = {}) {
   }
 }
 
+/**
+ * Is HELPER on the cloud there, and does it take this PC's code? An empty ask is refused right after the code is
+ * checked (400), before any model runs: so it costs nothing and proves both. Resolves {ok, ms} or {ok:false, reason}.
+ */
+async function pingHelper() {
+  const s = store.settings()
+  if (!s.helperUrl || !s.helperToken) return { ok: false, reason: 'לא מחובר למחשב, חסר קוד חיבור' }
+  const started = Date.now()
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 8000)
+  try {
+    const r = await fetch(s.helperUrl.replace(/\/$/, '') + '/bridge/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: 'Bearer ' + s.helperToken },
+      body: JSON.stringify({ text: '', source: 'pc-ping', audio: false }),
+      signal: ctrl.signal,
+    })
+    if (r.status === 400) return { ok: true, ms: Date.now() - started }
+    if (r.status === 403) return { ok: false, reason: 'הקוד של המחשב לא נכון' }
+    return { ok: false, reason: 'ענה בשגיאה ' + r.status }
+  } catch (e) {
+    return { ok: false, reason: e.name === 'AbortError' ? 'לא ענה בזמן' : 'אין חיבור' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Which brain answers here now, in words. */
+function brainName() {
+  const apiOnly = /^api$/i.test(config.get('HELPER_BRAIN') || store.settings().brain || '')
+  if (!apiOnly && claudeCommand() && claudeState !== 'signed-out') return 'Claude Code'
+  if (config.llmApiKey) return 'מודל דרך המפתח, ' + (config.llmModel || 'ברירת מחדל')
+  return 'אין, חסר מפתח'
+}
+
 /** HELPER's own voice for a line, as MP3 bytes (Edge-TTS on the cloud, unless TTS_PROVIDER says otherwise). */
 async function voiceOf(text) {
   const s = store.settings()
@@ -315,4 +350,4 @@ async function ask(text, extra, onEvent) {
   return await directLlm.ask(text, extra, onEvent)
 }
 
-module.exports = { ask, askClaude, askHelper, voiceOf, cancel, claudeCommand, state: () => claudeState, HANDS }
+module.exports = { ask, askClaude, askHelper, pingHelper, brainName, voiceOf, cancel, claudeCommand, state: () => claudeState, HANDS }

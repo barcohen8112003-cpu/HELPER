@@ -29,6 +29,7 @@ const TIMEOUT_MS = {
   focusInfo: 25000,
   focusWindow: 25000,
   runCommand: 70000,
+  runAdminCommand: 95000,
   readSessionPage: 90000,
   downloadSessionFile: 120000,
   readTimetable: 90000,
@@ -46,7 +47,7 @@ const PC_NAMES = [
   'popup', 'startTimer', 'speakOnPc', 'playAudio', 'power', 'findFiles', 'organizeDownloads', 'wingetSearch',
   'wingetInstall', 'act', 'webcamSnap', 'screenRecord', 'topProcesses', 'killProcess',
   'getBrowserTabs', 'closeBrowserTab', 'openBrowserTab', 'activateBrowserTab',
-  'openOnScreen', 'runCommand', 'readTextFile', 'writeTextFile', 'readUserFile',
+  'openOnScreen', 'runCommand', 'runAdminCommand', 'readTextFile', 'writeTextFile', 'readUserFile',
   // The desktop agent's checks (src/desktop-body.js): names of controls and windows, never field values.
   'inspectAt', 'focusInfo', 'focusWindow',
 ]
@@ -477,6 +478,8 @@ export async function homeHandlers() {
   for (const name of PC_NAMES) {
     if (typeof pc[name] === 'function') handlers[name] = (...args) => pc[name](...args)
   }
+  const admin = await import('./pc-admin.js')
+  handlers.runAdminCommand = (command) => admin.runAdminCommand(command)
   handlers.browserScreenshot = () => errand.browserScreenshot()
   handlers.browserAct = (action) => errand.browserAct(action)
   handlers.browserProbe = (action) => errand.browserProbe(action)
