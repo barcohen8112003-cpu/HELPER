@@ -434,6 +434,48 @@ $bad -join [Environment]::NewLine`
   }
 }
 
+// 21. The vault latch (PR #78, src/secret-redact.js): after a saved password is filled, no picture of this machine's
+// screen reaches a model or a chat until Helper restarts, whichever desktop path asks. These checks run only where
+// that file exists, so they start guarding as soon as that PR lands next to this one.
+{
+  let latch = null
+  try {
+    latch = await import('./secret-redact.js')
+  } catch {}
+  if (!latch?.holdForRedaction) skip('vault latch: src/secret-redact.js is not here yet (PR #78); these checks start when it lands')
+  else {
+    const SECRET = 'Kx9-vault-Secret-771'
+    latch.holdForRedaction(SECRET)
+    try {
+      // The real desktop body is refused before any screenshot or model call.
+      let calls = 0
+      const out = await runGoal({ goal: 'x', body: _test.BODIES.desktop, ctx: {}, think: async () => (++calls, { content: '{}' }) })
+      ok(out.startsWith('FAIL') && calls === 0, '21. after a fill, use_computer stops before any screenshot or model call')
+      // Every capture target of pc.screenshot is behind the same guard.
+      for (const target of [undefined, 'active', 'window']) {
+        let code = ''
+        await pc.screenshot(target ? { width: 1280, target } : 1280).catch((e) => (code = e.code))
+        ok(code === 'withheld', `21. pc.screenshot(${target || 'primary'}) is refused after a fill`)
+      }
+      // Any other desktop-shaped body (a copy, a future one) still sends no picture and no password text anywhere.
+      const fake = fakePc({ focus: { fg: { hwnd: '1', title: `login ${SECRET}`, process: 'chrome' }, el: { label: 'Send', role: 'Button' } } })
+      const media = []
+      const sent = []
+      const gate = { type: 'gate', kind: 'send', site: 'x', items: `to ${SECRET}`, then: { type: 'key', keys: 'enter' } }
+      const think = async (messages) => {
+        sent.push(JSON.stringify(messages))
+        return { content: JSON.stringify({ thought: 't', action: sent.length === 1 ? { type: 'key', keys: 'enter' } : sent.length === 2 ? gate : { type: 'done', summary: 'x' } }) }
+      }
+      await runGoal({ goal: 'x', body: body(fake), ctx: { confirm: async (t, m) => (media.push({ t, m }), true), sendMedia: async (m) => media.push({ final: m }) }, think })
+      ok(sent.length >= 2 && sent.every((j) => !/image_url|data:image/.test(j)), '21. no model request carries a picture')
+      ok(sent.every((j) => !j.includes(SECRET)), '21. a password in a window title or a probe answer never reaches the model')
+      ok(media.length === 1 && !media[0].m && !media[0].t.includes(SECRET) && !media.some((x) => x.final), '21. the approval card has no picture and no password, and no closing picture is sent')
+    } finally {
+      latch.forgetAll()
+    }
+  }
+}
+
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(`${failed ? 'FAILED' : 'OK'}: ${passed} passed, ${failed} failed, ${skipped} skipped`)
 process.exit(failed ? 1 : 0)
