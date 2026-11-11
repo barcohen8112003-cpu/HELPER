@@ -90,11 +90,14 @@ if (!chrome) {
       if (req.url.startsWith('/server/api/')) asked.push({ url: req.url, body })
       if (req.url === '/server/api/shotef/ChangesAndMessagesData') return json(read2.changes)
       if (req.url === '/server/api/PupilCard/GetPupilGrades') return json(read2.grades)
+      // Synthetic: the shape of this answer is a guess (it is not documented); schoolwork.js refuses shapes it does not know.
+      if (req.url === '/server/api/dashboard/GetHomeWork') return json([{ id: 77, subjectName: 'ספרות', homeWork: 'לקרוא את הסיפור "הדרך" עד עמוד 30', dueDate: '2026-11-12T00:00:00' }])
       // Today's board has the event and the message, tomorrow's is empty.
       if (req.url === '/server/api/shotef/SchoolchangesPerGradeFirst') return json(asked.filter((a) => a.url === req.url).length === 1 ? read2.school[0].data : { generalMessages: [], classes: [] })
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       if (req.url.startsWith('/Timetable_Changes')) return res.end(page('shotef/ChangesAndMessagesData', { institutionCode: 340018, selectedValue: '10|6', typeView: 1, todayOnly: false, startWeek: false }))
       if (req.url.startsWith('/Student_Card')) return res.end(page('PupilCard/GetPupilGrades', { studyYear: 2027, moduleID: 6 }))
+      if (req.url.startsWith('/dashboard')) return res.end(page('dashboard/GetHomeWork', { id: 'SYNTHETIC-ENCRYPTED-ID', ClassCode: 10, ClassNumber: 6 }))
       res.end('<!doctype html><meta charset="utf-8"><body>ריכוז מידע</body>')
     })
   }).listen(WEB, '127.0.0.1')
@@ -122,6 +125,18 @@ if (!chrome) {
     check('with the school code and grade from the page request', sb.length === 2 && sb[0].institutionCode === 340018 && sb[0].grade === 10, JSON.stringify(sb[0]))
     const plan = planWebtopNotice(got, first.seen, NOW)
     check('the browser read gives the same notice', plan.fresh.length === 5, String(plan.fresh.length))
+    check('without the homework list on, the homework board is not asked for', got.homework === undefined && !asked.some((a) => a.url.endsWith('dashboard/GetHomeWork')))
+    const withHw = await readWebtopUpdates({ homework: true })
+    const hwAsk = asked.filter((a) => a.url.endsWith('dashboard/GetHomeWork'))
+    check('with it, the board comes from the dashboard page\'s own request', withHw.homework?.asked === true && withHw.homework.data?.[0]?.homeWork?.includes('הדרך') && hwAsk.length === 1, JSON.stringify(withHw.homework))
+    check('the board request is the page\'s own (its ids, not ones Helper made up)', JSON.parse(hwAsk[0].body).id === 'SYNTHETIC-ENCRYPTED-ID')
+    check('the rest of the read is unchanged with the board added', withHw.grades?.length === 2 && withHw.changes?.exams?.length === 2)
+    const { webtopHomework } = await import('./schoolwork.js')
+    const parsed = webtopHomework(withHw.homework)
+    check('the board answer is parsed into homework', parsed.entries?.[0]?.title === 'לקרוא את הסיפור "הדרך" עד עמוד 30' && parsed.entries[0].course === 'ספרות' && parsed.entries[0].due.day === '2026-11-12', JSON.stringify(parsed))
+    config.webtop.homeworkPath = '/no-homework-here'
+    const silent = await readWebtopUpdates({ homework: true })
+    check('a page that does not ask for the board gives "not answered", not an empty board', silent.homework?.asked === true && silent.homework.data === undefined && Boolean(webtopHomework(silent.homework).error))
   } catch (e) {
     check('browser part ran', false, e.message)
   } finally {
