@@ -421,8 +421,13 @@ async function captureApi({ call, once, on }, url, want) {
 
 const GRADES_API = 'PupilCard/GetPupilGrades'
 const CHANGES_API = 'shotef/ChangesAndMessagesData'
+// Webtop's homework board. The dashboard page asks for it itself (POST dashboard/GetHomeWork with the pupil's own
+// ids); its answer is taken from that request, like the two above. Nothing is asked for on our own and no id is built.
+const HOMEWORK_API = 'dashboard/GetHomeWork'
 
-function updatesLocal() {
+// opts.homework: also open the dashboard page and take its homework answer. Only the homework list
+// (src/schoolwork.js, SCHOOLWORK=on) asks for it; otherwise this read is exactly what it was.
+function updatesLocal(opts = {}) {
   return runLocal(async (tab) => {
     await tab.call('Page.enable')
     const site = (p) => new URL(p, config.webtop.url).href
@@ -453,14 +458,25 @@ function updatesLocal() {
       })
       school = parseJson(result?.value) || []
     }
-    return { grades: gr ? gr.data || [] : null, changes: ch ? ch.data || {} : null, school }
+    // Last, so a page that does not answer can never cost the grades and changes above.
+    // { asked: true, data } when the page answered; { asked: true, data: undefined } when it did not.
+    let homework = null
+    if (opts.homework) {
+      try {
+        const hw = (await captureApi(tab, site(config.webtop.homeworkPath), [HOMEWORK_API]))[HOMEWORK_API]
+        homework = { asked: true, data: hw ? hw.data : undefined }
+      } catch (e) {
+        homework = { asked: true, data: undefined, error: e.message }
+      }
+    }
+    return { grades: gr ? gr.data || [] : null, changes: ch ? ch.data || {} : null, school, ...(homework && { homework }) }
   })
 }
 
-export function readWebtopUpdates() {
+export function readWebtopUpdates(opts = {}) {
   return runSessionRead(
-    () => updatesLocal(),
-    () => remoteCall('readWebtopUpdates', []),
+    () => updatesLocal(opts),
+    () => remoteCall('readWebtopUpdates', [opts]),
     sessionTransport(),
   )
 }
