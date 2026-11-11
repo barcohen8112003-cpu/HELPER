@@ -28,7 +28,8 @@ const ok = (cond, name) => {
   }
 }
 
-const today = () => new Date().toLocaleDateString('en-CA')
+// The child sets TZ from TIMEZONE (config.js, Asia/Jerusalem by default): its "today" is Israel's, not the runner's.
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: process.env.TIMEZONE || 'Asia/Jerusalem' })
 const OWNER = '972500000000@s.whatsapp.net'
 const SECRET = 'תוכן-פרטי-שלא-אמור-להופיע'
 
