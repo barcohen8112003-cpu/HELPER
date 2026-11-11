@@ -599,7 +599,8 @@ export function statusText(group) {
 // ── the round that runs every minute ────────────────────────────────────────
 // notify(text, urgent, key) is index.js's: it respects quiet hours and the daily message budget.
 // adders as in addItems; used only with GROUPS_AUTO_ADD=on.
-export async function tick({ notify, adders } = {}, nowMs = Date.now()) {
+// onFresh(items), when given, gets this round's new items (src/schoolwork.js takes homework from the school groups).
+export async function tick({ notify, adders, onFresh } = {}, nowMs = Date.now()) {
   purge(nowMs)
   if (!groupsOn()) return []
   const s = load()
@@ -620,5 +621,6 @@ export async function tick({ notify, adders } = {}, nowMs = Date.now()) {
     }
   }
   persist()
+  if (onFresh) await onFresh(fresh)
   return fresh
 }

@@ -41,6 +41,7 @@ import { announceRelease } from './release-notes.js'
 import { parseLiveCall, liveCallReply, LIVE_NOTE } from './live-voice.js'
 import { presentSpeech } from './face.js'
 import * as groups from './groups.js'
+import * as schoolwork from './schoolwork.js'
 import { groupAdders } from './group-tools.js'
 
 let reconciled = false
@@ -594,7 +595,7 @@ tellRecovery()
 // WhatsApp groups (src/groups.js): once a minute it checks whether a round of reading is due (every
 // GROUPS_EVERY_MINUTES). Only a test, cancellation or change for today or tomorrow is sent now, through notify, so
 // quiet hours and the daily budget apply; the rest waits for the morning brief and "מה פספסתי?".
-setInterval(() => groups.tick({ notify, adders: groupAdders() }).catch((e) => console.log(`[groups] ${e.message}`)), 60000).unref()
+setInterval(() => groups.tick({ notify, adders: groupAdders(), onFresh: schoolwork.groupsHook(notify) }).catch((e) => console.log(`[groups] ${e.message}`)), 60000).unref()
 startVoice()
 setInterval(outbox.flush, 30000)
 // A message that waited UNANSWERED_ALERT_MIN minutes (default 5, 0 = off) with no answer gets one short note, never
