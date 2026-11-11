@@ -7,11 +7,12 @@
 //
 // Paying, ordering, sending, deleting and account-security changes go through a gate: the loop stops, the user gets
 // the confirm screen as a screenshot with a plain summary, and only his yes lets that single action through.
-// The model is asked to raise the gate itself; in the browser the page is also checked, so a click on a "pay" or
-// "place order" control that the model did not gate is blocked rather than trusted.
+// The model is asked to raise the gate itself; in the browser the page is also checked, and on the desktop Windows
+// is asked what control is there, so a click on a "pay" or "send" control that the model did not gate is blocked
+// rather than trusted. On the desktop the approved action also runs only if the same control is still there.
 import fs from 'node:fs'
 import { llm, chatModel, LONG_PATIENCE, Aborted } from './llm.js'
-import { screenshot, act } from './pc.js'
+import { desktopBody } from './desktop-body.js'
 import { browserScreenshot, browserAct, browserProbe } from './errand-browser.js'
 import { researchNotes } from './obscura.js'
 import { IMAGE_WITHHELD, imagesBlocked, redact, redactDeep } from './secret-redact.js'
@@ -85,21 +86,8 @@ const RULES = `Rules that always hold:
 const SURVEY_ONLY = `This run is research only (compare_prices). Do not add anything to a cart, do not open checkout, do not sign in to pay, and do not send a "gate" for payment or order. Stop with "done" and the ranked Hebrew list once the shops are compared.`
 
 const BODIES = {
-  desktop: {
-    intro: `You operate the user's Windows PC with mouse and keyboard to reach a goal he gave you. Each turn you get a
-screenshot of the primary screen and choose exactly ONE next action.`,
-    extra: '',
-    tips: 'Prefer keyboard shortcuts when they are surer than clicking ("ctrl+l", "alt+tab", "win"). After typing into a search or address box, press enter.',
-    maxSteps: 25,
-    finalShot: true,
-    async screenshot() {
-      const shot = await screenshot(IMAGE_WIDTH)
-      const buffer = fs.readFileSync(shot.file)
-      fs.rmSync(shot.file, { force: true })
-      return { ...shot, buffer, mime: 'image/png', image: `data:image/png;base64,${buffer.toString('base64')}` }
-    },
-    act,
-  },
+  // The user's own desktop: its screenshot, actions and the checks Windows itself answers live in desktop-body.js.
+  desktop: desktopBody(),
   browser: {
     intro: `You operate your own browser window (a separate profile on the user's computer, kept signed in to sites he
 uses) to carry out an errand he gave you. Each turn you get a screenshot of the page and choose exactly ONE next action.`,
@@ -132,6 +120,7 @@ ${survey ? SURVEY_ONLY : ''}`
 function parse(raw) {
   try {
     const out = JSON.parse(String(raw).match(/\{[\s\S]*\}/)[0])
+    if (!out.action?.type && Array.isArray(out.actions) && out.actions[0]?.type) out.action = out.actions[0]
     return out.action?.type ? out : null
   } catch {
     return null
@@ -154,6 +143,23 @@ function gateCard(g) {
 }
 
 const pointed = (a) => Number.isFinite(a.index) || (Number.isFinite(a.x) && Number.isFinite(a.y))
+const ENDING = ['done', 'fail', 'need_user', 'gate']
+const AIMED = ['click', 'double_click', 'right_click', 'move', 'scroll', 'drag', 'tap', 'long_press', 'select', 'navigate', 'back', 'focus_window', 'view']
+
+// The actions to run on one screenshot. A body that allows it (the desktop) takes a short batch: only the first may
+// aim at the picture (its coordinates are only true for this screenshot), and an ending action is never part of one.
+// Returns { list, note } where note tells the model what was dropped.
+function batchOf(out, body) {
+  const asked = body.batch && Array.isArray(out.actions) && out.actions.length > 1 ? out.actions.filter((x) => x?.type) : [out.action]
+  if (asked.length === 1 || ENDING.includes(asked[0].type)) return { list: [asked[0]], note: asked.length > 1 ? 'Only the first action ran: an ending action or a gate comes alone.' : '' }
+  const list = [asked[0]]
+  for (const x of asked.slice(1, body.batch)) {
+    if (ENDING.includes(x.type) || AIMED.includes(x.type)) break
+    list.push(x)
+  }
+  const dropped = Math.min(asked.length, body.batch) - list.length + Math.max(0, asked.length - body.batch)
+  return { list, note: dropped ? `${dropped} of the batched actions did not run: after the first, a batch takes only "type", "key" and "wait", at most ${body.batch} in all.` : '' }
+}
 const isCommitAction = (a, body) => {
   if (!a) return false
   if (['click', 'double_click', 'tap', 'long_press'].includes(a.type)) return pointed(a)
@@ -163,7 +169,7 @@ const isCommitAction = (a, body) => {
   return false
 }
 // Actions that land on a control, so the page or screen is asked what that control is before they run.
-const PROBED = ['click', 'double_click', 'tap', 'select', 'long_press', 'type', 'key']
+const PROBED = ['click', 'double_click', 'tap', 'select', 'long_press', 'type', 'key', 'drag']
 
 // Runs the loop. Returns a line for the main model that starts with DONE, NEED_USER, DENIED or FAIL.
 // ctx: { confirm(text, media?), sendMedia, signal }. `think` replaces the model call (self-tests only).
@@ -177,7 +183,8 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   const pictures = () => body.vaultView === false || !imagesBlocked()
   const model = think
   think = (msgs, sig) => model(redactDeep(msgs, { keepImages: body.vaultView === false }), sig)
-  if (body === BODIES.desktop && !pictures()) return redact(`FAIL: ${IMAGE_WITHHELD}`)
+  // Any desktop body (the real one or a copy of it), not only the object in BODIES.
+  if ((body === BODIES.desktop || body.name === 'desktop') && !pictures()) return redact(`FAIL: ${IMAGE_WITHHELD}`)
   const log = []
   // The model's own notes from the survey (candidates and their numbers), shown back to it every step.
   const found = []
@@ -204,7 +211,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
     }
     return redact(`${status}: ${text}\n${found.length ? `מה נבדק:\n${found.map((f) => `• ${f}`).join('\n')}\n` : ''}צעדים: ${log.length}\n${log.slice(-6).join('\n')}`)
   }
-  for (let step = 1; step <= body.maxSteps; step++) {
+  steps: for (let step = 1; step <= body.maxSteps; step++) {
     if (signal?.aborted) throw new Aborted()
     let shot = await body.screenshot()
     // Whatever the body returned, a picture taken after a vault fill does not go on (captureOn already takes none).
@@ -221,10 +228,12 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
     for (const m of messages) if (Array.isArray(m.content)) m.content = m.content.filter((p) => p.type === 'text')
     const head = step === 1 ? `Goal: ${goal}\n${constraints ? `Constraints: ${constraints}\n` : ''}` : `Goal: ${goal}\n${found.length ? `Your notes so far:\n${found.map((f) => `- ${f}`).join('\n')}\n` : ''}`
     // A body that reads the screen as text (the phone) sends that list, and a picture only when it has one.
-    const seen = shot.text ? `Step ${step}.\n${shot.text}${shot.image ? '\nA screenshot is attached.' : ''}` : `Step ${step}. Screenshot ${shot.width}x${shot.height}.${shot.url ? ` Address: ${shot.url}` : ''}`
+    const seen = shot.text ? `Step ${step}.\n${shot.text}${shot.image ? '\nA screenshot is attached.' : ''}` : `Step ${step}. Screenshot ${shot.width}x${shot.height}.${shot.url ? ` Address: ${shot.url}` : ''}${shot.note || ''}`
     // The same screen three steps running means the last actions did nothing: say so instead of letting it loop.
-    screens.push(shot.text || '')
-    const stuck = shot.text && !shot.withheld && screens.length >= 4 && screens.slice(-4).every((s) => s === shot.text)
+    // A body that reads the screen as text compares the text; the desktop compares a coarse grey grid of the picture.
+    screens.push({ text: shot.text || '', sig: shot.sig, window: shot.window })
+    const same = body.sameScreen || ((x, y) => Boolean(y.text) && x.text === y.text)
+    const stuck = !shot.withheld && screens.length >= 4 && screens.slice(-4).every((s) => same(s, screens.at(-1)))
     messages.push({ role: 'user', content: [{ type: 'text', text: `${head}${seen}${stuck ? '\nThe screen has not changed for 3 steps. That way is not working: take a different one (another element, back, an intent, search).' : ''}` }, ...(shot.image ? [{ type: 'image_url', image_url: { url: shot.image } }] : [])] })
     const reply = await think(messages, signal)
     if (signal?.aborted) throw new Aborted()
@@ -245,90 +254,135 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
       found.push(String(out.found).trim().slice(0, 200))
       if (found.length > MAX_NOTES) found.shift()
     }
-    // Typed text is left out of the log: it can be an address or a phone number.
-    log.push(`${step}. ${a.type}${a.keys ? ` ${a.keys}` : ''}${a.url ? ` ${String(a.url).slice(0, 60)}` : ''} - ${String(out.thought || '').slice(0, 120)}`)
-    if (a.type === 'done') return end('DONE', a.summary || 'בוצע')
-    if (a.type === 'fail') return end('FAIL', a.summary || 'לא הצלחתי')
-    if (a.type === 'need_user') return end('NEED_USER', a.summary || 'צריך אותך כדי להמשיך')
+    const { list, note } = batchOf(out, body)
+    if (note) messages.push({ role: 'user', content: note })
+    // Each action of a batch passes every check on its own; `continue steps` drops the rest and takes a new look.
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i]
+      const last = i === list.length - 1
+      // Typed text is left out of the log: it can be an address or a phone number.
+      log.push(`${step}${list.length > 1 ? `.${i + 1}` : ''}. ${a.type}${a.keys ? ` ${a.keys}` : ''}${a.url ? ` ${String(a.url).slice(0, 60)}` : ''} - ${String(i ? '(batch)' : out.thought || '').slice(0, 120)}`)
+      if (a.type === 'done') return end('DONE', a.summary || 'בוצע')
+      if (a.type === 'fail') return end('FAIL', a.summary || 'לא הצלחתי')
+      if (a.type === 'need_user') return end('NEED_USER', a.summary || 'צריך אותך כדי להמשיך')
 
-    if (a.type === 'gate') {
-      if (survey && (a.kind === 'payment' || a.kind === 'order')) {
-        messages.push({ role: 'user', content: 'This run is research only. Do not check out or pay. Reply with "done" and the ranked Hebrew list.' })
-        continue
+      if (a.type === 'gate') {
+        if (survey && (a.kind === 'payment' || a.kind === 'order')) {
+          messages.push({ role: 'user', content: 'This run is research only. Do not check out or pay. Reply with "done" and the ranked Hebrew list.' })
+          continue steps
+        }
+        if (!isCommitAction(a.then, body)) {
+          messages.push({ role: 'user', content: 'A gate needs "then": the single click or key action that commits. Reply again.' })
+          continue steps
+        }
+        if (++gates > MAX_GATES) return end('FAIL', 'יותר מדי בקשות אישור בסידור אחד, עצרתי.')
+        const target = scale(a.then, shot)
+        // A body that can say what the committing action lands on (the desktop) does so now and again after the yes.
+        let before = null
+        if (body.fingerprint) {
+          try {
+            before = await body.fingerprint(target)
+          } catch (e) {
+            messages.push({ role: 'user', content: `Gate not asked: ${String(e?.message || e).slice(0, 160)}. Nothing was committed. Look again.` })
+            continue steps
+          }
+        }
+        const card = `${gateCard(a)}${before?.where ? `\nאיפה (לפי Windows): ${before.where}` : ''}`
+        // A body that reads the screen as text takes the picture for the card now; the others already have one.
+        const media = !pictures() ? null : body.capture ? await body.capture().catch(() => null) : shot.buffer ? { buffer: shot.buffer, mime: shot.mime } : null
+        const ok = ctx.confirm ? await ctx.confirm(redact(card), media?.buffer ? media : undefined) : false
+        if (signal?.aborted) throw new Aborted()
+        if (!ok) return `DENIED: לא אושר, ולכן לא בוצע. ${KIND[a.kind] ? `שום ${KIND[a.kind]} לא קרה.` : ''}\n${card}`
+        // The approval covers this one action, on this screen. Anything after it needs a gate of its own.
+        if (body.fingerprint) {
+          const now = await Promise.resolve().then(() => body.fingerprint(target)).catch(() => null)
+          if (!now || now.id !== before.id) {
+            messages.push({ role: 'user', content: `Not performed: the screen changed while the user was deciding${now?.where ? ` (now: ${now.where})` : ''}. Nothing was committed. If it is still needed, look again and raise a new gate.` })
+            continue steps
+          }
+        }
+        try {
+          await body.act(target)
+          messages.push({ role: 'user', content: 'The user approved and the committing action was performed. Check the screen: "done" only if it shows success. Any further commit needs a new gate.' })
+        } catch (e) {
+          messages.push({ role: 'user', content: `The approved action failed: ${e.message}. Do not retry it without a new gate.` })
+        }
+        await sleep(1500, signal)
+        continue steps
       }
-      if (!isCommitAction(a.then, body)) {
-        messages.push({ role: 'user', content: 'A gate needs "then": the single click or key action that commits. Reply again.' })
-        continue
-      }
-      if (++gates > MAX_GATES) return end('FAIL', 'יותר מדי בקשות אישור בסידור אחד, עצרתי.')
-      const card = gateCard(a)
-      // A body that reads the screen as text takes the picture for the card now; the others already have one.
-      const media = !pictures() ? null : body.capture ? await body.capture().catch(() => null) : shot.buffer ? { buffer: shot.buffer, mime: shot.mime } : null
-      const ok = ctx.confirm ? await ctx.confirm(redact(card), media?.buffer ? media : undefined) : false
-      if (signal?.aborted) throw new Aborted()
-      if (!ok) return `DENIED: לא אושר, ולכן לא בוצע. ${KIND[a.kind] ? `שום ${KIND[a.kind]} לא קרה.` : ''}\n${card}`
-      // The approval covers this one action, on this screen. Anything after it needs a gate of its own.
-      try {
-        await body.act(scale(a.then, shot))
-        messages.push({ role: 'user', content: 'The user approved and the committing action was performed. Check the screen: "done" only if it shows success. Any further commit needs a new gate.' })
-      } catch (e) {
-        messages.push({ role: 'user', content: `The approved action failed: ${e.message}. Do not retry it without a new gate.` })
-      }
-      await sleep(1500, signal)
-      continue
-    }
 
-    if (a.type === 'type' && CARD.test(String(a.text || ''))) {
-      return end('NEED_USER', 'זה נראה כמו מספר כרטיס. פרטי תשלום אני לא מקליד, את זה תזין בעצמך בחלון.')
-    }
-    const scaled = scale(a, shot)
-    if (body.guard && !['wait', 'look'].includes(a.type)) {
-      const verdict = await Promise.resolve()
-        .then(() => body.guard(scaled))
-        .catch(() => null)
-      if (verdict?.block) {
-        messages.push({ role: 'user', content: verdict.block })
+      if (a.type === 'type' && CARD.test(String(a.text || ''))) {
+        return end('NEED_USER', 'זה נראה כמו מספר כרטיס. פרטי תשלום אני לא מקליד, את זה תזין בעצמך בחלון.')
+      }
+      const scaled = scale(a, shot)
+      if (body.guard && !['wait', 'look'].includes(a.type)) {
+        const verdict = await Promise.resolve()
+          .then(() => body.guard(scaled))
+          .catch(() => null)
+        if (verdict?.block) {
+          messages.push({ role: 'user', content: verdict.block })
+          continue steps
+        }
+        const stopped = await askVerdict(verdict, shot)
+        if (stopped) return stopped
+      }
+      if (body.probe && PROBED.includes(a.type)) {
+        const found = await body.probe(scaled).catch(() => null)
+        if (a.type === 'type' && found?.secret) return end('NEED_USER', `השדה מבקש סיסמה, קוד או פרטי כרטיס. את זה תזין בעצמך ${body.name === 'phone' ? 'בטלפון' : body.name === 'desktop' ? 'במחשב' : 'בחלון של העוזר במחשב'}, ואז תגיד לי להמשיך.`)
+        // A body's own verdict (the desktop: a terminal, a password manager, focus that moved, an unreadable control).
+        if (found?.needUser) return end('NEED_USER', found.needUser)
+        if (found?.block) {
+          messages.push({ role: 'user', content: `${found.block}${i ? ` (action ${i + 1} of the batch; the rest did not run)` : ''}` })
+          continue steps
+        }
+        const commitKey = a.type === 'key' && /^(enter|space)$/i.test(String(a.keys).trim())
+        if (survey && found?.label && (CART.test(found.label) || COMMIT.test(found.label)) && a.type !== 'type') {
+          messages.push({ role: 'user', content: `Blocked: "${found.label.slice(0, 80)}" would leave the survey (cart or checkout). Go back and finish the ranked list with "done".` })
+          continue steps
+        }
+        if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && body.settings?.test(found.label)) {
+          messages.push({ role: 'user', content: `Blocked: "${found.label.slice(0, 80)}" changes a setting or a permission. Reply with a "gate" of kind "account" and this action as "then".` })
+          continue steps
+        }
+        if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && (COMMIT.test(found.label) || body.commit?.test(found.label))) {
+          messages.push({ role: 'user', content: `Blocked by the safety check: the control there reads "${found.label.slice(0, 80)}", which may pay, order, send, call or delete. If it commits, reply with a "gate" with the details on screen and this action as "then". If it does not, take another way forward.` })
+          continue steps
+        }
+      }
+      if (a.type !== 'wait') {
+        try {
+          // Some actions answer with text (the phone's notifications); the model gets it with the next screen.
+          const info = await body.act(scaled)
+          if (typeof info === 'string' && info) messages.push({ role: 'user', content: `Result of that action:\n${info}` })
+        } catch (e) {
+          messages.push({ role: 'user', content: `That action failed: ${e.message}${list.length > 1 && !last ? ' (the rest of the batch did not run)' : ''}` })
+          if (!last) continue steps
+        }
+      }
+      // Enter usually opens or submits something: what was batched after it was planned for a screen that is gone.
+      const enter = a.type === 'key' && /^(enter|return)$/i.test(String(a.keys).trim())
+      if (!last && !enter && a.type !== 'wait') {
+        await sleep(150, signal)
         continue
       }
-      const stopped = await askVerdict(verdict, shot)
-      if (stopped) return stopped
-    }
-    if (body.probe && PROBED.includes(a.type)) {
-      const found = await body.probe(scaled).catch(() => null)
-      if (a.type === 'type' && found?.secret) return end('NEED_USER', `השדה מבקש סיסמה, קוד או פרטי כרטיס. את זה תזין בעצמך ${body.name === 'phone' ? 'בטלפון' : 'בחלון של העוזר במחשב'}, ואז תגיד לי להמשיך.`)
-      const commitKey = a.type === 'key' && /^(enter|space)$/i.test(String(a.keys).trim())
-      if (survey && found?.label && (CART.test(found.label) || COMMIT.test(found.label)) && a.type !== 'type') {
-        messages.push({ role: 'user', content: `Blocked: "${found.label.slice(0, 80)}" would leave the survey (cart or checkout). Go back and finish the ranked list with "done".` })
-        continue
-      }
-      if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && body.settings?.test(found.label)) {
-        messages.push({ role: 'user', content: `Blocked: "${found.label.slice(0, 80)}" changes a setting or a permission. Reply with a "gate" of kind "account" and this action as "then".` })
-        continue
-      }
-      if ((a.type !== 'key' || commitKey) && a.type !== 'type' && found?.label && (COMMIT.test(found.label) || body.commit?.test(found.label))) {
-        messages.push({ role: 'user', content: `Blocked by the safety check: the control there reads "${found.label.slice(0, 80)}", which may pay, order, send, call or delete. If it commits, reply with a "gate" with the details on screen and this action as "then". If it does not, take another way forward.` })
-        continue
+      // A body that waits for its own screen to settle (the phone) needs no fixed pause.
+      const pause = a.type === 'wait' ? Math.min(10, Number(a.amount) || 2) * 1000 : body.settled ? 0 : a.type === 'navigate' ? 2500 : 900
+      if (pause) await sleep(pause, signal)
+      if (enter && !last) {
+        messages.push({ role: 'user', content: `The batch stopped after "enter": ${list.length - i - 1} action(s) after it did not run. Look at the new screen.` })
+        continue steps
       }
     }
-    if (a.type !== 'wait') {
-      try {
-        // Some actions answer with text (the phone's notifications); the model gets it with the next screen.
-        const info = await body.act(scaled)
-        if (typeof info === 'string' && info) messages.push({ role: 'user', content: `Result of that action:\n${info}` })
-      } catch (e) {
-        messages.push({ role: 'user', content: `That action failed: ${e.message}` })
-      }
-    }
-    // A body that waits for its own screen to settle (the phone) needs no fixed pause.
-    const pause = a.type === 'wait' ? Math.min(10, Number(a.amount) || 2) * 1000 : body.settled ? 0 : a.type === 'navigate' ? 2500 : 900
-    if (pause) await sleep(pause, signal)
   }
   return end('FAIL', `עצרתי אחרי ${body.maxSteps} צעדים בלי להגיע למטרה.`)
 }
 
 // Back from screenshot pixels to screen pixels.
 function scale(a, shot) {
-  return Number.isFinite(a.x) ? { ...a, x: a.x * shot.scale + shot.left, y: a.y * shot.scale + shot.top } : a
+  if (!Number.isFinite(a.x)) return a
+  const out = { ...a, x: a.x * shot.scale + shot.left, y: a.y * shot.scale + shot.top }
+  if (Number.isFinite(a.x2) && Number.isFinite(a.y2)) Object.assign(out, { x2: a.x2 * shot.scale + shot.left, y2: a.y2 * shot.scale + shot.top })
+  return out
 }
 
 // A task on the user's phone, through the HELPER app (run_on_phone). "Stop" in the app's bubble or notification ends
@@ -409,4 +463,4 @@ export async function runErrand(goal, constraints, ctx, opts = {}) {
 }
 
 // Exposed for the self-test only.
-export const _test = { BODIES, COMMIT, CART, gateCard, RULES, SURVEY_ONLY }
+export const _test = { BODIES, COMMIT, CART, gateCard, RULES, SURVEY_ONLY, batchOf, scale }

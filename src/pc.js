@@ -26,12 +26,19 @@ export function ps(script, timeoutMs = 60000) {
 // A PowerShell string literal: single quotes, with inner single quotes doubled.
 const lit = (s) => `'${String(s).replace(/'/g, "''")}'`
 
-// Low-level input. DPI awareness makes screen pixels and cursor positions the same numbers.
+// Low-level input. DPI awareness makes screen pixels and cursor positions the same numbers. Per-monitor awareness
+// (Windows 10 1703+) keeps them the same on every monitor even when they scale differently; older Windows falls back
+// to system awareness.
 const INPUT = `
 Add-Type @"
 using System; using System.Runtime.InteropServices;
 public static class U {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+  public static void Dpi() {
+    try { if (SetProcessDpiAwarenessContext((IntPtr)(-4))) return; } catch (EntryPointNotFoundException) { }
+    SetProcessDPIAware();
+  }
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
@@ -70,7 +77,7 @@ public static class U {
   }
 }
 "@
-[U]::SetProcessDPIAware() | Out-Null
+[U]::Dpi()
 `
 
 // ---- media ----
@@ -94,19 +101,27 @@ export async function media(action, level) {
 
 // ---- screen ----
 
-// Captures the primary screen to a PNG. maxWidth scales it down (for the model); 0 keeps full size.
+// Captures the screen to a PNG. maxWidth scales it down (for the model); 0 keeps full size.
 // Returns { file, width, height, scale, left, top } where scale converts image pixels back to screen pixels.
+// maxWidth may also be { width, target }: target "active" takes the monitor that holds the foreground window, and
+// "window" only that window (both add the foreground window and a coarse grey grid, `sig`, for "did anything change").
+// It stays one argument so the bridge call above and any guard placed before the capture cover every target.
 export async function screenshot(maxWidth = 0) {
   if (remoteActive()) return remoteCall('screenshot', [maxWidth])
   // This machine's screen can show the errand browser, where the vault filled a password: no picture after a fill.
   if (imagesBlocked()) throw Object.assign(new Error('צילום המסך חסום מאז שמולאה סיסמה שמורה בדפדפן במחשב הזה. הפעלה מחדש של העוזר מחזירה אותו.'), { code: 'withheld' })
+  const opts = maxWidth && typeof maxWidth === 'object' ? maxWidth : { width: maxWidth }
   const file = path.join(os.tmpdir(), `helper-screen-${Date.now()}.png`)
+  if (opts.target === 'active' || opts.target === 'window') {
+    const r = JSON.parse(await ps(captureScript(file, opts.width, opts.target)))
+    return { file, width: r.width, height: r.height, scale: r.full / r.width, left: r.left, top: r.top, sig: r.sig, window: r.window, target: r.target }
+  }
   const out = await ps(`${INPUT}
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
 $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size); $g.Dispose()
-$w = $b.Width; $h = $b.Height; $max = ${Number(maxWidth) || 0}
+$w = $b.Width; $h = $b.Height; $max = ${Number(opts.width) || 0}
 if ($max -gt 0 -and $w -gt $max) {
   $nh = [int]($h * $max / $w); $s = New-Object System.Drawing.Bitmap $max, $nh
   $g2 = [System.Drawing.Graphics]::FromImage($s); $g2.InterpolationMode = 'HighQualityBicubic'; $g2.DrawImage($bmp, 0, 0, $max, $nh); $g2.Dispose()
@@ -253,7 +268,8 @@ ${pressEnter ? 'Start-Sleep -Milliseconds 80; [U]::Tap(0x0D)' : ''}
     await ps(script)
   } else {
     // For Hebrew or complex text in windows, paste via clipboard + Ctrl+V
-    await ps(`${INPUT} Set-Clipboard -Value ${lit(str)}; Start-Sleep -Milliseconds 80; [U]::Down(0x11); [U]::Tap(0x56); [U]::Up(0x11)${pressEnter ? '; Start-Sleep -Milliseconds 100; [U]::Tap(0x0D)' : ''}`)
+    // The clipboard's own text is put back afterwards (clipboardPasteScript).
+    await ps(clipboardPasteScript(str, pressEnter))
   }
 
   return `הוקלד: "${str}"${pressEnter ? ' (נלחץ Enter)' : ''}`
@@ -446,7 +462,246 @@ const VK = {
 }
 const keyCode = (k) => VK[k] ?? (/^[a-z0-9]$/.test(k) ? k.toUpperCase().charCodeAt(0) : null)
 
-// Runs one action on the real screen. x and y are screen pixels.
+// Windows, focus and UI Automation, for the desktop agent's checks (src/desktop-body.js). Names of controls and
+// windows only: no field value is ever read, and a password box reports only that it is one.
+const WIN = `
+Add-Type @"
+using System; using System.Text; using System.Runtime.InteropServices;
+public static class W {
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  public static string Text(IntPtr h) { StringBuilder s = new StringBuilder(512); GetWindowText(h, s, 512); return s.ToString(); }
+  public static string Cls(IntPtr h) { StringBuilder s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
+  public static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
+  public static IntPtr TopAt(int x, int y) { POINT p; p.X = x; p.Y = y; return GetAncestor(WindowFromPoint(p), 2); }
+}
+"@
+function WinInfo($h) {
+  $n = ''
+  try { $n = (Get-Process -Id ([W]::Pid($h)) -ErrorAction Stop).ProcessName } catch { }
+  @{ hwnd = [string]([int64]$h); title = [W]::Text($h); cls = [W]::Cls($h); process = $n }
+}
+`
+
+// The name and kind of a UI Automation element, or of the nearest named ancestor that is still a control (a window's
+// or pane's own title is not the control's label). Never a value.
+const UIA = `
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+function ElemInfo($e) {
+  $o = @{ label = ''; role = ''; password = $false; enabled = $true }
+  if (-not $e) { return $o }
+  $o.password = [bool]$e.Current.IsPassword
+  $o.enabled = [bool]$e.Current.IsEnabled
+  $o.role = $e.Current.ControlType.ProgrammaticName -replace '^ControlType\\.', ''
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $cur = $e; $i = 0
+  while ($cur -and $i -lt 4) {
+    $r = $cur.Current.ControlType.ProgrammaticName -replace '^ControlType\\.', ''
+    if ($i -gt 0 -and @('Window', 'Pane', 'Document', 'TitleBar') -contains $r) { break }
+    if ($cur.Current.Name) { $o.label = [string]$cur.Current.Name; if ($i -gt 0) { $o.role = $r }; break }
+    $cur = $walker.GetParent($cur); $i++
+  }
+  if ($o.password) { $o.label = 'password field' }
+  if ($o.label.Length -gt 200) { $o.label = $o.label.Substring(0, 200) }
+  return $o
+}
+`
+
+// Script builders, exported for the self-test (it parses them with PowerShell; it cannot run them off Windows).
+export function captureScript(file, maxWidth, target) {
+  return `${INPUT}${WIN}
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+$fg = [W]::GetForegroundWindow()
+$b = [System.Windows.Forms.Screen]::FromHandle($fg).Bounds
+$t = 'active'
+if (${lit(target)} -eq 'window') {
+  $r = New-Object W+RECT
+  if ([W]::GetWindowRect($fg, [ref]$r)) {
+    $wr = [System.Drawing.Rectangle]::Intersect((New-Object System.Drawing.Rectangle $r.Left, $r.Top, ($r.Right - $r.Left), ($r.Bottom - $r.Top)), $b)
+    if ($wr.Width -ge 120 -and $wr.Height -ge 80) { $b = $wr; $t = 'window' }
+  }
+}
+$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+$g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size); $g.Dispose()
+$tn = New-Object System.Drawing.Bitmap 64, 36
+$gt = [System.Drawing.Graphics]::FromImage($tn); $gt.InterpolationMode = 'HighQualityBilinear'; $gt.DrawImage($bmp, 0, 0, 64, 36); $gt.Dispose()
+$sb = New-Object System.Text.StringBuilder
+for ($yy = 0; $yy -lt 36; $yy++) { for ($xx = 0; $xx -lt 64; $xx++) { $c = $tn.GetPixel($xx, $yy); [void]$sb.Append(('{0:x2}' -f [int](($c.R * 30 + $c.G * 59 + $c.B * 11) / 100))) } }
+$tn.Dispose()
+$w = $b.Width; $h = $b.Height; $max = ${Number(maxWidth) || 0}
+if ($max -gt 0 -and $w -gt $max) {
+  $nh = [int]($h * $max / $w); $s = New-Object System.Drawing.Bitmap $max, $nh
+  $g2 = [System.Drawing.Graphics]::FromImage($s); $g2.InterpolationMode = 'HighQualityBicubic'; $g2.DrawImage($bmp, 0, 0, $max, $nh); $g2.Dispose()
+  $bmp.Dispose(); $bmp = $s
+}
+$bmp.Save(${lit(file)}, [System.Drawing.Imaging.ImageFormat]::Png)
+@{ width = $bmp.Width; height = $bmp.Height; full = $w; left = $b.Left; top = $b.Top; target = $t; sig = $sb.ToString(); window = (WinInfo $fg) } | ConvertTo-Json -Compress -Depth 4
+$bmp.Dispose()`
+}
+
+export function inspectScript(x, y) {
+  const X = Math.round(Number(x))
+  const Y = Math.round(Number(y))
+  if (!Number.isFinite(X) || !Number.isFinite(Y)) throw new Error('נקודה לא תקינה')
+  return `${INPUT}${WIN}${UIA}
+$o = @{ at = (WinInfo ([W]::TopAt(${X}, ${Y}))); fg = (WinInfo ([W]::GetForegroundWindow())) }
+try { $o.el = ElemInfo ([System.Windows.Automation.AutomationElement]::FromPoint((New-Object System.Windows.Point ${X}, ${Y}))) } catch { $o.uia = [string]$_.Exception.Message }
+$o | ConvertTo-Json -Compress -Depth 4`
+}
+
+export function focusScript() {
+  return `${INPUT}${WIN}${UIA}
+$o = @{ fg = (WinInfo ([W]::GetForegroundWindow())) }
+try { $o.el = ElemInfo ([System.Windows.Automation.AutomationElement]::FocusedElement) } catch { $o.uia = [string]$_.Exception.Message }
+$o | ConvertTo-Json -Compress -Depth 4`
+}
+
+export function focusWindowScript(query) {
+  return `${INPUT}${WIN}
+$q = ${lit(String(query || '').slice(0, 120))}
+$p = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and ($_.MainWindowTitle -like "*$q*" -or $_.ProcessName -like "*$q*") } | Select-Object -First 1
+if (-not $p) { @{ ok = $false; reason = 'none' } | ConvertTo-Json -Compress; return }
+$h = $p.MainWindowHandle
+if ([W]::IsIconic($h)) { [W]::ShowWindow($h, 9) | Out-Null }
+[U]::Tap(0x12)
+[W]::SetForegroundWindow($h) | Out-Null
+Start-Sleep -Milliseconds 250
+$now = [W]::GetForegroundWindow()
+@{ ok = ($now -eq $h); window = (WinInfo $now) } | ConvertTo-Json -Compress -Depth 4`
+}
+
+// Unicode typing through SendInput: any letter (Hebrew too) reaches the focused window without the clipboard.
+const UNICODE = `
+Add-Type @"
+using System; using System.Runtime.InteropServices; using System.Threading;
+public static class K {
+  [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Explicit)] public struct UNION { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
+  [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public UNION u; }
+  [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
+  static INPUT Key(ushort vk, ushort scan, uint flags) { INPUT i = new INPUT(); i.type = 1; i.u.ki.wVk = vk; i.u.ki.wScan = scan; i.u.ki.dwFlags = flags; return i; }
+  public static int Type(string s) {
+    int sent = 0;
+    for (int at = 0; at < s.Length; at++) {
+      char c = s[at];
+      INPUT[] pair;
+      if (c == '\\n') { pair = new INPUT[] { Key(0x0D, 0, 0), Key(0x0D, 0, 2) }; }
+      else if (c == '\\r') { continue; }
+      else if (c == '\\t') { pair = new INPUT[] { Key(0x09, 0, 0), Key(0x09, 0, 2) }; }
+      else { pair = new INPUT[] { Key(0, c, 4), Key(0, c, 6) }; }
+      sent += (int)SendInput((uint)pair.Length, pair, Marshal.SizeOf(typeof(INPUT)));
+      if (at % 40 == 39) { Thread.Sleep(15); }
+    }
+    return sent;
+  }
+}
+"@
+`
+
+// Text longer than this goes through the clipboard (faster); the clipboard's text is put back afterwards.
+export const UNICODE_MAX = 1000
+
+export function typeScript(text, expectHwnd) {
+  const str = String(text ?? '')
+  if (str.length <= UNICODE_MAX) return `${INPUT}${UNICODE}${focusGuard(expectHwnd, true)}[K]::Type(${lit(str)}) | Out-Null`
+  return clipboardPasteScript(str, false, expectHwnd)
+}
+
+// The last check before a keystroke, inside the same script that sends it: the foreground window must still be the
+// one the agent checked, and for typing the focused control must not be a password field. Anything else prints a
+// refusal (act() turns it into an error) and sends nothing. Without a window (pc_press_key, older callers) no check.
+const REFUSED = 'HELPER_REFUSED:'
+export function focusGuard(expectHwnd, typing) {
+  if (expectHwnd === undefined || expectHwnd === null) return ''
+  const want = String(expectHwnd)
+  if (!/^\d{1,20}$/.test(want)) return `'${REFUSED}window'; return
+`
+  return `${WIN}
+$fgNow = [W]::GetForegroundWindow()
+if ([string]([int64]$fgNow) -ne '${want}') { '${REFUSED}focus'; return }
+${typing ? `Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$feNow = $null; try { $feNow = [System.Windows.Automation.AutomationElement]::FocusedElement } catch { }
+if (-not $feNow) { '${REFUSED}nofocus'; return }
+if ($feNow.Current.IsPassword) { '${REFUSED}password'; return }
+` : ''}`
+}
+const REFUSAL = {
+  focus: 'המקלדת כבר לא בחלון שנבדק, אז לא הוקלד כלום',
+  nofocus: 'Windows לא אמר איזה שדה בפוקוס, אז לא הוקלד כלום',
+  password: 'השדה בפוקוס הוא שדה סיסמה, אז לא הוקלד כלום',
+  window: 'חלון לא תקין, לא הוקלד כלום',
+}
+async function guarded(script) {
+  const out = String((await ps(script)) ?? '')
+  const i = out.indexOf(REFUSED)
+  if (i >= 0) {
+    const why = out.slice(i + REFUSED.length).trim().split(/\s/)[0]
+    throw Object.assign(new Error(REFUSAL[why] || 'לא הוקלד כלום'), { code: 'refused', why })
+  }
+  return out
+}
+
+// Paste through the clipboard and put back what was there. Only an empty or text clipboard is borrowed; anything
+// else (a picture, copied files) is left alone and the text is typed letter by letter instead.
+export function clipboardPasteScript(str, pressEnter = false, expectHwnd) {
+  return `${INPUT}${UNICODE}${focusGuard(expectHwnd, true)}
+$hadText = $false; $old = $null; $other = $false
+try {
+  $fmt = Get-Clipboard -Format FileDropList -ErrorAction SilentlyContinue; if ($fmt) { $other = $true }
+  if (-not $other) { $img = Get-Clipboard -Format Image -ErrorAction SilentlyContinue; if ($img) { $other = $true; $img.Dispose() } }
+  if (-not $other) { $old = Get-Clipboard -Format Text -Raw -ErrorAction SilentlyContinue; if ($null -ne $old) { $hadText = $true } }
+} catch { $other = $true }
+if ($other) {
+  [K]::Type(${lit(str)}) | Out-Null
+} else {
+  Set-Clipboard -Value ${lit(str)}; Start-Sleep -Milliseconds 80; [U]::Down(0x11); [U]::Tap(0x56); [U]::Up(0x11)
+  Start-Sleep -Milliseconds 350
+  try { if ($hadText -and $old -ne '') { Set-Clipboard -Value $old } else { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::Clear() } } catch { }
+}
+${pressEnter ? 'Start-Sleep -Milliseconds 100; [U]::Tap(0x0D)' : ''}`
+}
+
+// A press, a few steps of movement and a release: enough for most drag targets (files, sliders, windows, cards).
+export function dragScript(x, y, x2, y2, steps = 12) {
+  const n = Math.max(2, Math.min(40, Math.round(steps)))
+  const [ax, ay, bx, by] = [x, y, x2, y2].map((v) => Math.round(Number(v)))
+  if (![ax, ay, bx, by].every(Number.isFinite)) throw new Error('נקודת גרירה לא תקינה')
+  return `${INPUT}[U]::SetCursorPos(${ax}, ${ay}) | Out-Null; Start-Sleep -Milliseconds 80
+[U]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 120
+for ($i = 1; $i -le ${n}; $i++) { [U]::SetCursorPos([int](${ax} + (${bx} - ${ax}) * $i / ${n}), [int](${ay} + (${by} - ${ay}) * $i / ${n})) | Out-Null; Start-Sleep -Milliseconds 25 }
+Start-Sleep -Milliseconds 120; [U]::mouse_event(4,0,0,0,[UIntPtr]::Zero)`
+}
+
+// The control at a screen point and the window that owns it, plus the foreground window.
+export async function inspectAt(x, y) {
+  if (remoteActive()) return remoteCall('inspectAt', [x, y])
+  return JSON.parse(await ps(inspectScript(x, y), 20000))
+}
+
+// The focused control and the foreground window.
+export async function focusInfo() {
+  if (remoteActive()) return remoteCall('focusInfo', [])
+  return JSON.parse(await ps(focusScript(), 20000))
+}
+
+// Brings the first window whose title or program matches to the front, and says whether it really is in front now.
+export async function focusWindow(query) {
+  if (remoteActive()) return remoteCall('focusWindow', [query])
+  return JSON.parse(await ps(focusWindowScript(query), 20000))
+}
+
+// Runs one action on the real screen. x and y (and x2, y2 for a drag) are screen pixels.
 export async function act(action) {
   if (remoteActive()) return remoteCall('act', [action])
   const { type, x, y, text, keys, amount } = action
@@ -456,18 +711,23 @@ export async function act(action) {
   if (type === 'right_click') return ps(`${INPUT} ${at}[U]::mouse_event(8,0,0,0,[UIntPtr]::Zero); [U]::mouse_event(16,0,0,0,[UIntPtr]::Zero)`)
   if (type === 'move') return ps(`${INPUT} ${at}`)
   if (type === 'scroll') return ps(`${INPUT} ${at}[U]::mouse_event(0x800,0,0,${Math.round(-(Number(amount) || 3) * 120)},[UIntPtr]::Zero)`)
-  // Typed through the clipboard and Ctrl+V: the reliable way to enter Hebrew and symbols in any window.
-  if (type === 'type') return ps(`${INPUT} Set-Clipboard -Value ${lit(text ?? '')}; Start-Sleep -Milliseconds 80; [U]::Down(0x11); [U]::Tap(0x56); [U]::Up(0x11)`)
+  if (type === 'drag') return ps(dragScript(x, y, action.x2, action.y2))
+  // Typed as Unicode keystrokes, so Hebrew and symbols work in any window and the clipboard is not touched.
+  // Long text is pasted, and the clipboard's own text is put back after.
+  if (type === 'type') return guarded(typeScript(text, action.expectHwnd))
   if (type === 'key') {
     const codes = String(keys || '').toLowerCase().split('+').map((k) => k.trim()).filter(Boolean).map(keyCode)
     if (!codes.length || codes.includes(null)) throw new Error(`מקש לא מוכר: ${keys}`)
     const mods = codes.slice(0, -1)
     const main = codes.at(-1)
-    return ps(`${INPUT} ${mods.map((c) => `[U]::Down(${c}); `).join('')}[U]::Tap(${main}); ${mods.reverse().map((c) => `[U]::Up(${c}); `).join('')}`)
+    return guarded(`${INPUT}${focusGuard(action.expectHwnd, false)} ${mods.map((c) => `[U]::Down(${c}); `).join('')}[U]::Tap(${main}); ${mods.reverse().map((c) => `[U]::Up(${c}); `).join('')}`)
   }
   if (type === 'wait') return new Promise((r) => setTimeout(r, Math.min(10, Number(amount) || 2) * 1000))
   throw new Error(`פעולה לא מוכרת: ${type}`)
 }
+
+// Exposed for the self-test only.
+export const _scripts = { INPUT, WIN, UIA, UNICODE }
 
 // ---- security, webcam & screen recording ----
 
