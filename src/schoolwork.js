@@ -281,7 +281,7 @@ export function sourceFailed(source, error, nowMs = Date.now()) {
 }
 
 // ── alerts ─────────────────────────────────────────────────────────────────────────────────────────
-const LABEL = { classroom: 'Classroom', webtop: 'Webtop', groups: 'קבוצת וואטסאפ' }
+const LABEL = { classroom: 'Classroom', webtop: 'Webtop', webtopHomework: 'לוח שיעורי הבית ב-Webtop', groups: 'קבוצת וואטסאפ' }
 const where = (i) => (i.source === 'groups' ? `קבוצת ${i.course || 'וואטסאפ'}` : `${LABEL[i.source]}${i.course ? `, ${i.course}` : ''}`)
 const UNSURE = { low: ' (לא בטוח)', medium: '', high: '' }
 export const itemLine = (i, nowMs = Date.now()) => `${i.n}. ${i.title} · ${dueLabel(i.due, nowMs)} · ${where(i)}${UNSURE[i.confidence] || ''}${i.also.length ? ` (גם ב-${[...new Set(i.also.map((a) => LABEL[a.source]))].join(', ')})` : ''}`
@@ -405,14 +405,45 @@ export function webtopAssignments(read) {
 // webtop-watch.js webtopUpdates(): the same read that sends grade and timetable notices.
 export async function fromWebtop(read, notify, nowMs = Date.now()) {
   if (!enabled()) return null
-  // The changes part is where exams and assignments are. Without it this read says nothing about homework.
-  if (!read?.changes) {
-    sourceFailed('webtop', 'הקריאה מ-Webtop חזרה בלי רשימת המבחנים והמטלות', nowMs)
-    return null
-  }
-  const out = ingest('webtop', webtopAssignments(read), nowMs)
+  const out = { fresh: [], updated: [] }
+  const add = (r) => (out.fresh.push(...r.fresh), out.updated.push(...r.updated))
+  // The changes part is where exams and assignments are. Without it this read says nothing about them.
+  if (!read?.changes) sourceFailed('webtop', 'הקריאה מ-Webtop חזרה בלי רשימת המבחנים והמטלות', nowMs)
+  else add(ingest('webtop', webtopAssignments(read), nowMs))
+  // The homework board, from the same read (session.js, dashboard/GetHomeWork). Its own source, so its coverage is
+  // said on its own line: not asked, not answered, or an answer in a shape Helper does not know are all gaps.
+  const hw = webtopHomework(read?.homework)
+  if (hw.error) sourceFailed('webtopHomework', hw.error, nowMs)
+  else add(ingest('webtopHomework', hw.entries, nowMs))
   await announce(notify, out.fresh, out.updated, nowMs)
   return out
+}
+
+// The answer of dashboard/GetHomeWork. Its fields are not documented anywhere and were not seen on a real account
+// (pywebtop names the call, not its answer), so this reads the common names and refuses anything else: a list
+// whose items have no recognizable text is "a shape I do not know", never "no homework".
+// -> { entries } or { error }
+const pick = (o, names) => {
+  for (const n of names) if (o?.[n] !== undefined && o[n] !== null && String(o[n]).trim() !== '') return o[n]
+  return ''
+}
+const noTags = (v) => plain(String(v ?? '').replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' '))
+export function webtopHomework(part) {
+  if (!part?.asked) return { error: 'לא נקרא: הקריאה מ-Webtop לא כללה את לוח שיעורי הבית (למשל חלון בבית עם קוד ישן)' }
+  if (part.data === undefined) return { error: `הדף ${config.webtop.homeworkPath} לא ביקש את לוח שיעורי הבית, אז לא נקרא${part.error ? ` (${clip(part.error, 80)})` : ''}` }
+  const d = part.data
+  const list = Array.isArray(d) ? d : [d?.homeWork, d?.homeWorks, d?.homework, d?.HomeWork, d?.items, d?.list, d?.data].find(Array.isArray)
+  if (!list) return { error: 'התשובה של לוח שיעורי הבית בצורה שאני לא מכיר, אז לא נקרא' }
+  const entries = []
+  for (const h of list) {
+    const title = noTags(pick(h, ['homeWork', 'homework', 'homeWorkText', 'homeworkText', 'description', 'content', 'title', 'text', 'remark']))
+    const course = noTags(pick(h, ['subject', 'subjectName', 'professionName', 'lessonName', 'course', 'teacherSubject']))
+    if (!title) return { error: 'יש פריטים בלוח שיעורי הבית, אבל בלי שדה טקסט שאני מכיר, אז לא נקרא' }
+    const day = isoDay(pick(h, ['dueDate', 'toDate', 'homeWorkDate', 'homeworkDate', 'endDate', 'date', 'lessonDate']))
+    const id = pick(h, ['id', 'homeWorkId', 'homeworkId', 'HomeWorkId', 'homeWorkID'])
+    entries.push({ sourceId: id !== '' ? `hw:${id}` : `hw:${day}:${digest([course, title])}`, title, course, due: day ? { day, time: null } : null, confidence: 'medium' })
+  }
+  return { entries }
 }
 
 const HOMEWORK_WORDS = /שיעורי ה?בית|ש"ב|להגיש|הגשה|מטלה|מטלות|דף עבודה|תרגיל|עבודה ב/
@@ -474,9 +505,9 @@ export async function coverage(nowMs = Date.now()) {
   row('classroom', 'Classroom', 30, 'נבדק כל 5 דקות', await probes.classroom().catch(() => false))
   const webtopEvery = config.webtop.alertsMinutes
   row('webtop', 'Webtop (מבחנים, מטלות והודעות)', webtopEvery * 2 + 15, `נבדק פעם ב-${webtopEvery} דק', לא בזמן אמת`, await probes.webtop().catch(() => false))
-  // Webtop has a homework board of its own. Helper does not read it (no reader exists for it, and adding one means a
-  // new authenticated read that was not approved), so whatever is only there is not covered. Always a gap.
-  rows.push({ source: 'webtop-homework', label: 'לוח שיעורי הבית ב-Webtop', ok: false, text: 'לוח שיעורי הבית ב-Webtop: לא נקרא בכלל, אז שיעורי בית שמופיעים רק שם לא נבדקו' })
+  // The homework board: one more page in that same hourly read, on its own line, so a board that was not read is a
+  // gap even when the rest of Webtop was.
+  row('webtopHomework', 'לוח שיעורי הבית ב-Webtop', webtopEvery * 2 + 15, `באותה קריאה, פעם ב-${webtopEvery} דק'`, await probes.webtop().catch(() => false))
   const wanted = settings().groups
   if (!wanted.length) rows.push({ source: 'groups', label: 'קבוצות', ok: false, text: 'קבוצות וואטסאפ: לא נבחרו קבוצות של בית הספר (SCHOOLWORK_GROUPS)' })
   else if (!groups.groupsOn()) rows.push({ source: 'groups', label: 'קבוצות', ok: false, text: 'קבוצות וואטסאפ: המעקב אחרי הקבוצות כבוי' })
@@ -636,6 +667,6 @@ export async function statusText(nowMs = Date.now()) {
     '',
     ...cov.map((c) => `${c.ok ? '✓' : '✗'} ${c.text}`),
     '',
-    `שום מקור לא בזמן אמת. מטלה חדשה מגיעה כשהמקור נקרא: Classroom כל 5 דקות, קבוצות כל ${groups.settings().everyMinutes} דקות, Webtop פעם ב-${config.webtop.alertsMinutes} דקות. לוח שיעורי הבית של Webtop לא נקרא בכלל. ההתראה עוברת בשעות השקט ובתקציב ההודעות כמו כל התראה.`,
+    `שום מקור לא בזמן אמת. מטלה חדשה מגיעה כשהמקור נקרא: Classroom כל 5 דקות, קבוצות כל ${groups.settings().everyMinutes} דקות, Webtop (כולל לוח שיעורי הבית) פעם ב-${config.webtop.alertsMinutes} דקות. ההתראה עוברת בשעות השקט ובתקציב ההודעות כמו כל התראה.`,
   ].join('\n')
 }

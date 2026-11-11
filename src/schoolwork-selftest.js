@@ -127,13 +127,14 @@ const T0 = at('2026-11-10T10:00:00Z') // Tuesday 12:00 in Israel
 // ── Webtop through webtop-watch.js webtopUpdates ──────────────────────────────
 const exam = (id, title, textualType, date) => ({ id, title, textualType, date, from_hour: 3, to_hour: 4 })
 const webtopRead = (exams, messages = []) => ({ grades: [], changes: { changes: [], exams, events: [], messages }, school: [] })
+const webtopAsked = []
 const runWebtop = async (read, nowMs) => {
   webtopWatch._resetWebtopClock()
   state.webtopWatch.lastPoll = 0
   const real = Date.now
   Date.now = () => nowMs
   try {
-    await webtopWatch.webtopUpdates(notify, null, null, { read: async () => (typeof read === 'function' ? read() : read), on: () => true })
+    await webtopWatch.webtopUpdates(notify, null, null, { read: async (opts) => (webtopAsked.push(opts), typeof read === 'function' ? read() : read), on: () => true })
   } finally {
     Date.now = real
   }
@@ -288,8 +289,12 @@ const runWebtop = async (read, nowMs) => {
   const s = SW.load()
   s.sources = { classroom: { lastOk: T0, baselined: true }, webtop: { lastOk: T0, baselined: true } }
   groups.load().lastExtract = T0
+  const noBoard = await SW.summaryText(T0 + 60000)
+  check('the homework board not read yet is its own gap, so an empty list is not "no homework"', noBoard.includes('זה לא אומר שאין שיעורי בית') && noBoard.includes('✗ לוח שיעורי הבית ב-Webtop: עוד לא נקרא') && noBoard.includes('✓ Webtop (מבחנים, מטלות והודעות): נבדק'), noBoard)
+  s.sources.webtopHomework = { lastOk: T0, baselined: true }
+  groups.load().lastExtract = T0
   const clean = await SW.summaryText(T0 + 60000)
-  check('all readable sources checked and empty: still not "no homework", the Webtop homework board is named as not read', clean.includes('זה לא אומר שאין שיעורי בית') && clean.includes('✗ לוח שיעורי הבית ב-Webtop: לא נקרא בכלל') && clean.includes('✓ Webtop (מבחנים, מטלות והודעות): נבדק') && clean.split('✗').length === 2, clean)
+  check('every source read, the board too, and nothing open: says which were checked', clean.includes('לא מצאתי מטלות פתוחות ב: Classroom, Webtop (מבחנים, מטלות והודעות), לוח שיעורי הבית ב-Webtop, קבוצות') && !clean.includes('✗'), clean)
   const stale = await SW.summaryText(T0 + 3 * 3600000)
   check('an old read is stale, a gap', stale.includes('המידע ישן'), stale)
   process.env.SCHOOLWORK_GROUPS = 'י6,מגמת מחשבים'
@@ -457,7 +462,61 @@ const runWebtop = async (read, nowMs) => {
 // ── review 3: what each source really covers, and how often ────────────────────
 {
   const status = await tools.find((t) => t.name === 'school_homework').run({ action: 'status' }, {})
-  check('status says nothing is real time and gives each cadence', status.includes('שום מקור לא בזמן אמת') && status.includes('Classroom כל 5 דקות') && status.includes('קבוצות כל 10 דקות') && status.includes('Webtop פעם ב-60 דקות') && status.includes('✗ לוח שיעורי הבית ב-Webtop'), status)
+  check('status says nothing is real time and gives each cadence', status.includes('שום מקור לא בזמן אמת') && status.includes('Classroom כל 5 דקות') && status.includes('קבוצות כל 10 דקות') && status.includes('Webtop (כולל לוח שיעורי הבית) פעם ב-60 דקות') && status.includes('לוח שיעורי הבית ב-Webtop'), status)
+}
+
+// ── the Webtop homework board, through webtopUpdates ───────────────────────────
+{
+  SW.forget()
+  SW._setProbes({ classroom: async () => true, webtop: async () => true })
+  webtopAsked.length = 0
+  const board = (data) => ({ ...webtopRead([]), homework: { asked: true, data } })
+  const hw = (id, subject, text, date) => ({ id, subjectName: subject, homeWork: text, dueDate: date })
+  const B0 = at('2026-11-11T08:00:00Z')
+  await runWebtop(board([hw(11, 'היסטוריה', 'לקרוא עמודים 40-45 <br>ולענות על שאלות 1-3', '2026-11-13T00:00:00')]), B0)
+  check('the board is asked for only through the same read, while the list is on', webtopAsked.length === 1 && webtopAsked[0]?.homework === true, JSON.stringify(webtopAsked))
+  check('first board read: remembered, not announced', !sent.some((m) => m.key?.startsWith('schoolwork-alert:')) && SW.load().items.some((i) => i.source === 'webtopHomework' && i.title === 'לקרוא עמודים 40-45 ולענות על שאלות 1-3'), JSON.stringify(SW.load().items))
+  await runWebtop(board([hw(11, 'היסטוריה', 'לקרוא עמודים 40-45 <br>ולענות על שאלות 1-3', '2026-11-13T00:00:00'), hw(12, 'אנגלית', 'Workbook p. 12 ex. 4', '2026-11-16T00:00:00')]), B0 + 3600000)
+  const a = sent.find((m) => m.key?.startsWith('schoolwork-alert:'))
+  check('new homework on the board is announced, with the subject and date', Boolean(a) && a.text.includes('Workbook p. 12 ex. 4') && a.text.includes('לוח שיעורי הבית ב-Webtop, אנגלית') && a.text.includes('יום שני 16.11'), JSON.stringify(sent))
+  check('HTML from the board is not kept', !JSON.stringify(SW.load()).includes('<br>'))
+  clear()
+  const cov = async () => (await SW.coverage(B0 + 3600000 + 60000)).find((c) => c.source === 'webtopHomework')
+  check('a board that was read is covered', (await cov()).ok === true, JSON.stringify(await cov()))
+  // The page did not ask for the board this time.
+  await runWebtop(board(undefined), B0 + 2 * 3600000)
+  const notAnswered = (await SW.coverage(B0 + 2 * 3600000 + 60000)).find((c) => c.source === 'webtopHomework')
+  check('a board the page did not ask for is a gap, not "no homework"', notAnswered.ok === false && notAnswered.text.includes('לא ביקש את לוח שיעורי הבית'), JSON.stringify(notAnswered))
+  check('and what was known from it stays open', SW.load().items.filter((i) => i.source === 'webtopHomework' && i.status === 'open').length === 2)
+  // An answer in a shape Helper does not know.
+  await runWebtop(board({ weird: { x: 1 } }), B0 + 3 * 3600000)
+  check('an unknown answer shape is a gap', (await SW.coverage(B0 + 3 * 3600000 + 60000)).find((c) => c.source === 'webtopHomework').text.includes('בצורה שאני לא מכיר'))
+  await runWebtop(board([{ id: 5, foo: 'bar' }]), B0 + 4 * 3600000)
+  check('items with no text Helper knows are a gap, not empty', (await SW.coverage(B0 + 4 * 3600000 + 60000)).find((c) => c.source === 'webtopHomework').text.includes('בלי שדה טקסט'))
+  // A home window running older code answers without the board.
+  await runWebtop(webtopRead([]), B0 + 5 * 3600000)
+  check('a read without the board part (older home code) is a gap', (await SW.coverage(B0 + 5 * 3600000 + 60000)).find((c) => c.source === 'webtopHomework').text.includes('לא כללה את לוח שיעורי הבית'))
+  // An empty board, answered: read, nothing on it.
+  await runWebtop(board({ homeWork: [] }), B0 + 6 * 3600000)
+  check('an empty board that answered is covered', (await SW.coverage(B0 + 6 * 3600000 + 60000)).find((c) => c.source === 'webtopHomework').ok === true)
+  check('an empty board does not close what was on it', SW.load().items.filter((i) => i.source === 'webtopHomework' && i.status === 'open').length === 2)
+  // The same assignment on the exam list and the board: one item.
+  await runWebtop({ ...webtopRead([exam(31, 'עבודה באנגלית Workbook p. 12 ex. 4', 'הגשה', '2026-11-16T00:00:00')]), homework: { asked: true, data: [hw(12, 'אנגלית', 'Workbook p. 12 ex. 4', '2026-11-16T00:00:00')] } }, B0 + 7 * 3600000)
+  check('the same work on the exam list and the board is one item', SW.load().items.filter((i) => i.title.includes('Workbook')).length === 1 && !sent.some((m) => m.key?.startsWith('schoolwork-alert:') && m.text.includes('Workbook')), JSON.stringify(SW.load().items.filter((i) => i.title.includes('Workbook'))))
+  clear()
+  // Signed out: both Webtop lines are gaps.
+  await runWebtop(() => {
+    throw Object.assign(new Error('Webtop דורש התחברות מחדש'), { code: 'WEBTOP_LOGIN' })
+  }, B0 + 8 * 3600000)
+  const rows = await SW.coverage(B0 + 8 * 3600000 + 60000)
+  check('signed out: the board is a gap too', rows.find((c) => c.source === 'webtopHomework').ok === false && rows.find((c) => c.source === 'webtop').ok === false)
+  // With the list off, the read is exactly what it was: the board is not asked for.
+  process.env.SCHOOLWORK = 'off'
+  webtopAsked.length = 0
+  await runWebtop(webtopRead([]), B0 + 9 * 3600000)
+  check('with SCHOOLWORK off the board is not asked for', webtopAsked.length === 1 && webtopAsked[0]?.homework === false, JSON.stringify(webtopAsked))
+  process.env.SCHOOLWORK = 'on'
+  clear()
 }
 
 console.log(ok ? '\nschoolwork: all passed' : '\nschoolwork: FAILED')

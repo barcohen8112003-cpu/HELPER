@@ -6,7 +6,7 @@
 import { config } from './config.js'
 import { state, save } from './store.js'
 import { sessionEnabled, readWebtopUpdates, isWebtopLoginError, isWebtopBlockedError } from './session.js'
-import { fromWebtop, sourceFailed } from './schoolwork.js'
+import { fromWebtop, sourceFailed, enabled as schoolworkOn } from './schoolwork.js'
 
 const DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת']
 const KEEP = 800
@@ -119,7 +119,8 @@ export async function webtopUpdates(notify, _runTask, _monitoring, { read: readN
   last = Date.now()
   running = true
   try {
-    const read = await readNow()
+    // The homework board is one more page in the same read, and only while the homework list is on.
+    const read = await readNow({ homework: schoolworkOn() })
     w.lastPoll = Date.now()
     const plan = planWebtopNotice(read, w.seen)
     w.seen = plan.seen
@@ -135,7 +136,9 @@ export async function webtopUpdates(notify, _runTask, _monitoring, { read: readN
   } catch (e) {
     w.error = e.message || String(e)
     save()
-    sourceFailed('webtop', isWebtopLoginError(e) ? 'Webtop לא מחובר (צריך להתחבר מחדש)' : isWebtopBlockedError(e) ? 'Webtop חסום מהשרת' : w.error)
+    const why = isWebtopLoginError(e) ? 'Webtop לא מחובר (צריך להתחבר מחדש)' : isWebtopBlockedError(e) ? 'Webtop חסום מהשרת' : w.error
+    sourceFailed('webtop', why)
+    sourceFailed('webtopHomework', why)
     if (!isWebtopLoginError(e) && !isWebtopBlockedError(e)) console.log(`[webtop-watch] ${w.error}`)
   } finally {
     running = false
