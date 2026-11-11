@@ -85,11 +85,18 @@ function fakePc({ controls = {}, focus = { fg: WIN.notepad, el: { label: 'Text e
       return { ok: true, window: w }
     },
     async act(a) {
+      // What pc.js does in the same script as the keystroke: refuse if the foreground window is not the checked one.
+      if (a.expectHwnd !== undefined && a.expectHwnd !== state.focus.fg.hwnd) {
+        refused.push(a)
+        throw Object.assign(new Error('המקלדת כבר לא בחלון שנבדק, אז לא הוקלד כלום'), { code: 'refused' })
+      }
       acts.push(a)
+      await state.afterAct?.(a)
       return ''
     },
   }
-  return { api, acts, shots, state }
+  const refused = []
+  return { api, acts, shots, state, refused }
 }
 
 // Replies with the scripted replies in order (an action, or { actions: [...] }), then "done".
@@ -207,6 +214,55 @@ ok(windowKind({ title: 'Inbox - me@x.com - Gmail - Google Chrome', process: 'chr
   }
   await runGoal({ goal: 'x', body: b, ctx: {}, think })
   ok(fake.acts.length === 0, '7. typing does not go to a window that took focus after the screenshot')
+}
+
+// 7b. The reviewer's case: a batch clicks into a window, a pop-up takes focus, and the typing that follows must not
+// go to the pop-up. The window the click landed in is the only one typing may reach.
+{
+  const popup = { hwnd: '999', title: 'Update available', process: 'updater' }
+  const fake = fakePc({ controls: { '2920,800': { at: WIN.chrome, el: { label: 'Search', role: 'Edit' } } }, focus: { fg: WIN.chrome, el: { label: 'Search', role: 'Edit' } } })
+  fake.state.afterAct = (a) => {
+    if (a.type === 'click') fake.state.focus = { fg: popup, el: { label: 'Comment', role: 'Edit' } }
+  }
+  const think = script({ actions: [{ type: 'click', x: 500, y: 400 }, { type: 'type', text: 'hello' }, { type: 'key', keys: 'enter' }] })
+  await runGoal({ goal: 'x', body: body(fake), ctx: {}, think })
+  ok(fake.acts.map((a) => a.type).join(',') === 'click', '7b. after a click, typing does not adopt a pop-up that took focus: only the click ran')
+  ok(allText(null, think).includes('not in the window you saw'), '7b. the model is told the keyboard moved')
+}
+// 7c. The pop-up appears between the check and the keystroke: the check inside the keystroke's own script refuses.
+{
+  const popup = { hwnd: '999', title: 'Update available', process: 'updater' }
+  const fake = fakePc({ focus: { fg: WIN.notepad, el: { label: 'Text editor', role: 'Document' } } })
+  const focusInfo = fake.api.focusInfo
+  fake.api.focusInfo = async () => {
+    const r = await focusInfo()
+    fake.state.focus = { fg: popup, el: { label: 'Comment', role: 'Edit' } }
+    return r
+  }
+  const think = script({ type: 'type', text: 'hello' })
+  await runGoal({ goal: 'x', body: body(fake), ctx: {}, think })
+  ok(fake.acts.length === 0 && fake.refused.length === 1 && fake.refused[0].expectHwnd === WIN.notepad.hwnd, '7c. a keystroke carries the checked window, and focus moving after the check means nothing is typed')
+  ok(allText(null, think).includes('לא הוקלד כלום'), '7c. the model hears that nothing was typed')
+}
+// 7d. After alt+tab (focus moved, Windows did not say where), typing in the same batch waits for a new look.
+{
+  const fake = fakePc()
+  const think = script({ actions: [{ type: 'key', keys: 'alt+tab' }, { type: 'type', text: 'x' }] })
+  await runGoal({ goal: 'x', body: body(fake), ctx: {}, think })
+  ok(fake.acts.length === 1 && fake.acts[0].keys === 'alt+tab' && allText(null, think).includes('not known which window'), '7d. typing after alt+tab in a batch does not run')
+  // A right-click menu, the same.
+  const fake2 = fakePc({ controls: { '2920,800': { at: WIN.notepad, el: { label: 'Text editor', role: 'Document' } } } })
+  const t2 = script({ type: 'right_click', x: 500, y: 400 }, { type: 'type', text: 'x' })
+  // Without a new screenshot in between, the latch would be unknown; with one, it is the new foreground window.
+  await runGoal({ goal: 'x', body: body(fake2), ctx: {}, think: t2 })
+  ok(fake2.acts.map((a) => a.type).join(',') === 'right_click,type', '7d. after a new look, typing goes to the window in that look')
+}
+// 7e. focus_window: typing goes to the window Windows says came forward, and only that one.
+{
+  const fake = fakePc()
+  const think = script({ actions: [{ type: 'focus_window', title: 'chrome' }] }, { actions: [{ type: 'type', text: 'x' }] })
+  await runGoal({ goal: 'x', body: body(fake), ctx: {}, think })
+  ok(fake.acts.length === 1 && fake.acts[0].expectHwnd === WIN.chrome.hwnd, '7e. after focus_window, typing is bound to the window that came forward')
 }
 
 // 8. Fail closed: when Windows cannot say what is there, nothing runs, and after three misses the run stops.
@@ -393,6 +449,11 @@ ok(windowKind({ title: 'Inbox - me@x.com - Gmail - Google Chrome', process: 'chr
   ok(/FileDropList/.test(long) && /\[K\]::Type/.test(long), '19. a clipboard holding files or a picture is left alone; the text is typed instead')
   const src = fs.readFileSync(new URL('./pc.js', import.meta.url), 'utf8')
   ok(!/Set-Clipboard -Value \$\{lit\(str\)\}; Start-Sleep -Milliseconds 80; \[U\]::Down\(0x11\); \[U\]::Tap\(0x56\); \[U\]::Up\(0x11\)\$\{pressEnter/.test(src), '19. pc_type no longer pastes without restoring the clipboard')
+  const g = pc.typeScript('שלום', '12345')
+  ok(g.indexOf("-ne '12345'") > 0 && g.indexOf("-ne '12345'") < g.indexOf('[K]::Type') && g.indexOf('IsPassword') < g.indexOf('[K]::Type'), '19. the typing script checks the foreground window and the password flag before the first keystroke')
+  ok(pc.clipboardPasteScript('x', false, '7').indexOf("-ne '7'") < pc.clipboardPasteScript('x', false, '7').indexOf('Set-Clipboard'), '19. the paste path checks the window before it touches the clipboard')
+  ok(/HELPER_REFUSED:window'; return/.test(pc.typeScript('a', '1; Remove-Item x')) && !/Remove-Item/.test(pc.typeScript('a', '1; Remove-Item x')), '19. a window id that is not a number refuses, and never reaches the script')
+  ok(!/GetForegroundWindow/.test(pc.typeScript('a')), '19. without a checked window (pc_type) the script is unchanged')
   ok(/ElemInfo/.test(pc.inspectScript(1, 2)) && !/ValuePattern|\.Value\b/.test(pc._scripts.UIA), '19. the control check reads names only, never a field value')
   let threw = false
   try {
@@ -416,6 +477,8 @@ ok(windowKind({ title: 'Inbox - me@x.com - Gmail - Google Chrome', process: 'chr
       focus: pc.focusScript(),
       focus_window: pc.focusWindowScript("it's \"q\""),
       type_short: pc.typeScript('שלום "x" \'y\'\n\tz'),
+      type_guarded: pc.typeScript('שלום', '123456'),
+      paste_guarded: pc.clipboardPasteScript('x', true, '42'),
       type_long: pc.typeScript('ב'.repeat(pc.UNICODE_MAX + 5)),
       paste_enter: pc.clipboardPasteScript('hi', true),
       drag: pc.dragScript(1, 2, 300, 400),
@@ -457,7 +520,12 @@ $bad -join [Environment]::NewLine`
         await pc.screenshot(target ? { width: 1280, target } : 1280).catch((e) => (code = e.code))
         ok(code === 'withheld', `21. pc.screenshot(${target || 'primary'}) is refused after a fill`)
       }
-      // Any other desktop-shaped body (a copy, a future one) still sends no picture and no password text anywhere.
+      // A copy of the desktop body is refused the same way, before its (fake) screen is looked at.
+      const copy = fakePc()
+      let copyCalls = 0
+      const outCopy = await runGoal({ goal: 'x', body: body(copy), ctx: {}, think: async () => (++copyCalls, { content: '{}' }) })
+      ok(outCopy.startsWith('FAIL') && copyCalls === 0 && copy.shots.length === 0, '21. a copy of the desktop body stops too, with no screenshot and no model call')
+      // A desktop-shaped body under another name (a future screen body) still sends no picture and no password.
       const fake = fakePc({ focus: { fg: { hwnd: '1', title: `login ${SECRET}`, process: 'chrome' }, el: { label: 'Send', role: 'Button' } } })
       const media = []
       const sent = []
@@ -466,7 +534,7 @@ $bad -join [Environment]::NewLine`
         sent.push(JSON.stringify(messages))
         return { content: JSON.stringify({ thought: 't', action: sent.length === 1 ? { type: 'key', keys: 'enter' } : sent.length === 2 ? gate : { type: 'done', summary: 'x' } }) }
       }
-      await runGoal({ goal: 'x', body: body(fake), ctx: { confirm: async (t, m) => (media.push({ t, m }), true), sendMedia: async (m) => media.push({ final: m }) }, think })
+      await runGoal({ goal: 'x', body: body(fake, { name: 'screen-under-test' }), ctx: { confirm: async (t, m) => (media.push({ t, m }), true), sendMedia: async (m) => media.push({ final: m }) }, think })
       ok(sent.length >= 2 && sent.every((j) => !/image_url|data:image/.test(j)), '21. no model request carries a picture')
       ok(sent.every((j) => !j.includes(SECRET)), '21. a password in a window title or a probe answer never reaches the model')
       ok(media.length === 1 && !media[0].m && !media[0].t.includes(SECRET) && !media.some((x) => x.final), '21. the approval card has no picture and no password, and no closing picture is sent')

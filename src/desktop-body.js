@@ -76,15 +76,21 @@ export function sameScreen(a, b) {
   return true
 }
 
-const POINTER = ['click', 'double_click', 'right_click', 'move', 'scroll', 'drag']
+// Keys that move the keyboard to another window without saying which.
+const FOCUS_KEYS = /alt\+tab|alt\+esc|^win$|^windows$|win\+|windows\+|ctrl\+esc/
 
 // `api` is pc.js; the self-test passes a fake one.
 export function desktopBody(api = pcApi) {
   let view = 'active'
   let lastShot = null
-  // The window that typing should reach: the foreground window of the last screenshot, until a click or a focus
-  // change makes it unknown again; then the first check after that sets it.
+  // The window that typing and keys may reach. It is always a window Windows named: the foreground window of the
+  // last screenshot, the window a checked click landed in, or the window focus_window brought forward. It is never
+  // taken from whatever has focus when typing starts, so a pop-up that appears mid-batch cannot become the target.
+  // After anything that moves focus without saying where (alt+tab, a right-click menu, a drag), it is unknown, and
+  // typing waits for a new look.
   let expected = null
+  // The window under the last checked click, which becomes `expected` once that click runs.
+  let clicked = null
   let unverified = 0
 
   const unverifiedVerdict = (why) => {
@@ -111,13 +117,16 @@ export function desktopBody(api = pcApi) {
     const kind = windowKind(win)
     const keys = String(a.keys || '').toLowerCase().replace(/\s+/g, '')
     const role = String(el?.role || '')
+    if (a.type === 'click' || a.type === 'double_click') clicked = win?.hwnd || null
 
     if (kind === 'secret') return { needUser: `החלון ${describe(win)} מבקש או שומר סיסמה. את זה תעשה בעצמך, ואז תגיד לי להמשיך.` }
     if (a.type === 'type' || a.type === 'key') {
-      if (expected && win?.hwnd && expected !== win.hwnd) {
+      if (!expected || !win?.hwnd) {
+        return { block: 'Not performed: after that step it is not known which window has the keyboard. Look at the new screen first.' }
+      }
+      if (expected !== win.hwnd) {
         return { block: `Not performed: the keyboard is now in ${describe(win)}, not in the window you saw. Look at the new screen first.` }
       }
-      if (win?.hwnd) expected = win.hwnd
       if (kind === 'terminal' || kind === 'run') return { block: `Blocked: ${describe(win)} runs commands. Do not type or press keys there. If a command is needed, reply "fail" and say which, so it goes through run_command, which asks the user.` }
       if (a.type === 'key' && BLOCKED_KEYS.test(keys)) return { block: `Blocked: "${a.keys}" opens a command box or a system menu. Take another way.` }
       if (a.type === 'key' && kind === 'messaging' && SEND_KEYS.test(keys)) {
@@ -191,10 +200,25 @@ always come alone. Each action is checked on the real screen before it runs.`,
       if (a.type === 'focus_window') {
         expected = null
         const r = await api.focusWindow(String(a.title || ''))
+        if (r?.ok && r.window?.hwnd) expected = r.window.hwnd
         if (!r?.ok) return r?.reason === 'none' ? `No open window matches "${String(a.title || '').slice(0, 60)}".` : `Could not bring it to the front; the foreground window is ${describe(r?.window)}.`
         return `In front now: ${describe(r.window)}.`
       }
-      if (POINTER.includes(a.type) || (a.type === 'key' && /alt\+tab|win|windows|alt\+esc/.test(String(a.keys || '').toLowerCase()))) expected = null
+      // Typing and keys carry the window they were checked against; pc.js checks it again in the same script, right
+      // before the first keystroke, and refuses if the foreground window or a password field changed in between.
+      if (a.type === 'type' || a.type === 'key') {
+        const r = await api.act({ ...a, expectHwnd: expected })
+        if (a.type === 'key' && FOCUS_KEYS.test(String(a.keys || '').toLowerCase())) expected = null
+        return r
+      }
+      if (a.type === 'click' || a.type === 'double_click') {
+        const into = clicked
+        clicked = null
+        const r = await api.act(a)
+        expected = into
+        return r
+      }
+      if (a.type === 'right_click' || a.type === 'drag') expected = null
       return api.act(a)
     },
     probe,
