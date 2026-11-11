@@ -7,6 +7,7 @@ import path from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import { config } from './config.js'
 import { remoteActive, remoteCall } from './pc-bridge.js'
+import { imagesBlocked } from './secret-redact.js'
 
 // On the cloud, the same functions run on the home PC. On Windows they stay local.
 export const pcEnabled = () => process.platform === 'win32' || (remoteActive() && config.computerMode !== 'off')
@@ -107,6 +108,8 @@ export async function media(action, level) {
 // It stays one argument so the bridge call above and any guard placed before the capture cover every target.
 export async function screenshot(maxWidth = 0) {
   if (remoteActive()) return remoteCall('screenshot', [maxWidth])
+  // This machine's screen can show the errand browser, where the vault filled a password: no picture after a fill.
+  if (imagesBlocked()) throw Object.assign(new Error('צילום המסך חסום מאז שמולאה סיסמה שמורה בדפדפן במחשב הזה. הפעלה מחדש של העוזר מחזירה אותו.'), { code: 'withheld' })
   const opts = maxWidth && typeof maxWidth === 'object' ? maxWidth : { width: maxWidth }
   const file = path.join(os.tmpdir(), `helper-screen-${Date.now()}.png`)
   if (opts.target === 'active' || opts.target === 'window') {
@@ -609,16 +612,50 @@ public static class K {
 // Text longer than this goes through the clipboard (faster); the clipboard's text is put back afterwards.
 export const UNICODE_MAX = 1000
 
-export function typeScript(text) {
+export function typeScript(text, expectHwnd) {
   const str = String(text ?? '')
-  if (str.length <= UNICODE_MAX) return `${INPUT}${UNICODE}[K]::Type(${lit(str)}) | Out-Null`
-  return clipboardPasteScript(str)
+  if (str.length <= UNICODE_MAX) return `${INPUT}${UNICODE}${focusGuard(expectHwnd, true)}[K]::Type(${lit(str)}) | Out-Null`
+  return clipboardPasteScript(str, false, expectHwnd)
+}
+
+// The last check before a keystroke, inside the same script that sends it: the foreground window must still be the
+// one the agent checked, and for typing the focused control must not be a password field. Anything else prints a
+// refusal (act() turns it into an error) and sends nothing. Without a window (pc_press_key, older callers) no check.
+const REFUSED = 'HELPER_REFUSED:'
+export function focusGuard(expectHwnd, typing) {
+  if (expectHwnd === undefined || expectHwnd === null) return ''
+  const want = String(expectHwnd)
+  if (!/^\d{1,20}$/.test(want)) return `'${REFUSED}window'; return
+`
+  return `${WIN}
+$fgNow = [W]::GetForegroundWindow()
+if ([string]([int64]$fgNow) -ne '${want}') { '${REFUSED}focus'; return }
+${typing ? `Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$feNow = $null; try { $feNow = [System.Windows.Automation.AutomationElement]::FocusedElement } catch { }
+if (-not $feNow) { '${REFUSED}nofocus'; return }
+if ($feNow.Current.IsPassword) { '${REFUSED}password'; return }
+` : ''}`
+}
+const REFUSAL = {
+  focus: 'המקלדת כבר לא בחלון שנבדק, אז לא הוקלד כלום',
+  nofocus: 'Windows לא אמר איזה שדה בפוקוס, אז לא הוקלד כלום',
+  password: 'השדה בפוקוס הוא שדה סיסמה, אז לא הוקלד כלום',
+  window: 'חלון לא תקין, לא הוקלד כלום',
+}
+async function guarded(script) {
+  const out = String((await ps(script)) ?? '')
+  const i = out.indexOf(REFUSED)
+  if (i >= 0) {
+    const why = out.slice(i + REFUSED.length).trim().split(/\s/)[0]
+    throw Object.assign(new Error(REFUSAL[why] || 'לא הוקלד כלום'), { code: 'refused', why })
+  }
+  return out
 }
 
 // Paste through the clipboard and put back what was there. Only an empty or text clipboard is borrowed; anything
 // else (a picture, copied files) is left alone and the text is typed letter by letter instead.
-export function clipboardPasteScript(str, pressEnter = false) {
-  return `${INPUT}${UNICODE}
+export function clipboardPasteScript(str, pressEnter = false, expectHwnd) {
+  return `${INPUT}${UNICODE}${focusGuard(expectHwnd, true)}
 $hadText = $false; $old = $null; $other = $false
 try {
   $fmt = Get-Clipboard -Format FileDropList -ErrorAction SilentlyContinue; if ($fmt) { $other = $true }
@@ -677,13 +714,13 @@ export async function act(action) {
   if (type === 'drag') return ps(dragScript(x, y, action.x2, action.y2))
   // Typed as Unicode keystrokes, so Hebrew and symbols work in any window and the clipboard is not touched.
   // Long text is pasted, and the clipboard's own text is put back after.
-  if (type === 'type') return ps(typeScript(text))
+  if (type === 'type') return guarded(typeScript(text, action.expectHwnd))
   if (type === 'key') {
     const codes = String(keys || '').toLowerCase().split('+').map((k) => k.trim()).filter(Boolean).map(keyCode)
     if (!codes.length || codes.includes(null)) throw new Error(`מקש לא מוכר: ${keys}`)
     const mods = codes.slice(0, -1)
     const main = codes.at(-1)
-    return ps(`${INPUT} ${mods.map((c) => `[U]::Down(${c}); `).join('')}[U]::Tap(${main}); ${mods.reverse().map((c) => `[U]::Up(${c}); `).join('')}`)
+    return guarded(`${INPUT}${focusGuard(action.expectHwnd, false)} ${mods.map((c) => `[U]::Down(${c}); `).join('')}[U]::Tap(${main}); ${mods.reverse().map((c) => `[U]::Up(${c}); `).join('')}`)
   }
   if (type === 'wait') return new Promise((r) => setTimeout(r, Math.min(10, Number(amount) || 2) * 1000))
   throw new Error(`פעולה לא מוכרת: ${type}`)

@@ -26,6 +26,7 @@ const TESTS = [
   'src/morning-selftest.js',
   'src/errand-selftest.js',
   'src/desktop-selftest.js',
+  'src/desktop-vault-leak-selftest.js',
   'src/monitoring/selftest.js',
   'src/pc-bridge-selftest.js',
   'src/face-selftest.js',
@@ -75,6 +76,9 @@ const TESTS = [
   'src/live-voice-selftest.js',
   'src/whatsapp-speech-selftest.js',
   'src/panel-selftest.js',
+  'src/bound-actions-selftest.js',
+  'src/vault-selftest.js',
+  'src/vault-leak-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 

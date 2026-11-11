@@ -19,6 +19,7 @@
     "check": "node src/selftest.js",
     "check:all": "node scripts/check-all.mjs",
     "check:desktop": "node src/desktop-selftest.js",
+    "check:desktop-vault": "node src/desktop-vault-leak-selftest.js",
     "accept:real": "node scripts/accept-real.mjs",
     "check:accept": "node scripts/accept-selftest.mjs",
     "check:backup": "node src/backup-selftest.js",
@@ -76,6 +77,9 @@
     "check:team": "node src/team-selftest.js",
     "check:whatsapp-speech": "node src/whatsapp-speech-selftest.js",
     "check:live": "node src/live-voice-selftest.js",
+    "check:bound": "node src/bound-actions-selftest.js",
+    "check:vault": "node src/vault-selftest.js",
+    "check:vault-leak": "node src/vault-leak-selftest.js",
     "demo:team": "node scripts/team-demo.mjs"
   },
   "dependencies": {

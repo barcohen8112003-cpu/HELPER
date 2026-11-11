@@ -31,6 +31,7 @@ import { runSpark, geminiEnabled } from './gemini.js'
 import { downloadSessionFile } from './session.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
+import { vaultTools } from './vault-tools.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
@@ -722,6 +723,8 @@ export { firstYouTubeVideo }
 const isOn = (t) => !t.enabled || t.enabled()
 
 tools.push(...googleTools)
+// Helper's own credential vault: off by default; secrets go in on a local page, never through the chat (src/vault.js).
+tools.push(...vaultTools)
 // WhatsApp groups: "מה פספסתי?", calendar and tasks from them, what matters to him (src/groups.js).
 tools.push(...groupTools)
 // Real flight search: cheapest dates in a range, live offers, a picture of the results (src/flights.js).

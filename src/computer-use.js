@@ -15,6 +15,7 @@ import { llm, chatModel, LONG_PATIENCE, Aborted } from './llm.js'
 import { desktopBody } from './desktop-body.js'
 import { browserScreenshot, browserAct, browserProbe } from './errand-browser.js'
 import { researchNotes } from './obscura.js'
+import { IMAGE_WITHHELD, imagesBlocked, redact, redactDeep } from './secret-redact.js'
 import { phoneAgentTimeoutMs, phoneBody, phoneVisionModel, phoneVisionOn, onPhoneStop } from './phone-app.js'
 
 const IMAGE_WIDTH = 1280
@@ -175,6 +176,15 @@ const PROBED = ['click', 'double_click', 'tap', 'select', 'long_press', 'type', 
 export async function runGoal({ goal, constraints = '', body = BODIES.browser, ctx = {}, think, survey = false }) {
   const signal = ctx.signal
   think ??= (messages) => llm(messages, null, chatModel(), LONG_PATIENCE, { max_completion_tokens: 600 }, signal)
+  // Every request to the model, whatever its source (probe label, page text, a blocked-control message, the model's
+  // own echo), is scrubbed of passwords the vault filled. After a fill, no picture of this machine's browser or screen
+  // goes to the model or to a chat at all (fails closed, secret-redact.js); only a body that cannot show them (the
+  // phone, the TV: vaultView false) keeps its pictures.
+  const pictures = () => body.vaultView === false || !imagesBlocked()
+  const model = think
+  think = (msgs, sig) => model(redactDeep(msgs, { keepImages: body.vaultView === false }), sig)
+  // Any desktop body (the real one or a copy of it), not only the object in BODIES.
+  if ((body === BODIES.desktop || body.name === 'desktop') && !pictures()) return redact(`FAIL: ${IMAGE_WITHHELD}`)
   const log = []
   // The model's own notes from the survey (candidates and their numbers), shown back to it every step.
   const found = []
@@ -183,8 +193,8 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   let gates = 0
   const askVerdict = async (verdict, shot) => {
     if (!verdict?.ask) return null
-    const media = shot?.buffer ? { buffer: shot.buffer, mime: shot.mime } : body.capture ? await body.capture().catch(() => null) : null
-    const ok = ctx.confirm ? await ctx.confirm(verdict.ask, media?.buffer ? media : undefined) : false
+    const media = !pictures() ? null : shot?.buffer ? { buffer: shot.buffer, mime: shot.mime } : body.capture ? await body.capture().catch(() => null) : null
+    const ok = ctx.confirm ? await ctx.confirm(redact(verdict.ask), media?.buffer ? media : undefined) : false
     if (signal?.aborted) throw new Aborted()
     if (!ok) return end('DENIED', verdict.deny || 'לא אושר, ולכן לא המשכתי.')
     verdict.allow?.()
@@ -192,18 +202,20 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
   }
   const end = async (status, text) => {
     body.finish?.(text)
-    if (body.finalShot) {
+    if (body.finalShot && pictures()) {
       const final = await body.screenshot().catch(() => null)
       if (final?.buffer) {
         const caption = body.shotCaption ? body.shotCaption(text) : text
-        await Promise.resolve(ctx.sendMedia?.({ buffer: final.buffer, mime: final.mime, caption })).catch(() => {})
+        await Promise.resolve(ctx.sendMedia?.({ buffer: final.buffer, mime: final.mime, caption: redact(caption) })).catch(() => {})
       }
     }
-    return `${status}: ${text}\n${found.length ? `מה נבדק:\n${found.map((f) => `• ${f}`).join('\n')}\n` : ''}צעדים: ${log.length}\n${log.slice(-6).join('\n')}`
+    return redact(`${status}: ${text}\n${found.length ? `מה נבדק:\n${found.map((f) => `• ${f}`).join('\n')}\n` : ''}צעדים: ${log.length}\n${log.slice(-6).join('\n')}`)
   }
   steps: for (let step = 1; step <= body.maxSteps; step++) {
     if (signal?.aborted) throw new Aborted()
-    const shot = await body.screenshot()
+    let shot = await body.screenshot()
+    // Whatever the body returned, a picture taken after a vault fill does not go on (captureOn already takes none).
+    if (!pictures() && (shot.image || shot.buffer)) shot = { ...shot, image: undefined, buffer: undefined, withheld: true, text: shot.text ? `${shot.text}\n${IMAGE_WITHHELD}` : IMAGE_WITHHELD }
     if (body.guardScreen) {
       const verdict = await Promise.resolve()
         .then(() => body.guardScreen())
@@ -221,7 +233,7 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
     // A body that reads the screen as text compares the text; the desktop compares a coarse grey grid of the picture.
     screens.push({ text: shot.text || '', sig: shot.sig, window: shot.window })
     const same = body.sameScreen || ((x, y) => Boolean(y.text) && x.text === y.text)
-    const stuck = screens.length >= 4 && screens.slice(-4).every((s) => same(s, screens.at(-1)))
+    const stuck = !shot.withheld && screens.length >= 4 && screens.slice(-4).every((s) => same(s, screens.at(-1)))
     messages.push({ role: 'user', content: [{ type: 'text', text: `${head}${seen}${stuck ? '\nThe screen has not changed for 3 steps. That way is not working: take a different one (another element, back, an intent, search).' : ''}` }, ...(shot.image ? [{ type: 'image_url', image_url: { url: shot.image } }] : [])] })
     const reply = await think(messages, signal)
     if (signal?.aborted) throw new Aborted()
@@ -277,8 +289,8 @@ export async function runGoal({ goal, constraints = '', body = BODIES.browser, c
         }
         const card = `${gateCard(a)}${before?.where ? `\nאיפה (לפי Windows): ${before.where}` : ''}`
         // A body that reads the screen as text takes the picture for the card now; the others already have one.
-        const media = body.capture ? await body.capture().catch(() => null) : shot.buffer ? { buffer: shot.buffer, mime: shot.mime } : null
-        const ok = ctx.confirm ? await ctx.confirm(card, media?.buffer ? media : undefined) : false
+        const media = !pictures() ? null : body.capture ? await body.capture().catch(() => null) : shot.buffer ? { buffer: shot.buffer, mime: shot.mime } : null
+        const ok = ctx.confirm ? await ctx.confirm(redact(card), media?.buffer ? media : undefined) : false
         if (signal?.aborted) throw new Aborted()
         if (!ok) return `DENIED: לא אושר, ולכן לא בוצע. ${KIND[a.kind] ? `שום ${KIND[a.kind]} לא קרה.` : ''}\n${card}`
         // The approval covers this one action, on this screen. Anything after it needs a gate of its own.
