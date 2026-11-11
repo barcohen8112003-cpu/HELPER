@@ -12,7 +12,7 @@ app.setAppUserModelId('il.helper.desktop')
 app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling')   // our media keys must reach the player
 
 const ROOT = __dirname
-let store, apps, speech, instant, hands, handsServer, brain, win32, hook, voiceOut, phrase
+let store, apps, speech, instant, home, hands, handsServer, brain, win32, hook, voiceOut, phrase
 
 let bubble = null, pill = null, tray = null
 const overlays = new Map()          // display id → transparent window for rings and marks
@@ -439,6 +439,20 @@ async function handleAsk(raw, { voice = false } = {}) {
 
   bubbleState({ mode: 'thinking', heard: raw })
 
+  // 0. The house and the whole system belong to HELPER on the cloud (Google Home, WhatsApp, its tools): no local
+  // brain in between. A plain "תכבה את האורות" runs there with no model either.
+  const toCloud = mark ? null : home.route(text)
+  if (toCloud === 'status') return systemCheck(seq, raw, started, voice)
+  if (toCloud === 'home') {
+    try {
+      const h = await brain.askHelper(raw, { voice: voice && store.settings().speakAnswers })
+      if (seq !== askSeq) return
+      return finish(seq, raw, h.reply || 'אין תשובה מהבית', 'cloud-home', started, false, voice, h.audio)
+    } catch (e) {
+      return finish(seq, raw, e.message || 'לא הצלחתי להגיע ל-HELPER בענן', 'cloud-home', started, true, voice)
+    }
+  }
+
   // 1. Instant commands: no AI.
   const parsed = mark ? null : instant.parse(text)
   if (parsed) {
@@ -523,7 +537,27 @@ async function handleAsk(raw, { voice = false } = {}) {
   }
 }
 
+/** "תבדוק את המערכת": this PC, the brain in use, the link to the cloud, and HELPER on the cloud on itself. */
+async function systemCheck(seq, raw, started, voice) {
+  bubbleState({ mode: 'thinking', heard: raw, steps: ['בודק את המחשב ואת החיבור לענן'] })
+  let pc = null
+  try { pc = await hands.run({ cmd: 'system' }) } catch { }
+  const cloud = await brain.pingHelper()
+  if (seq !== askSeq) return
+  const local = home.statusLine({ pc, brain: brain.brainName(), cloud })
+  if (!cloud.ok) return finish(seq, raw, local, 'status', started, true, voice)
+  bubbleState({ mode: 'thinking', heard: raw, steps: ['שואל את HELPER בענן מה המצב שלו'] })
+  try {
+    const h = await brain.askHelper('בדיקת מערכת מהמחשב: תגיד בקצרה מה המצב שלך עכשיו. וואטסאפ, הבית החכם, מייל ויומן, ומה לא עובד. בלי לשנות כלום.', { voice: false })
+    if (seq !== askSeq) return
+    return finish(seq, raw, local + '.\n' + (h.reply || 'הענן לא סיפר על עצמו'), 'status', started, false, voice)
+  } catch (e) {
+    return finish(seq, raw, local + '. ' + e.message, 'status', started, true, voice)
+  }
+}
+
 function stepLabel(ev) {
+  if (ev.name === 'ask_helper') return 'שואל את HELPER בענן'
   const i = ev.input || {}
   if (ev.name === 'Read') return /\.png$/i.test(i.file_path || '') ? 'מסתכל על המסך' : 'קורא קובץ'
   if (ev.name === 'WebSearch' || ev.name === 'search_web') return 'מחפש ברשת: ' + String(i.query || '').slice(0, 40)
@@ -841,6 +875,7 @@ app.whenReady().then(async () => {
   speech.setVocabulary(apps.vocabulary())
   setTimeout(() => speech.setVocabulary(apps.vocabulary()), 6000)   // again once the Start menu list is fresh
   instant = require('./src/instant')
+  home = require('./src/home')
   hands = require('./src/hands')
   handsServer = require('./src/hands-server')
   brain = require('./src/brain')
