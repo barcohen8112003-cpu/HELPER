@@ -462,6 +462,10 @@ ok(windowKind({ title: 'Inbox - me@x.com - Gmail - Google Chrome', process: 'chr
     threw = true
   }
   ok(threw, '19. a point that is not a number never reaches the script')
+  // Found on a real PC (PowerShell 5.1): System.Windows.Point lives in WindowsBase, which nothing else loads, so a
+  // script that names a WPF type must load its assembly itself or UIA's FromPoint fails on every call.
+  const ins = pc.inspectScript(10, 20)
+  ok(!/System\.Windows\.Point/.test(ins) || /Add-Type -AssemblyName[^\n]*\bWindowsBase\b/.test(ins), '19. the point probe loads WindowsBase, where System.Windows.Point lives')
 }
 
 // 20. Parse every script with PowerShell, if this machine has it.
@@ -483,7 +487,9 @@ ok(windowKind({ title: 'Inbox - me@x.com - Gmail - Google Chrome', process: 'chr
       paste_enter: pc.clipboardPasteScript('hi', true),
       drag: pc.dragScript(1, 2, 300, 400),
     }
-    for (const [k, v] of Object.entries(scripts)) fs.writeFileSync(path.join(dir, `${k}.ps1`), v)
+    // With a BOM: Windows PowerShell 5.1 reads a BOM-less .ps1 in the ANSI code page, so Hebrew bytes turn into quote
+    // marks and the parse fails. Production never writes files (it sends -EncodedCommand), so this is the test's own encoding.
+    for (const [k, v] of Object.entries(scripts)) fs.writeFileSync(path.join(dir, `${k}.ps1`), '\uFEFF' + v)
     const check = `$bad = @()
 Get-ChildItem -Path '${dir.replace(/'/g, "''")}' -Filter *.ps1 | ForEach-Object { $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$t, [ref]$e); if ($e.Count) { $bad += "$($_.Name): $($e[0].Message)" } }
 foreach ($src in @(${['INPUT', 'WIN', 'UNICODE'].map((k) => `'${pc._scripts[k].replace(/'/g, "''")}'`).join(', ')})) { $m = [regex]::Match($src, '(?s)Add-Type @"(.*?)"@'); try { Add-Type -TypeDefinition $m.Groups[1].Value -ErrorAction Stop } catch { $bad += "compile: $_" } }

@@ -495,8 +495,9 @@ function WinInfo($h) {
 
 // The name and kind of a UI Automation element, or of the nearest named ancestor that is still a control (a window's
 // or pane's own title is not the control's label). Never a value.
+// WindowsBase holds System.Windows.Point (FromPoint); without it every inspectAt on real Windows loses its element.
 const UIA = `
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
 function ElemInfo($e) {
   $o = @{ label = ''; role = ''; password = $false; enabled = $true }
   if (-not $e) { return $o }
