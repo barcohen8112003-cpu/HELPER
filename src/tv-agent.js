@@ -71,6 +71,8 @@ Write "thought", "found" and "step" in Hebrew, whatever language the screen is i
 Add "step": 2-4 words in Hebrew (עברית, never Arabic or English) of what you are doing now ("מחפש את הסרט", "בוחר מקור").`,
     maxSteps: 35,
     commit: TV_COMMIT,
+    // Its pictures are of the TV, never of this machine's browser, so a vault fill does not withhold them.
+    vaultView: false,
     finalShot: false,
     async screenshot() {
       const r = await call('observe')

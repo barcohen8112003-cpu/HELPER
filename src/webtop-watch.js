@@ -6,6 +6,7 @@
 import { config } from './config.js'
 import { state, save } from './store.js'
 import { sessionEnabled, readWebtopUpdates, isWebtopLoginError, isWebtopBlockedError } from './session.js'
+import { fromWebtop, sourceFailed, enabled as schoolworkOn } from './schoolwork.js'
 
 const DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת']
 const KEEP = 800
@@ -106,16 +107,20 @@ export function planWebtopNotice(read, seen, now = new Date()) {
 
 let last = 0
 let running = false
+// Self-tests only: the next call reads again at once.
+export const _resetWebtopClock = () => void (last = 0)
 
 // Scheduler job. Silent while Webtop is signed out or blocked: the keepalive job already says so once.
-export async function webtopUpdates(notify) {
-  if (!config.webtop.alerts || !sessionEnabled() || !state.owner || running) return
+// deps lets the self-test hand in a stand-in read; the scheduler passes nothing there.
+export async function webtopUpdates(notify, _runTask, _monitoring, { read: readNow = readWebtopUpdates, on = sessionEnabled } = {}) {
+  if (!config.webtop.alerts || !on() || !state.owner || running) return
   const w = (state.webtopWatch ??= { seen: null, lastPoll: 0 })
   if (Date.now() - Math.max(last, w.lastPoll || 0) < config.webtop.alertsMinutes * 60000) return
   last = Date.now()
   running = true
   try {
-    const read = await readWebtopUpdates()
+    // The homework board is one more page in the same read, and only while the homework list is on.
+    const read = await readNow({ homework: schoolworkOn() })
     w.lastPoll = Date.now()
     const plan = planWebtopNotice(read, w.seen)
     w.seen = plan.seen
@@ -126,9 +131,14 @@ export async function webtopUpdates(notify) {
     if (plan.text) {
       await notify(plan.text, false, `webtop:${plan.fresh.map((i) => i.key).join('|').slice(0, 300)}`, 'webtop')
     }
+    // The same read feeds the homework list (src/schoolwork.js; does nothing while SCHOOLWORK is off).
+    await fromWebtop(read, notify).catch((e) => console.log(`[schoolwork] ${e.message}`))
   } catch (e) {
     w.error = e.message || String(e)
     save()
+    const why = isWebtopLoginError(e) ? 'Webtop לא מחובר (צריך להתחבר מחדש)' : isWebtopBlockedError(e) ? 'Webtop חסום מהשרת' : w.error
+    sourceFailed('webtop', why)
+    sourceFailed('webtopHomework', why)
     if (!isWebtopLoginError(e) && !isWebtopBlockedError(e)) console.log(`[webtop-watch] ${w.error}`)
   } finally {
     running = false
