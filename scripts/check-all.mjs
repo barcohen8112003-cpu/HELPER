@@ -75,6 +75,7 @@ const TESTS = [
   'src/live-voice-selftest.js',
   'src/whatsapp-speech-selftest.js',
   'src/panel-selftest.js',
+  'src/bound-actions-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
 
