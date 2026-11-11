@@ -32,6 +32,7 @@ import { runSpark, geminiEnabled } from './gemini.js'
 import { downloadSessionFile } from './session.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
+import { gmailPlusTools } from './gmail-plus.js'
 import { officeEditTools } from './office-edit.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
@@ -724,6 +725,8 @@ export { firstYouTubeVideo }
 const isOn = (t) => !t.enabled || t.enabled()
 
 tools.push(...googleTools)
+// Gmail replies in the thread, attachments, drafts and labels, each through a bound approval (src/gmail-plus.js).
+tools.push(...gmailPlusTools)
 // Native edits to an existing Docs/Sheets/Slides file, each bound to the revision the user approved (src/office-edit.js).
 tools.push(...officeEditTools)
 // WhatsApp groups: "מה פספסתי?", calendar and tasks from them, what matters to him (src/groups.js).
