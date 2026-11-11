@@ -484,7 +484,7 @@ export async function homeHandlers() {
   handlers.readSessionPage = (url, maxChars) => session.readSessionPage(url, maxChars)
   handlers.downloadSessionFile = (url, name) => session.downloadSessionFile(url, name)
   handlers.readTimetable = () => session.readTimetable()
-  handlers.readWebtopUpdates = () => session.readWebtopUpdates()
+  handlers.readWebtopUpdates = (opts) => session.readWebtopUpdates({ homework: Boolean(opts?.homework) })
   handlers.sessionKeepAlive = () => session.sessionKeepAlive()
   const home = await import('./google-home.js')
   handlers.getHomeDevices = () => home.getHomeDevices()
