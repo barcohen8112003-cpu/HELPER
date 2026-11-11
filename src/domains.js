@@ -44,6 +44,12 @@ export const DOMAINS = [
     words: /אזעק|צבע אדום|פיקוד|טיל|חבילה|משלוח|מעקב|tracking|עלי ?אקספרס|aliexpress|דואר ישראל|אוטובוס|קו \d|תחנה|רכבת|תחבורה|שבת|נרות|הבדלה|פרשה|חג|תאריך עברי|דולר|יורו|שקל|מטבע|שער|להמיר|המר/i,
   },
   {
+    id: 'calendar',
+    label: 'יומן: לשנות, להזיז, למחוק, להזמין ולבדוק מתי פנוי',
+    has: named('calendar_find', 'calendar_update', 'calendar_delete', 'calendar_freebusy'),
+    words: /יומן|אירוע|פגישה|תזיז|להזיז|תדחה|תבטל את ה(פגישה|אירוע)|תמחק את ה(פגישה|אירוע)|תזמין את|מוזמנים|אורחים|פנוי|תפוס|זמינות|calendar|meeting|invite|free ?busy|reschedule/i,
+  },
+  {
     id: 'watch',
     label: 'מעקב שקט אחרי דפים, מחירים ומלאי',
     has: named('add_watcher', 'list_watchers', 'remove_watcher'),
