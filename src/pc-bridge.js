@@ -24,6 +24,9 @@ const TIMEOUT_MS = {
   browserScreenshot: 45000,
   browserAct: 30000,
   browserProbe: 30000,
+  inspectAt: 25000,
+  focusInfo: 25000,
+  focusWindow: 25000,
   runCommand: 70000,
   readSessionPage: 90000,
   downloadSessionFile: 120000,
@@ -43,6 +46,8 @@ const PC_NAMES = [
   'wingetInstall', 'act', 'webcamSnap', 'screenRecord', 'topProcesses', 'killProcess',
   'getBrowserTabs', 'closeBrowserTab', 'openBrowserTab', 'activateBrowserTab',
   'openOnScreen', 'runCommand', 'readTextFile', 'writeTextFile', 'readUserFile',
+  // The desktop agent's checks (src/desktop-body.js): names of controls and windows, never field values.
+  'inspectAt', 'focusInfo', 'focusWindow',
 ]
 
 let server = null
