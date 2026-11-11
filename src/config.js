@@ -196,6 +196,8 @@ const build = () => ({
     // WhatsApp notices for new grades, timetable changes, exams and school events (src/webtop-watch.js).
     alerts: env('WEBTOP_ALERTS', 'true') !== 'false',
     alertsMinutes: Math.max(15, Number(env('WEBTOP_ALERTS_MINUTES', '60')) || 60),
+    // The page whose own requests include the homework board (dashboard/GetHomeWork). Read only with SCHOOLWORK=on.
+    homeworkPath: env('WEBTOP_HOMEWORK_PATH', '/dashboard'),
   },
   // fetch_page through Scrapling (Python, py/scrapling_worker.py): public HTTPS pages only, with DNS and redirect
   // checks. Off unless SCRAPLING_ENABLED=true. SCRAPLING_PYTHON is the interpreter inside its own venv.
