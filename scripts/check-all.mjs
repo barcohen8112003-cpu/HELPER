@@ -64,6 +64,7 @@ const TESTS = [
   'src/webtop-watch-selftest.js',
   'src/scrapling-selftest.js',
   'src/groups-selftest.js',
+  'src/schoolwork-selftest.js',
   'src/wa-link-selftest.js',
   'src/release-notes-selftest.js',
   'src/bird-selftest.js',
@@ -75,6 +76,8 @@ const TESTS = [
   'src/whatsapp-speech-selftest.js',
   'src/panel-selftest.js',
   'src/bound-actions-selftest.js',
+  'src/office-edit-selftest.js',
+  'src/gmail-plus-selftest.js',
   'src/calendar-plus-selftest.js',
   'scripts/setup-selftest.mjs',
 ]
