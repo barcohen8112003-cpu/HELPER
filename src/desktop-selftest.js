@@ -465,6 +465,11 @@ ok(windowKind({ title: 'Inbox - me@x.com - Gmail - Google Chrome', process: 'chr
   // Found on a real PC (PowerShell 5.1): System.Windows.Point lives in WindowsBase, which nothing else loads, so a
   // script that names a WPF type must load its assembly itself or UIA's FromPoint fails on every call.
   const ins = pc.inspectScript(10, 20)
+  // Also from the real PC: Windows 11 Notepad swapped characters when packets piled up, and an Alt tap before the
+  // focus switch opened Notepad's menu and swallowed the first letter.
+  ok(/Thread\.Sleep\(TYPE_GAP_MS\)/.test(pc._scripts.UNICODE) && !/at % 40/.test(pc._scripts.UNICODE), '19. Unicode typing pauses after every character, not every 40th')
+  const fw = pc.focusWindowScript('Notepad')
+  ok(fw.indexOf('AttachThreadInput') >= 0 && fw.indexOf('AttachThreadInput') < fw.indexOf('[U]::Tap(0x12)') && /\[U\]::Tap\(0x1B\)/.test(fw), '19. focus_window switches without a key first; the Alt fallback closes a menu it opens')
   ok(!/System\.Windows\.Point/.test(ins) || /Add-Type -AssemblyName[^\n]*\bWindowsBase\b/.test(ins), '19. the point probe loads WindowsBase, where System.Windows.Point lives')
 }
 

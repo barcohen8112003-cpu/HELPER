@@ -480,6 +480,9 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   public static string Text(IntPtr h) { StringBuilder s = new StringBuilder(512); GetWindowText(h, s, 512); return s.ToString(); }
   public static string Cls(IntPtr h) { StringBuilder s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
   public static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
@@ -568,15 +571,24 @@ $o | ConvertTo-Json -Compress -Depth 4`
 }
 
 export function focusWindowScript(query) {
-  return `${INPUT}${WIN}
+  return `${INPUT}${WIN}${UIA}
 $q = ${lit(String(query || '').slice(0, 120))}
 $p = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and ($_.MainWindowTitle -like "*$q*" -or $_.ProcessName -like "*$q*") } | Select-Object -First 1
 if (-not $p) { @{ ok = $false; reason = 'none' } | ConvertTo-Json -Compress; return }
 $h = $p.MainWindowHandle
 if ([W]::IsIconic($h)) { [W]::ShowWindow($h, 9) | Out-Null }
-[U]::Tap(0x12)
-[W]::SetForegroundWindow($h) | Out-Null
+# Share input with the window that has the keyboard now, so Windows lets this script move the foreground. No key is
+# pressed: an Alt tap (the old way) opened the menu bar in Notepad and the first typed letter went to the menu.
+$me = [W]::GetCurrentThreadId(); $pid0 = [uint32]0
+$them = [W]::GetWindowThreadProcessId([W]::GetForegroundWindow(), [ref]$pid0)
+$joined = ($them -ne 0 -and $them -ne $me) -and [W]::AttachThreadInput($me, $them, $true)
+try { [W]::BringWindowToTop($h) | Out-Null; [W]::SetForegroundWindow($h) | Out-Null } finally { if ($joined) { [W]::AttachThreadInput($me, $them, $false) | Out-Null } }
 Start-Sleep -Milliseconds 250
+if ([W]::GetForegroundWindow() -ne $h) {
+  # Last resort: the Alt tap, then close the menu it may have opened, so typing goes to the document.
+  [U]::Tap(0x12); [W]::SetForegroundWindow($h) | Out-Null; Start-Sleep -Milliseconds 200
+  try { $f = [System.Windows.Automation.AutomationElement]::FocusedElement; if ($f -and @('ControlType.MenuItem', 'ControlType.MenuBar', 'ControlType.Menu') -contains $f.Current.ControlType.ProgrammaticName) { [U]::Tap(0x1B); Start-Sleep -Milliseconds 100 } } catch { }
+}
 $now = [W]::GetForegroundWindow()
 @{ ok = ($now -eq $h); window = (WinInfo $now) } | ConvertTo-Json -Compress -Depth 4`
 }
@@ -592,6 +604,7 @@ public static class K {
   [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public UNION u; }
   [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
   static INPUT Key(ushort vk, ushort scan, uint flags) { INPUT i = new INPUT(); i.type = 1; i.u.ki.wVk = vk; i.u.ki.wScan = scan; i.u.ki.dwFlags = flags; return i; }
+  public const int TYPE_GAP_MS = 12;
   public static int Type(string s) {
     int sent = 0;
     for (int at = 0; at < s.Length; at++) {
@@ -602,7 +615,10 @@ public static class K {
       else if (c == '\\t') { pair = new INPUT[] { Key(0x09, 0, 0), Key(0x09, 0, 2) }; }
       else { pair = new INPUT[] { Key(0, c, 4), Key(0, c, 6) }; }
       sent += (int)SendInput((uint)pair.Length, pair, Marshal.SizeOf(typeof(INPUT)));
-      if (at % 40 == 39) { Thread.Sleep(15); }
+      // A pause after every character (not only every 40th): when VK_PACKET messages pile up, some apps (Windows 11
+      // Notepad, seen on a real PC) read a later packet's character for earlier ones ("123 " arrived as "HHHH"). The
+      // two halves of a surrogate pair go out back to back.
+      if (!(Char.IsHighSurrogate(c) && at + 1 < s.Length)) { Thread.Sleep(TYPE_GAP_MS); }
     }
     return sent;
   }
