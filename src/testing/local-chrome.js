@@ -8,7 +8,8 @@ import { spawn } from 'node:child_process'
 import WebSocket from 'ws'
 
 export function chromePath() {
-  const fixed = [process.env.CHROME_PATH, '/opt/google/chrome/chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/opt/pw-browsers/chromium/chrome-linux64/chrome']
+  const fixed = [process.env.CHROME_PATH, '/opt/google/chrome/chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/opt/pw-browsers/chromium/chrome-linux64/chrome',
+    ...(process.platform === 'win32' ? [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA].filter(Boolean).flatMap((d) => [path.join(d, 'Google', 'Chrome', 'Application', 'chrome.exe'), path.join(d, 'Microsoft', 'Edge', 'Application', 'msedge.exe')]) : [])]
   const pw = '/opt/pw-browsers'
   const found = fs.existsSync(pw)
     ? fs.readdirSync(pw).filter((d) => /^chromium-\d+$/.test(d)).flatMap((d) => ['chrome-linux64', 'chrome-linux'].map((sub) => path.join(pw, d, sub, 'chrome')))
