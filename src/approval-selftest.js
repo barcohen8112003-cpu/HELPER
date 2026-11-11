@@ -51,6 +51,7 @@ const RISKY = [
   ['create_video', { prompt: INJECTED }],
   ['create_music', { prompt: INJECTED }],
   ['run_command', { command: 'echo hi' }],
+  ['run_command', { command: 'Stop-Service Spooler', admin: true }],
   ['read_file', { path: 'C:\\Users\\me\\secret.txt' }],
   ['write_file', { path: 'C:\\Users\\me\\x.txt', content: INJECTED }],
   ['pc_close_app', { name: 'chrome' }],

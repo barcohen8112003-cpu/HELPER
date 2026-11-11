@@ -144,7 +144,8 @@ config.flights.duffelToken = 'duffel_test_x'
     process.env.CHROME_PATH = chrome
     _setForTest({ render: undefined })
     const { _render } = await import('./flights.js')
-    const png = await _render(html, 360)
+    // 90 s, not the 30 s a live card gets: a busy CI runner has taken ~40 s just to start Chromium.
+    const png = await _render(html, 360, 90000)
     ok(png && png.subarray(1, 4).toString() === 'PNG' && png.length > 5000, `the card renders to a PNG in ${path.basename(chrome)}`)
     if (process.env.FLIGHTS_CARD_OUT && png) fs.writeFileSync(process.env.FLIGHTS_CARD_OUT, png)
   } else console.log('skip: no Chrome/Chromium to render the card')

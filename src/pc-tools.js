@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { wakeEnabled, wakePc } from './wake.js'
 import * as pc from './pc.js'
+import { runAdminCommand } from './pc-admin.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 
 // What "open" may launch besides a web address: sites by name, and a few built-in Windows apps by their URI.
@@ -70,9 +71,14 @@ export const pcTools = [
   {
     name: 'run_command',
     enabled: computerEnabled,
-    description: 'מריץ פקודת PowerShell על המחשב של המשתמש ומחזיר את הפלט. מוגבל ל-60 שניות.',
-    parameters: obj({ command: str('פקודת PowerShell') }),
-    async run({ command }, ctx) {
+    description: 'מריץ פקודת PowerShell על המחשב של המשתמש ומחזיר את הפלט. מוגבל ל-60 שניות. admin=true מריץ כמנהל (Administrator), לפעולות שצריכות הרשאות מנהל: התקנות לכל המשתמשים, שירותים, רישום, חומת אש, קבצי מערכת. ברירת המחדל: משתמש רגיל.',
+    parameters: obj({ command: str('פקודת PowerShell'), admin: { type: 'boolean', description: 'true = להריץ כמנהל (Administrator). רק כשהפקודה באמת צריכה הרשאות מנהל.' } }, ['command']),
+    async run({ command, admin }, ctx) {
+      if (admin === true) {
+        // As Administrator the user is asked in every mode, auto included: approved() would skip the question there.
+        if (!(await ctx.confirm(`להריץ כמנהל (Administrator) את הפקודה?\n\`\`\`${command}\`\`\``))) return 'המשתמש לא אישר את הפקודה'
+        return runAdminCommand(command)
+      }
       if (!(await approved(ctx, `להריץ את הפקודה?\n\`\`\`${command}\`\`\``))) return 'המשתמש לא אישר את הפקודה'
       return pc.runCommand(command)
     },

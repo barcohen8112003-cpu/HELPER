@@ -20,6 +20,7 @@
     "check:all": "node scripts/check-all.mjs",
     "check:desktop-agent": "node src/desktop-selftest.js",
     "check:desktop-vault": "node src/desktop-vault-leak-selftest.js",
+    "check:pc-admin": "node src/pc-admin-selftest.js",
     "accept:real": "node scripts/accept-real.mjs",
     "check:accept": "node scripts/accept-selftest.mjs",
     "check:backup": "node src/backup-selftest.js",
