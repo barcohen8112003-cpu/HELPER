@@ -50,6 +50,12 @@ export const DOMAINS = [
     words: /סיסמ|התחבר(ות)? ל|להתחבר|תתחבר|כניסה לאתר|לוגין|login|password|credential|כספת/i,
   },
   {
+    id: 'calendar',
+    label: 'יומן: לשנות, להזיז, למחוק, להזמין ולבדוק מתי פנוי',
+    has: named('calendar_find', 'calendar_update', 'calendar_delete', 'calendar_freebusy'),
+    words: /יומן|אירוע|פגישה|תזיז|להזיז|תדחה|תבטל את ה(פגישה|אירוע)|תמחק את ה(פגישה|אירוע)|תזמין את|מוזמנים|אורחים|פנוי|תפוס|זמינות|calendar|meeting|invite|free ?busy|reschedule/i,
+  },
+  {
     id: 'watch',
     label: 'מעקב שקט אחרי דפים, מחירים ומלאי',
     has: named('add_watcher', 'list_watchers', 'remove_watcher'),
@@ -58,8 +64,8 @@ export const DOMAINS = [
   {
     id: 'school',
     label: 'בית ספר: מטלות, מערכת שעות, מבחנים וקבצים',
-    has: named('classroom_assignments', 'get_timetable', 'week_ahead', 'study_plan', 'gemini_spark', 'ask_gemini', 'docs_create', 'drive_search', 'drive_read', 'drive_send_file'),
-    words: /בית ספר|ביה"ס|שיעור|מערכת|מטל|הגשה|להגיש|קלאסרום|classroom|וובטופ|webtop|מבחן|בוחן|ציון|ציונים|היעדרו|מורה|כית|ללמוד ל|תלמד אותי|לימוד|שבוע הבא|דרייב|drive|דוקס|docs|מסמך|קובץ|ג'?מיני|gemini|ספארק|spark|עבודה ב|תפתור|תעשה לי את/i,
+    has: named('classroom_assignments', 'school_homework', 'get_timetable', 'week_ahead', 'study_plan', 'gemini_spark', 'ask_gemini', 'docs_create', 'drive_search', 'drive_read', 'drive_send_file', 'office_outline', 'docs_edit', 'sheets_edit', 'slides_edit'),
+    words: /שיעורי בית|ש"ב|בית ספר|ביה"ס|שיעור|מערכת|מטל|הגשה|להגיש|קלאסרום|classroom|וובטופ|webtop|מבחן|בוחן|ציון|ציונים|היעדרו|מורה|כית|ללמוד ל|תלמד אותי|לימוד|שבוע הבא|דרייב|drive|דוקס|docs|מסמך|קובץ|גיליון|שיטס|sheets|מצגת|סליידס|slides|שקף|ג'?מיני|gemini|ספארק|spark|עבודה ב|תפתור|תעשה לי את/i,
   },
   {
     id: 'pc',
@@ -106,8 +112,8 @@ export const DOMAINS = [
   {
     id: 'people',
     label: 'הודעות לאחרים, דיסקורד, מייל יוצא וקול',
-    has: named('send_whatsapp_to', 'send_discord', 'gmail_send', 'voice_mode', 'ask_instinct', 'instinct_chat'),
-    words: /instinct|אינסטינקט|תשלח ל|תשלח הודעה|תכתוב ל|תגיד ל|תענה ל|הודעה ל|דיסקורד|discord|מייל ל|תשלח מייל|קולי|בקול|תדבר|הקלטה/i,
+    has: named('send_whatsapp_to', 'send_discord', 'gmail_send', 'gmail_reply', 'gmail_thread', 'gmail_attachment_send', 'gmail_draft_save', 'gmail_draft_send', 'gmail_labels', 'gmail_label_modify', 'voice_mode', 'ask_instinct', 'instinct_chat'),
+    words: /instinct|אינסטינקט|תשלח ל|תשלח הודעה|תכתוב ל|תגיד ל|תענה ל|הודעה ל|דיסקורד|discord|מייל ל|תשלח מייל|תענה למייל|תענה לו במייל|טיוטה|טיוטת|תווית|draft|label|קובץ מצורף|קבצים מצורפים|attachment|קולי|בקול|תדבר|הקלטה/i,
   },
   {
     id: 'groups',
