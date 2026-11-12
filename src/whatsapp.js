@@ -241,6 +241,39 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
             } catch (e) {
               console.log(`[groups] ${e.message}`)
             }
+            // Math homework (src/mathwork.js): the same message, plus a way to fetch its photo, or the photo it quotes,
+            // right now. Nothing is downloaded here; the hook fetches only for a homework message. It gets no socket and
+            // no way to send, react or mark read.
+            if (groupHooks.homework) {
+              const ctx = content?.extendedTextMessage?.contextInfo || content?.imageMessage?.contextInfo || null
+              const quoted = ctx?.quotedMessage ? normalizeMessageContent(ctx.quotedMessage) : null
+              const fetch = (m) => () => downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage })
+              const known = groupHooks.groupName?.(jid)
+              Promise.resolve(known || sock.groupMetadata(jid).then((g) => g.subject).catch(() => ''))
+                .then((groupName) =>
+                  groupHooks.homework({
+                    group: jid,
+                    groupName,
+                    id: msg.key.id,
+                    sender: msg.key.participant || msg.participant || '',
+                    senderName: msg.pushName || '',
+                    at: sentAt,
+                    text,
+                    fromMe: Boolean(msg.key.fromMe),
+                    image: content?.imageMessage ? { mimetype: content.imageMessage.mimetype, fileLength: Number(content.imageMessage.fileLength) || 0 } : null,
+                    download: content?.imageMessage ? fetch(msg) : null,
+                    quoted: ctx?.stanzaId
+                      ? {
+                          id: ctx.stanzaId,
+                          sender: ctx.participant || '',
+                          image: quoted?.imageMessage ? { mimetype: quoted.imageMessage.mimetype, fileLength: Number(quoted.imageMessage.fileLength) || 0 } : null,
+                          download: quoted?.imageMessage ? fetch({ key: { remoteJid: jid, id: ctx.stanzaId, participant: ctx.participant, fromMe: false }, message: ctx.quotedMessage }) : null,
+                        }
+                      : null,
+                  })
+                )
+                .catch((e) => console.log(`[mathwork] ${e.message}`))
+            }
           }
           continue
         }

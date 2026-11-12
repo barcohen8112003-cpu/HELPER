@@ -64,8 +64,8 @@ export const DOMAINS = [
   {
     id: 'school',
     label: 'בית ספר: מטלות, מערכת שעות, מבחנים וקבצים',
-    has: named('classroom_assignments', 'school_homework', 'get_timetable', 'week_ahead', 'study_plan', 'gemini_spark', 'ask_gemini', 'docs_create', 'drive_search', 'drive_read', 'drive_send_file', 'office_outline', 'docs_edit', 'sheets_edit', 'slides_edit'),
-    words: /שיעורי בית|ש"ב|בית ספר|ביה"ס|שיעור|מערכת|מטל|הגשה|להגיש|קלאסרום|classroom|וובטופ|webtop|מבחן|בוחן|ציון|ציונים|היעדרו|מורה|כית|ללמוד ל|תלמד אותי|לימוד|שבוע הבא|דרייב|drive|דוקס|docs|מסמך|קובץ|גיליון|שיטס|sheets|מצגת|סליידס|slides|שקף|ג'?מיני|gemini|ספארק|spark|עבודה ב|תפתור|תעשה לי את/i,
+    has: named('classroom_assignments', 'school_homework', 'math_homework', 'get_timetable', 'week_ahead', 'study_plan', 'gemini_spark', 'ask_gemini', 'docs_create', 'drive_search', 'drive_read', 'drive_send_file', 'office_outline', 'docs_edit', 'sheets_edit', 'slides_edit'),
+    words: /שיעורי בית|מתמטיק|ש"ב|בית ספר|ביה"ס|שיעור|מערכת|מטל|הגשה|להגיש|קלאסרום|classroom|וובטופ|webtop|מבחן|בוחן|ציון|ציונים|היעדרו|מורה|כית|ללמוד ל|תלמד אותי|לימוד|שבוע הבא|דרייב|drive|דוקס|docs|מסמך|קובץ|גיליון|שיטס|sheets|מצגת|סליידס|slides|שקף|ג'?מיני|gemini|ספארק|spark|עבודה ב|תפתור|תעשה לי את/i,
   },
   {
     id: 'pc',

@@ -42,6 +42,7 @@ import { parseLiveCall, liveCallReply, LIVE_NOTE } from './live-voice.js'
 import { presentSpeech } from './face.js'
 import * as groups from './groups.js'
 import * as schoolwork from './schoolwork.js'
+import * as mathwork from './mathwork.js'
 import { groupAdders } from './group-tools.js'
 
 let reconciled = false
@@ -391,7 +392,7 @@ const wa = await startWhatsApp(async (m) => {
     if (activeTurn?.ac === ac) activeTurn = null
     finish()
   })
-}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m), bindSync: groups.bindGroupSync }, (m) => Boolean(state.owner) && (isInstinctMessage(m) || isOwner(m)))
+}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m), bindSync: groups.bindGroupSync, groupName: (jid) => groups.load().groups[jid]?.name || '', homework: (m) => mathwork.onGroupMessage(m) }, (m) => Boolean(state.owner) && (isInstinctMessage(m) || isOwner(m)))
 connectInstinct({ send: (jid, text) => wa.sendAs(jid, text), notify: (text) => (state.owner ? wa.send(state.owner.jid, text) : null) })
 
 // Default pairing: the moment the QR is scanned, the assistant lives in the account's "message yourself" chat.
@@ -421,6 +422,8 @@ function tellRelease() {
 }
 
 const sendMedia = (media) => wa.sendMedia(state.owner.jid, media)
+// The math homework report's photos go to his own chat only, through this same path (src/mathwork.js).
+mathwork.setPhotoSender((media) => sendMedia(media))
 const say = (text) => wa.send(state.owner.jid, text)
 
 // `media` ({ buffer, mime }): the question goes out as that image's caption, so a checkout screen and what it asks

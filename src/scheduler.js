@@ -17,6 +17,7 @@ import { weeklyDue, weekAhead, deadlineReminders, isoDay } from './study.js'
 import { phoneEnabled, phoneKeepAlive } from './phone.js'
 import { mayReachOut, markReachedOut, takeDueLoop, followUpPrompt, checkInContext } from './proactive.js'
 import * as schoolwork from './schoolwork.js'
+import * as mathwork from './mathwork.js'
 
 const NEWS_WINDOW = 4 * 60
 const FIRST_CHECK_IN = 3 * 60000
@@ -469,7 +470,7 @@ async function news(notify) {
 }
 
 // One round, in order. The homework summary comes after Webtop and Classroom, so a read due this round is already in.
-const JOBS = [reminders, tasks, watchers, webtop, webtopUpdates, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, schoolwork.schoolworkJob, weekly, (n) => costTick(n), news, followUps, checkIn, study]
+const JOBS = [reminders, tasks, watchers, webtop, webtopUpdates, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, schoolwork.schoolworkJob, mathwork.mathworkJob, weekly, (n) => costTick(n), news, followUps, checkIn, study]
 
 // runTask(instruction) => Promise<string>: runs the agent on a scheduled instruction, returns what to send ('' for nothing).
 export function startScheduler(notify, runTask = async () => '', monitoring = { handleEvent: async () => ({}), tick: async () => {} }) {
