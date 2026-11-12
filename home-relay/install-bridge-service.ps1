@@ -107,11 +107,15 @@ $wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
 $action = New-ScheduledTaskAction -Execute $wscript -Argument "//B //Nologo `"$vbs`"" -WorkingDirectory $HelperRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-# PT0S: no time limit. The default of three days would stop the bridge.
+# Do not set ExecutionTimeLimit here. A zero timespan is stored as 00:00:00, and
+# Register-ScheduledTask rejects that on this PC. The three-day default is removed
+# after the task exists, by writing PT0S.
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
-$settings.ExecutionTimeLimit = [TimeSpan]::Zero
 try {
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'גשר HELPER למחשב: בלי חלון, בסשן של המשתמש, עולה עם ההתחברות ומתחבר מחדש לבד.' -Force | Out-Null
+    $task = Get-ScheduledTask -TaskName $TaskName
+    $task.Settings.ExecutionTimeLimit = 'PT0S'
+    Set-ScheduledTask -InputObject $task | Out-Null
 } catch {
     Write-Host 'לא הצלחתי לרשום את המשימה. מריצים את הסקריפט מחלון PowerShell של המשתמש עצמו (לא חייב מנהל).'
     Write-Host $_.Exception.Message
