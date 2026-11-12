@@ -9,7 +9,7 @@ import { DATA_DIR } from './config.js'
 import { state as store, save } from './store.js'
 import { ingestGroupMetadata, syncParticipatingGroups } from './groups.js'
 import * as inflight from './inflight.js'
-import { homeworkPayload, readCapped } from './wa-media-facts.js'
+import { homeworkPayload, readCapped, ephemeralOf } from './wa-media-facts.js'
 
 const CATCH_UP = 12 * 3600
 const MAX_SEEN = 500
@@ -238,7 +238,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
           if (text && !text.startsWith(BOT_MARK) && sentAt >= since) {
             if (!groupHooks.knows(jid)) sock.groupMetadata(jid).then((m) => groupHooks.setGroupName(jid, m.subject)).catch(() => {})
             try {
-              groupHooks.capture({ group: jid, id: msg.key.id, sender: msg.key.participant || msg.participant || '', senderName: msg.pushName || '', at: sentAt, text, fromMe: Boolean(msg.key.fromMe) })
+              groupHooks.capture({ group: jid, id: msg.key.id, sender: msg.key.participant || msg.participant || '', senderName: msg.pushName || '', at: sentAt, text, fromMe: Boolean(msg.key.fromMe), ephemeral: ephemeralOf(msg.message) })
             } catch (e) {
               console.log(`[groups] ${e.message}`)
             }

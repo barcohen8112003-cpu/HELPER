@@ -47,8 +47,9 @@ export function claimedByOther(ref, by, nowMs = Date.now()) {
   return load().find((e) => e.by !== by && nowMs - e.at < KEEP_MS && same(e, ref)) || null
 }
 
+// Never for homework from a disappearing message: that is not kept anywhere, not even here.
 export function claim(ref, by, nowMs = Date.now()) {
-  if (!ref?.g || !ref.s) return
+  if (!ref?.g || !ref.s || ref.eph) return
   const list = load().filter((e) => nowMs - e.at < KEEP_MS)
   if (!list.some((e) => e.by === by && same(e, ref))) list.push({ g: ref.g, s: ref.s, mid: String(ref.mid || '').slice(0, 64), day: ref.day || '', text: String(ref.text || '').slice(0, 160), by, at: nowMs })
   cache = list.slice(-MAX)

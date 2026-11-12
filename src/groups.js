@@ -63,7 +63,9 @@ export function persist(now = false) {
     saveTimer = null
     if (!cache) return
     const tmp = FILE() + '.tmp'
-    fs.writeFileSync(tmp, JSON.stringify(cache))
+    // Messages from a disappearing-message chat (eph), and items made from them, live in memory only: they are never
+    // written to disk, so a restart forgets them, as the sender meant.
+    fs.writeFileSync(tmp, JSON.stringify({ ...cache, buffer: cache.buffer.filter((m) => !m.eph), items: cache.items.filter((i) => !i.eph) }))
     fs.renameSync(tmp, FILE())
   }
   if (now) {
@@ -153,9 +155,12 @@ export function capture(msg, nowMs = Date.now()) {
   if (!text || s.buffer.some((m) => m.id === msg.id)) return false
   g.seen++
   const sid = hash(msg.sender)
-  const who = (s.senders[sid] ||= { name: '', weight: 0, hits: 0 })
+  // A disappearing message adds nothing to the saved sender list: its name stays on the in-memory copy only.
+  const who = msg.ephemeral ? { ...(s.senders[sid] || { name: '' }) } : (s.senders[sid] ||= { name: '', weight: 0, hits: 0 })
   if (msg.senderName) who.name = String(msg.senderName).slice(0, 40)
-  s.buffer.push({ id: msg.id, g: msg.group, s: sid, name: who.name, at: g.lastAt, text: text.slice(0, MAX_TEXT), done: false })
+  // eph: from a disappearing-message chat (src/wa-media-facts.js). Carried to the item, so the homework list
+  // (src/schoolwork.js) and the shared alert file never keep a copy of it.
+  s.buffer.push({ id: msg.id, g: msg.group, s: sid, name: who.name, at: g.lastAt, text: text.slice(0, MAX_TEXT), done: false, ...(msg.ephemeral && { eph: true }) })
   const mine = s.buffer.filter((m) => m.g === msg.group)
   if (mine.length > MAX_PER_GROUP) {
     const drop = new Set(mine.slice(0, mine.length - MAX_PER_GROUP).map((m) => m.id))
@@ -281,7 +286,7 @@ function addItem(s, item, nowMs) {
   if (!clean.title) return null
   if (s.items.some((x) => itemKey(x) === itemKey(clean))) return null
   // mid: the WhatsApp message it came from, so the math and schoolwork alerts can tell it is the same homework.
-  const full = { id: s.nextItem++, g: item.g, s: item.s, ...(item.mid && { mid: String(item.mid).slice(0, 64) }), ...clean, at: nowMs, status: 'new', notified: false }
+  const full = { id: s.nextItem++, g: item.g, s: item.s, ...(item.mid && { mid: String(item.mid).slice(0, 64) }), ...(item.eph && { eph: true }), ...clean, at: nowMs, status: 'new', notified: false }
   s.items.push(full)
   if (s.senders[item.s]) s.senders[item.s].hits++
   return full
@@ -335,7 +340,7 @@ export async function extract(nowMs = Date.now()) {
   for (const f of found) {
     const m = index[Number(f.msg) - 1]
     if (!m) continue
-    const item = addItem(s, { ...f, g: m.g, s: m.s, mid: m.id }, nowMs)
+    const item = addItem(s, { ...f, g: m.g, s: m.s, mid: m.id, eph: Boolean(m.eph) }, nowMs)
     if (item) fresh.push(item)
   }
   for (const m of picked) m.done = true

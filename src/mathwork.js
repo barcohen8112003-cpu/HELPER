@@ -21,6 +21,9 @@
 //   are never fetched, stored or replayed: the report says such a photo is unavailable. Files this feature cannot read
 //   (PDF, documents, video, voice) are never fetched either; the report says there is a file it did not read.
 // - The 15MB cap is enforced on the bytes actually downloaded, not only the declared size.
+// - Homework from a disappearing-message chat (or quoting an original that was) is never stored: not here, not in
+//   schoolwork, not in the shared alert file. Only a count per group name is kept until the next daily report, which
+//   says the list is not complete. No expiry is computed and no fixed window is used.
 // - The immediate new-homework alert is shared with src/schoolwork.js (src/homework-alerts.js): the same group
 //   message alerts once; both daily reports still list it.
 // - "A photo of the message" is the real photo that came with it. A text-only homework message is quoted as text,
@@ -315,6 +318,11 @@ export async function onGroupMessage(m, nowMs = Date.now()) {
   if (!hw) return null
   const s = load()
   s.since ||= nowMs
+  // From a disappearing-message chat, or quoting an original that was: the sender meant it to vanish. Nothing of it
+  // is stored (no text, no id, no sender, no photo) and nothing is claimed in the shared alert file. Its expiry is
+  // not computed: not storing it at all is the only rule. What is kept is a count per group name, so the alert and
+  // the daily report can say honestly that homework was seen and is not in the list.
+  if (m.ephemeral) return void noteEphemeral(s, name, nowMs)
   const prov = { group: name, groupJid: m.group, senderHash: senderHash(m.sender), senderName: clip(m.senderName, 40), msgId: String(m.id).slice(0, 64), at: atMs }
   if (s.items.some((i) => i.prov.msgId === prov.msgId || i.also.some((a) => a.msgId === prov.msgId))) return null
   const quotedId = m.quoted?.id ? String(m.quoted.id).slice(0, 64) : ''
@@ -354,6 +362,23 @@ export async function onGroupMessage(m, nowMs = Date.now()) {
   alerts.claim(ref, 'mathwork', nowMs)
   persist()
   return item
+}
+
+function noteEphemeral(s, group, nowMs) {
+  const e = (s.ephemeral ??= { count: 0, groups: {} })
+  e.count++
+  e.groups[group] = (e.groups[group] || 0) + 1
+  // One alert per group per day, whatever the number of messages.
+  const key = `mathwork-ephemeral:${wall(nowMs, tz()).day}:${digest([group])}`
+  if (!accepted(key) && !s.pending.some((p) => p.key === key)) {
+    s.pending.push({ key, text: `📐 נכתבו שיעורי בית במתמטיקה בהודעה נעלמת (${group}). לא שמרתי ממנה כלום כי היא אמורה להיעלם, אז היא לא תופיע ברשימה ובדוח: כדאי להסתכל בקבוצה.`, ids: [], at: nowMs })
+  }
+  persist()
+}
+const ephemeralLine = (s) => {
+  const e = s.ephemeral
+  if (!e?.count) return ''
+  return `⚠️ מאז הדוח הקודם נראו ${e.count} הודעות שיעורי בית מהודעות נעלמות (${Object.keys(e.groups).join(', ')}). לא שמרתי מהן כלום, אז הרשימה הזאת לא שלמה: כדאי להסתכל בקבוצה.`
 }
 
 // ── what he sees ───────────────────────────────────────────────────────────────────────────────────
@@ -441,7 +466,8 @@ export function reportText(nowMs = Date.now(), { daily = false, limit = daily ? 
   for (const i of shown) lines.push('', ...itemBlock(s, i, nowMs))
   if (open.length > shown.length) lines.push('', `ועוד ${open.length - shown.length} פתוחים שלא נכנסו. "מה יש לי במתמטיקה?" מציג את כולם.`)
   const cov = coverage(nowMs)
-  if (!open.length) lines.push('', cov.some((c) => !c.ok && !c.note) ? 'לא מצאתי שיעורי בית פתוחים במה שנקרא, אבל זה לא אומר שאין: חלק לא נבדק (למטה).' : 'לא מצאתי שיעורי בית פתוחים בקבוצות המתמטיקה שנקראו.')
+  if (ephemeralLine(s)) lines.push('', ephemeralLine(s))
+  if (!open.length) lines.push('', cov.some((c) => !c.ok && !c.note) || ephemeralLine(s) ? 'לא מצאתי שיעורי בית פתוחים במה שנקרא, אבל זה לא אומר שאין: חלק לא נבדק (למטה).' : 'לא מצאתי שיעורי בית פתוחים בקבוצות המתמטיקה שנקראו.')
   lines.push('', '*מה נבדק:*', ...cov.map((c) => `${c.ok ? '✓' : c.note ? 'ℹ️' : '✗'} ${c.text}`))
   if (open.length) lines.push('', 'סיימת? "סיימתי מתמטיקה 2" ואסמן אצלי. אני לא כותב לקבוצה ולא למורה.')
   return lines.join('\n')
@@ -541,6 +567,7 @@ async function sendDaily(notify, day, nowMs) {
   if (!accepted(key)) return false
   s.lastDaily = day
   s.pendingDaily = null
+  s.ephemeral = null // said in this report; the next one counts afresh
   queuePhotos(s, day, nowMs)
   persist()
   return true

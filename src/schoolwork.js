@@ -457,9 +457,16 @@ export async function fromGroups(items, notify, nowMs = Date.now()) {
   const g = groups.load().groups
   const entries = []
   const refs = new Map() // item id -> the source message, for the alert shared with src/mathwork.js
+  let eph = 0
   for (const i of items || []) {
     const name = g[i.g]?.name || ''
     if (!name || g[i.g]?.muted || !allowedGroup(name)) continue
+    // From a disappearing message: nothing of it is stored here (no title, no id, no sender). Only a count, so the
+    // summary can say the list is not complete.
+    if (i.eph) {
+      if (i.type === 'homework') eph++
+      continue
+    }
     const base = { sourceId: `${i.id}:${i.at}`, title: i.title, course: name, due: i.date ? { day: i.date, time: i.time || null } : null }
     refs.set(`groups:${base.sourceId}`, { g: i.g, s: i.s, mid: i.mid || '', day: i.date || '', text: i.title })
     if (i.type === 'homework') entries.push({ ...base, confidence: i.date ? 'medium' : 'low' })
@@ -468,6 +475,7 @@ export async function fromGroups(items, notify, nowMs = Date.now()) {
   // The groups are read once a round whether or not anything was found; freshness comes from groups.json.
   const s = load()
   ;(s.sources.groups ??= {}).baselined = true
+  if (eph) s.ephemeralSeen = (s.ephemeralSeen || 0) + eph
   const out = ingest('groups', entries, nowMs)
   // The same homework already alerted by the math report (src/mathwork.js, same group message) is listed here as
   // usual but not alerted a second time. One alerted here first is claimed, so the math report does not repeat it.
@@ -564,8 +572,9 @@ export async function summaryText(nowMs = Date.now(), { daily = false, limit = d
   if (hidden > 0) lines.push('', `ועוד ${hidden} פתוחות שלא נכנסו להודעה. "מה פתוח בשיעורי בית?" מציג את כולן.`)
   if (reported.length) lines.push('', '❓ נכתב בקבוצה שבוטל או נדחה, לא מאומת:', ...reported.map((i) => `• ${i.title} (${i.reported.kind === 'cancel' ? 'בוטל?' : `נדחה${i.reported.due ? ` ל${dueLabel(i.reported.due, nowMs)}` : ''}?`})`))
   if (submitted) lines.push('', `✅ הוגשו לפי Classroom בשבוע האחרון: ${submitted}`)
+  if (s.ephemeralSeen) lines.push('', `⚠️ מאז הסיכום הקודם נראו ${s.ephemeralSeen} הודעות שיעורי בית מהודעות נעלמות בקבוצות. לא שמרתי מהן כלום, אז הרשימה הזאת לא שלמה: כדאי להסתכל בקבוצה.`)
   if (!open.length) {
-    lines.push('', gaps.length ? 'לא מצאתי מטלות פתוחות במה שהצלחתי לבדוק, אבל זה לא אומר שאין שיעורי בית: חלק מהמקורות לא נבדקו (למטה).' : `לא מצאתי מטלות פתוחות ב: ${cov.map((c) => c.label).join(', ')}.`)
+    lines.push('', gaps.length || s.ephemeralSeen ? 'לא מצאתי מטלות פתוחות במה שהצלחתי לבדוק, אבל זה לא אומר שאין שיעורי בית: חלק מהמקורות לא נבדקו (למטה).' : `לא מצאתי מטלות פתוחות ב: ${cov.map((c) => c.label).join(', ')}.`)
   }
   lines.push('', '*מה נבדק:*', ...cov.filter((c) => c.ok).map((c) => `✓ ${c.text}`))
   if (gaps.length) lines.push(...gaps.map((c) => `✗ ${c.text}`))
@@ -613,6 +622,7 @@ async function sendDaily(notify, day, nowMs) {
   if (!accepted(key)) return false
   s.lastDaily = day
   s.pendingDaily = null
+  s.ephemeralSeen = 0
   persist()
   return true
 }

@@ -35,6 +35,15 @@ export function unwrap(raw) {
   return { viewOnce, ephemeral, content: content || null }
 }
 
+// True when the message came from a disappearing-message chat or arrived in an ephemeral wrapper, or quotes an
+// original that did. Read on the raw message. Its expiry is never computed or trusted: the caller stores none of it.
+export function ephemeralOf(raw) {
+  const own = unwrap(raw)
+  if (own.ephemeral) return true
+  const ctx = contextOf(own.content)
+  return Boolean(ctx?.quotedMessage && unwrap(ctx.quotedMessage).ephemeral) || Number(ctx?.expiration) > 0
+}
+
 const KIND = (k, part) => (k === 'documentMessage' ? 'file' : k === 'videoMessage' || k === 'ptvMessage' ? 'video' : k === 'audioMessage' ? (part.ptt ? 'voice' : 'audio') : k === 'imageMessage' ? 'image' : k === 'stickerMessage' ? 'sticker' : 'file')
 const clip = (s, n) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n)
 
@@ -75,6 +84,7 @@ export function homeworkPayload(msg, { jid, sentAt, text, groupName, fetchFor })
     }
   }
   return {
+    ephemeral: ephemeralOf(msg.message),
     group: jid,
     groupName,
     id: msg.key.id,

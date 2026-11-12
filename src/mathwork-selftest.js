@@ -483,6 +483,95 @@ let D
   delete process.env.SCHOOLWORK_GROUPS
 }
 
+// ── disappearing messages: nothing of them is persisted, anywhere; the reports say they are missing ─────────────
+{
+  process.env.SCHOOLWORK = 'on'
+  process.env.SCHOOLWORK_GROUPS = 'מתמטיקה'
+  const { homeworkPayload, ephemeralOf } = await import('./wa-media-facts.js')
+  const { normalizeMessageContent } = await import('@whiskeysockets/baileys')
+  const textOf = (raw) => {
+    const c = normalizeMessageContent(raw)
+    return c?.conversation || c?.extendedTextMessage?.text || c?.imageMessage?.caption || c?.documentMessage?.caption || ''
+  }
+  const fetched = []
+  const fetchFor = (m) => async () => (fetched.push(m.key?.id), bytes('eph'))
+  // Every persistent file under the data folder, read raw, so "nowhere" means nowhere.
+  const everywhere = () => {
+    const out = []
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name)
+        if (e.isDirectory()) walk(f)
+        else out.push(fs.readFileSync(f).toString('utf8'))
+      }
+    }
+    walk(tmp)
+    return out.join('\n')
+  }
+  // What src/whatsapp.js does with one raw group message: the groups reader capture, then the math hook.
+  const deliver = async (raw, nowIso) => {
+    const text = textOf(raw.message)
+    groups.capture({ group: G_MATH, id: raw.key.id, sender: raw.key.participant, senderName: raw.pushName, at: Number(raw.messageTimestamp), text, fromMe: false, ephemeral: ephemeralOf(raw.message) })
+    return MW.onGroupMessage(homeworkPayload(raw, { jid: G_MATH, sentAt: Number(raw.messageTimestamp), text, groupName: 'מתמטיקה י3 - 5 יח"ל', fetchFor }), at(nowIso))
+  }
+  const raw = (id, message, t) => ({ key: { remoteJid: G_MATH, id, participant: PHONE_A }, pushName: 'מורה נעלמת', messageTimestamp: sec(t), message })
+  const roundOfGroups = async (title, nowIso) => {
+    groups.setModel(async () => JSON.stringify({ items: groups.load().buffer.filter((m) => !m.done).map((m, i) => ({ msg: i + 1, type: 'homework', title: `${title} ${m.text.match(/[A-Z]+SECRET\d/)?.[0] || ''}`.trim(), date: '2026-12-20', importance: 4 })) }))
+    groups.load().lastExtract = 0
+    await groups.tick({ onFresh: (items) => SW.fromGroups(items, notify, at(nowIso)) }, at(nowIso))
+  }
+
+  const own = raw('EPH1', { ephemeralMessage: { message: { extendedTextMessage: { text: 'שיעורי בית למחר עמ\' 77 OWNSECRET1', contextInfo: { expiration: 604800 } } } } }, '2026-12-03T08:00:00Z')
+  check('a disappearing-chat message is flagged at read time', ephemeralOf(own.message) === true && homeworkPayload(own, { jid: G_MATH, sentAt: 1, text: 'x', groupName: 'x', fetchFor }).ephemeral === true)
+  check('an ordinary message is not flagged', ephemeralOf({ extendedTextMessage: { text: 'שיעורי בית' } }) === false)
+  const itemsBefore = MW.load().items.length
+  const r1 = await deliver(own, '2026-12-03T08:00:01Z')
+  check('math report: no item for a disappearing message', r1 == null && MW.load().items.length === itemsBefore)
+  // Quoted originals: one wrapped as ephemeral, one whose expiry is only known as a duration, one already gone.
+  const q1 = raw('EPH2', { extendedTextMessage: { text: 'שיעורי בית לפי זה QUOTESECRET1', contextInfo: { stanzaId: 'GONE1', participant: PHONE_B, quotedMessage: { ephemeralMessage: { message: { conversation: 'עמ\' 88 QUOTEDSECRET2' } } } } } }, '2026-12-03T08:05:00Z')
+  const q2 = raw('EPH3', { extendedTextMessage: { text: 'להגיש את זה עד 21.12 QUOTESECRET3', contextInfo: { stanzaId: 'GONE2', participant: PHONE_B, quotedMessage: { imageMessage: { mimetype: 'image/jpeg', contextInfo: { expiration: 86400 } } } } } }, '2026-12-03T08:06:00Z')
+  const q3 = raw('EPH4', { extendedTextMessage: { text: 'שיעורי בית מההודעה ההיא QUOTESECRET4', contextInfo: { stanzaId: 'GONE3', participant: PHONE_B, expiration: 604800 } } }, '2026-12-03T08:07:00Z')
+  for (const q of [q1, q2, q3]) await deliver(q, '2026-12-03T08:08:00Z')
+  check('quoted disappearing originals (wrapped, expiring, or expiry unknown): no item', MW.load().items.length === itemsBefore && !MW.load().items.some((i) => /SECRET/.test(i.text)))
+  check('nothing was downloaded for them', fetched.length === 0)
+  await roundOfGroups('שיעורי בית במתמטיקה', '2026-12-03T08:10:00Z')
+  check('schoolwork: no item for them', !SW.load().items.some((i) => /SECRET/.test(i.title)))
+  check('schoolwork: only a count is kept', SW.load().ephemeralSeen === 4, SW.load().ephemeralSeen)
+  sent.length = 0
+  await MW.mathworkJob(notify, null, null, at('2026-12-03T08:15:00Z'))
+  const ephAlerts = sent.filter((x) => x.key?.startsWith('mathwork-ephemeral:'))
+  check('one disclosure alert for the group that day, no content', ephAlerts.length === 1 && ephAlerts[0].text.includes('בהודעה נעלמת (מתמטיקה י3 - 5 יח"ל)') && !/SECRET|77|88|מורה נעלמת/.test(ephAlerts[0].text), JSON.stringify(ephAlerts))
+  check('no new-assignment alert from either pipeline for them', !sent.some((x) => /SECRET/.test(x.text)) && !sent.some((x) => x.key?.startsWith('schoolwork-alert')))
+  groups.persist(true) // write the groups file now, not after its 5-second debounce
+  check('the groups file was just written', fs.existsSync(path.join(tmp, 'groups.json')) && groups.load().buffer.some((m) => m.eph))
+  const disk = everywhere()
+  check('no persisted copy of the disappearing text anywhere under the data folder', !/OWNSECRET|QUOTESECRET|QUOTEDSECRET/.test(disk), (disk.match(/.{60}SECRET.{20}/) || [''])[0])
+  check('the sender\'s display name from those messages is not persisted either', !disk.includes('מורה נעלמת'))
+  const alertsFile = fs.readFileSync(path.join(tmp, 'homework-alerts.json'), 'utf8')
+  check('the shared alert file holds no entry for them', !/EPH\d|GONE\d|SECRET/.test(alertsFile))
+  check('the groups reader keeps them in memory only (not on disk)', groups.load().buffer.some((m) => m.eph) && !fs.readFileSync(path.join(tmp, 'groups.json'), 'utf8').includes('SECRET'))
+  // The daily reports say homework is missing instead of pretending to be complete.
+  const mwT = MW.reportText(at('2026-12-03T16:00:00Z'), { daily: true })
+  check('18:00 report: coverage-gap disclosure with the count, no content', mwT.includes('⚠️ מאז הדוח הקודם נראו 4 הודעות שיעורי בית מהודעות נעלמות (מתמטיקה י3 - 5 יח"ל)') && mwT.includes('הרשימה הזאת לא שלמה') && !/SECRET/.test(mwT), mwT.slice(-600))
+  const swT = await SW.summaryText(at('2026-12-03T13:00:00Z'), { daily: true })
+  check('15:00 summary: coverage-gap disclosure with the count, no content', swT.includes('⚠️ מאז הסיכום הקודם נראו 4 הודעות שיעורי בית מהודעות נעלמות') && !/SECRET/.test(swT))
+  sent.length = 0
+  await MW.mathworkJob(notify, null, null, at('2026-12-03T16:00:00Z'))
+  check('the 18:00 report carries it and then counts afresh', sent.some((x) => x.key === 'mathwork-daily:2026-12-03' && x.text.includes('4 הודעות שיעורי בית מהודעות נעלמות')) && !MW.load().ephemeral)
+  check('the next report has no stale disclosure', !MW.reportText(at('2026-12-04T16:00:00Z')).includes('מהודעות נעלמות'))
+  // Ordinary homework is unchanged: kept open until closed on his word, however old; its alert claim is kept.
+  const ord = await deliver(raw('ORD1', { extendedTextMessage: { text: 'שיעורי בית ל-22.12: עמ\' 210 שאלות 1-2' } }, '2026-12-03T09:00:00Z'), '2026-12-03T09:00:01Z')
+  check('ordinary homework through the same path is stored', ord && ord.id === 'math:ORD1' && ord.text.includes('עמ\' 210'))
+  MW.retention(at('2027-06-01T09:00:00Z'))
+  check('an open ordinary item survives months (no age pruning)', MW.load().items.find((i) => i.id === 'math:ORD1')?.status === 'open')
+  check('its alert claim is in the shared file', fs.readFileSync(path.join(tmp, 'homework-alerts.json'), 'utf8').includes('ORD1'))
+  MW.markDone([MW.load().items.find((i) => i.id === 'math:ORD1').n], at('2027-06-01T09:01:00Z'))
+  MW.retention(at('2027-06-09T09:01:00Z'))
+  check('closed on his word, it then goes after the closed-item limit', !MW.load().items.some((i) => i.id === 'math:ORD1'))
+  delete process.env.SCHOOLWORK
+  delete process.env.SCHOOLWORK_GROUPS
+}
+
 // ── backup leaves data/mathwork/ out ─────────────────────────────────────
 {
   const H = await MW.onGroupMessage(msg({ id: 'HW-H', at: sec('2026-11-30T10:00:00Z'), text: 'שיעורי בית למחר עמ\' 5', image: img, download: dl('H') }), at('2026-11-30T10:00:00Z'))
