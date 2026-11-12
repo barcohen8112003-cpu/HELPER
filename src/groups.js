@@ -385,7 +385,7 @@ export function openItems({ sinceMs = 0, group = '', nowMs = Date.now(), all = f
   const s = load()
   const today = ymd(new Date(nowMs))
   return s.items
-    .filter((i) => i.status !== 'dismissed' && i.at >= sinceMs && (!i.date || i.date >= today))
+    .filter((i) => !i.eph && i.status !== 'dismissed' && i.at >= sinceMs && (!i.date || i.date >= today))
     .filter((i) => !group || groupNameMatches(groupName(i.g), group))
     .filter((i) => all || itemScore(i, s) >= THRESHOLD)
     .sort((a, b) => itemScore(b, s) - itemScore(a, s) || (a.date || '9').localeCompare(b.date || '9'))
@@ -418,8 +418,11 @@ export async function missed({ hours, group, nowMs = Date.now() } = {}) {
   const head = scanned.length
     ? `${started}עברתי על ${scanned.length} הודעות ב-${perGroup.size} קבוצות.`
     : started || 'לא נכתב כמעט כלום בקבוצות מאז.'
-  if (!items.length) return `${head} אין משהו שצריך לעשות איתו משהו.`
-  return [`${head} מה שחשוב:`, ...items.slice(0, 12).map((i) => itemLine(i, nowMs, true)), '', 'אפשר להוסיף ליומן או למשימות לפי המספר, או להגיד מה פחות מעניין.'].join('\n')
+  // Disappearing messages are counted, never shown: the answer goes into the chat history.
+  const eph = s.items.filter((i) => i.eph && i.at >= from && (!group || groupNameMatches(groupName(i.g), group))).length
+  const ephNote = eph ? `\n${eph} פריטים נוספים הגיעו מהודעות נעלמות: לא שמרתי את התוכן שלהם, אז הרשימה לא שלמה. כדאי להסתכל בקבוצה.` : ''
+  if (!items.length) return `${head} אין משהו שצריך לעשות איתו משהו.${ephNote}`
+  return [`${head} מה שחשוב:`, ...items.slice(0, 12).map((i) => itemLine(i, nowMs, true)), '', 'אפשר להוסיף ליומן או למשימות לפי המספר, או להגיד מה פחות מעניין.'].join('\n') + ephNote
 }
 
 // ── learning what matters to him ────────────────────────────────────────────
@@ -483,7 +486,8 @@ export const destination = (i) => (['homework', 'bring'].includes(i.type) || !i.
 // adders: { calendar(item) => Promise, tasks(item) => Promise }, confirm(question) => Promise<boolean> (null = no ask).
 export async function addItems(ids, { to = 'auto', adders, confirm }) {
   const s = load()
-  const picked = s.items.filter((i) => ids.includes(i.id) && i.status !== 'added')
+  // Never an item from a disappearing message: its content would live on in the calendar or tasks.
+  const picked = s.items.filter((i) => ids.includes(i.id) && i.status !== 'added' && !i.eph)
   if (!picked.length) return 'לא מצאתי פריטים חדשים במספרים האלה.'
   const plan = picked.map((i) => ({ i, where: to === 'auto' ? destination(i) : to }))
   const list = plan.map(({ i, where }) => `• ${where === 'calendar' ? 'ליומן' : 'למשימות'}: ${i.title}${i.date ? ` (${i.date}${i.time ? ' ' + i.time : ''})` : ''}`).join('\n')
@@ -538,7 +542,8 @@ export function recent({ group, hours = 48, limit = 40, query, nowMs = Date.now(
   }
   const jids = matched ? new Set(matched.map(([jid]) => jid)) : null
   const q = foldName(query)
-  let rows = s.buffer.filter((m) => m.at >= from && (!jids || jids.has(m.g)))
+  // Disappearing messages are never quoted back (the answer is kept in the chat history).
+  let rows = s.buffer.filter((m) => !m.eph && m.at >= from && (!jids || jids.has(m.g)))
   if (q) rows = rows.filter((m) => foldName(m.text).includes(q))
   rows.sort((a, b) => a.at - b.at || String(a.id).localeCompare(String(b.id)))
   const shown = rows.slice(-cap)
@@ -614,10 +619,17 @@ export async function tick({ notify, adders, onFresh } = {}, nowMs = Date.now())
   const fresh = await extract(nowMs)
   const today = ymd(new Date(nowMs))
   const tomorrow = ymd(new Date(nowMs + 86400000))
+  const ephGroups = new Set()
   for (const i of fresh) {
     const score = itemScore(i, s)
     // A test, a cancellation or a change for today or tomorrow is worth a message now. The rest waits for the morning.
     const soon = i.date === today || i.date === tomorrow
+    // From a disappearing message: its content is never sent (a notice lands in sent.log and, in quiet hours, in the
+    // outbox inside state.json) and never added to the calendar or tasks. Only the group gets a content-free notice.
+    if (i.eph) {
+      if (soon && ['exam', 'cancel', 'change'].includes(i.type) && score >= 4) ephGroups.add(i.g)
+      continue
+    }
     if (notify && soon && ['exam', 'cancel', 'change'].includes(i.type) && score >= 4) {
       i.notified = true
       await notify(`📣 ${itemLine(i, nowMs)}`, false, `group-item:${i.id}`)
@@ -626,7 +638,12 @@ export async function tick({ notify, adders, onFresh } = {}, nowMs = Date.now())
       await addItems([i.id], { adders, confirm: null }).catch((e) => console.log(`[groups] ${e.message}`))
     }
   }
+  // One per group per day, whatever was written: the group's name and that something looked urgent, nothing else.
+  for (const g of ephGroups) {
+    if (notify) await notify(`📣 ${EPH_NOTICE(groupName(g))}`, false, `group-eph:${today}:${hash(g)}`)
+  }
   persist()
   if (onFresh) await onFresh(fresh)
   return fresh
 }
+export const EPH_NOTICE = (name) => `בקבוצה ${name} נכתבה הודעה נעלמת שנראית חשובה להיום או למחר. לא שמרתי ולא שלחתי את התוכן שלה, כדאי להסתכל בקבוצה.`

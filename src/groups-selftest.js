@@ -285,6 +285,68 @@ try {
 ok(readText.includes('בוחן פתע'), 'the tool action read returns the stored text')
 ok(groups.load().lastAsked === askedAt, 'read does not mark that he asked what he missed')
 
+// ── disappearing messages: no content in a notice, the outbox, sent.log, the calendar or tasks ──────────
+{
+  const { state } = await import('./store.js')
+  const { createOutbox } = await import('./outbox.js')
+  state.owner = { jid: 'owner@s.whatsapp.net' }
+  const wire = []
+  // Quiet hours on for the first half, so a notice would sit in state.outbox (inside state.json) first.
+  const savedQuiet = config.quiet
+  config.quiet = { from: 0, to: 24 * 60 }
+  const outbox = createOutbox(async (text) => wire.push(text))
+  const notify2 = (text, urgent, key) => outbox.notify(text, urgent, key)
+  const added2 = []
+  const adders2 = { calendar: async (i) => added2.push(['calendar', i.title]), tasks: async (i) => added2.push(['tasks', i.title]) }
+  process.env.GROUPS_AUTO_ADD = 'on'
+  groups.reset()
+  groups.setEnabled(true)
+  groups.setGroupName(CLASS, 'י3 כיתה')
+  groups.capture(msg(CLASS, 'מחר מבחן בגיאוגרפיה EPHSECRETA', { ephemeral: true }))
+  groups.capture(msg(CLASS, 'היום שיעור ספורט בוטל EPHSECRETB', { ephemeral: true }))
+  groups.capture(msg(CLASS, 'מחר הבוחן באנגלית הוזז לשעה שנייה', { ephemeral: false }))
+  groups.capture(msg(CLASS, 'שיעורי בית בהיסטוריה למחר EPHSECRETC', { ephemeral: true }))
+  groups.setModel(async () => JSON.stringify({ items: [
+    { msg: 1, type: 'exam', title: 'מחר מבחן בגיאוגרפיה EPHSECRETA', date: '2026-10-29', importance: 5 },
+    { msg: 2, type: 'cancel', title: 'היום שיעור ספורט בוטל EPHSECRETB', date: '2026-10-28', importance: 5 },
+    { msg: 3, type: 'change', title: 'מחר הבוחן באנגלית הוזז לשעה שנייה', date: '2026-10-29', importance: 5 },
+    { msg: 4, type: 'homework', title: 'שיעורי בית בהיסטוריה למחר EPHSECRETC', date: '2026-10-29', importance: 5 },
+  ] }))
+  groups.load().lastExtract = 0
+  const fresh = await groups.tick({ notify: notify2, adders: adders2 }, NOW)
+  ok(fresh.filter((i) => i.eph).length === 3 && fresh.filter((i) => !i.eph).length === 1, 'disappearing-sourced items are flagged on the item')
+  const stored = JSON.stringify(state.outbox)
+  ok(state.outbox.length === 2 && !/EPHSECRET|גיאוגרפיה|ספורט/.test(stored), 'quiet hours: the outbox (state.json) holds no disappearing content')
+  ok(state.outbox.some((m) => m.text.includes('אנגלית') && m.key.startsWith('group-item:')), 'the ordinary change is queued exactly as before')
+  const gap = state.outbox.filter((m) => m.key.startsWith('group-eph:'))
+  ok(gap.length === 1 && gap[0].text === `📣 ${groups.EPH_NOTICE('י3 כיתה')}`, 'one content-free notice for the group instead')
+  ok(added2.length === 1 && added2[0][1].includes('אנגלית'), 'auto-add: only the ordinary item is added')
+  ok(!JSON.stringify(added2).includes('EPHSECRET'), 'auto-add: no calendar/task payload with disappearing content')
+  ok((await groups.addItems(fresh.filter((i) => i.eph).map((i) => i.id), { adders: adders2, confirm: async () => true })).includes('לא מצאתי') && added2.length === 1, 'asking to add a disappearing item by number adds nothing')
+  // Quiet hours end: what goes out, and what sent.log keeps.
+  config.quiet = savedQuiet
+  await outbox.flush()
+  const log = fs.existsSync(path.join(tmp, 'sent.log')) ? fs.readFileSync(path.join(tmp, 'sent.log'), 'utf8') : ''
+  ok(wire.length === 2 && !wire.some((t) => /EPHSECRET/.test(t)), 'what is sent carries no disappearing content')
+  ok(log.includes('אנגלית') && log.includes('הודעה נעלמת') && !/EPHSECRET|גיאוגרפיה|ספורט/.test(log), 'sent.log: the ordinary notice and the gap notice, no disappearing content')
+  // Another round the same day: no second gap notice.
+  groups.capture(msg(CLASS, 'מחר מבחן בתנ"ך EPHSECRETD', { ephemeral: true }))
+  groups.setModel(async () => JSON.stringify({ items: [{ msg: 1, type: 'exam', title: 'מחר מבחן בתנ"ך EPHSECRETD', date: '2026-10-29', importance: 5 }] }))
+  groups.load().lastExtract = 0
+  await groups.tick({ notify: notify2, adders: adders2 }, NOW + 11 * 60000)
+  ok(wire.length === 2 && state.outbox.length === 0, 'one gap notice per group per day')
+  // The chat side: "מה פספסתי", the brief and the read action count them and never show them.
+  const missedText = await groups.missed({ hours: 24, nowMs: NOW + 12 * 60000 })
+  ok(!/EPHSECRET/.test(missedText) && missedText.includes('4 פריטים נוספים הגיעו מהודעות נעלמות'), '"מה פספסתי": counted, not shown')
+  ok(!groups.briefLines(NOW + 12 * 60000).some((l) => /EPHSECRET/.test(l)), 'morning brief: not shown')
+  ok(!/EPHSECRET/.test(groups.recent({ hours: 24, nowMs: NOW + 12 * 60000 })), 'read action: not quoted')
+  groups.persist(true)
+  ok(!/EPHSECRET/.test(fs.readFileSync(path.join(tmp, 'groups.json'), 'utf8')), 'groups.json: nothing from them')
+  delete process.env.GROUPS_AUTO_ADD
+  state.outbox = []
+  groups.reset()
+}
+
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(`${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
