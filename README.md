@@ -579,7 +579,7 @@ docker compose -f docker-compose.yml -f docker-compose.tailscale.yml exec tailsc
 
 **במחשב (Windows, המשתמש שלך, למשל yokos), אחרי `git pull`:**
 
-1. לוודא ש-`home-relay\pc-bridge.config.json` מלא (אותו `PC_BRIDGE_SECRET` כמו בשרת) ושגשר המחשב רץ, כמו היום: `node home-relay/pc-bridge.mjs`.
+1. לוודא ש-`home-relay\pc-bridge.config.json` מלא (אותו `PC_BRIDGE_SECRET` כמו בשרת) ושהגשר רץ ברקע: `powershell -ExecutionPolicy Bypass -File .\home-relay\install-bridge-service.ps1`. חלון ידני, רק לניפוי: `node home-relay/pc-bridge.mjs`.
 2. ב-PowerShell, מתוך תיקיית HELPER:
 
 ```powershell
@@ -770,7 +770,7 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 | `npm run test:watch` | מעקב שקט: דיוג, הפעלה מחדש באמצע שליחה, כפילויות, שעות שקט והודעת בוקר |
 | `node src/morning-selftest.js` | הודעת הבוקר. `--live` בונה את ההודעה של היום מעותק של הנתונים שלך |
 | `node src/dashboard/_selftest.js` | הדשבורד, כולל ניסיונות הזרקת קוד |
-| `npm run check:pc-bridge` | גשר המחשב הביתי: חתימה, שידור חוזר, מחשב מנותק, וסירוב אישור |
+| `npm run check:pc-bridge` | גשר המחשב הביתי: חתימה, שידור חוזר, חיבור מחדש עם השהיה, סקריפט ההתקנה ל-Windows, מחשב מנותק, וסירוב אישור |
 | `npm run check:face` | פנים: דגל כבוי, כרטיס, בחירת מנוע, ציור, סירוב בלי אימות, והשירות המקומי על 127.0.0.1 |
 | `npm run check:obscura` | Obscura: פורט לולאה בלבד, נפילה לדרך הקודמת, סקר זאפ, ושהחלון המחובר לא נפתח כשהסקר הצליח |
 | `npm run check:scrapling` | fetch_page עם Scrapling: Node -> Python -> JSON, timeout, עצירה, מקביליות, חסימת כתובות פרטיות ומסלול הבוט מול מודל מזויף |
@@ -816,7 +816,7 @@ Helper קורא מיילים, דפים וקבצים של אחרים. לכן הו
 
 | נשאר בבית | עובר לענן |
 |---|---|
-| שליטה ב-Windows (`pc.js`, `computer-use.js`) דרך `node home-relay/pc-bridge.mjs` | וואטסאפ, מודלים, זיכרון, מעקבים, יומן, מייל, חיפוש, חדשות ותזכורות |
+| שליטה ב-Windows (`pc.js`, `computer-use.js`) דרך הגשר ברקע (`home-relay\install-bridge-service.ps1`) | וואטסאפ, מודלים, זיכרון, מעקבים, יומן, מייל, חיפוש, חדשות ותזכורות |
 | חלון Webtop בבית, רק אם `WEBTOP_CLOUD` לא דלוק: `webtop-browser.bat` (Chrome/Edge על `127.0.0.1:9223`, פרופיל `data\webtop-profile`) | עם `WEBTOP_CLOUD=1`: דפדפן Webtop בקונטיינר, פרופיל על הדיסק, והתחברות מדף `/webtop` באתר ההגדרות |
 | Wake-on-LAN: `node home-relay/wake-relay.mjs` על מכשיר שנשאר דלוק (לא על המחשב שאותו מדליקים) | המוח שמחליט מתי לקרוא ל-Webtop, מתי לבקש אישור, ומתי לשלוח הדלקה |
 
@@ -858,11 +858,21 @@ sudo iptables -I INPUT -p tcp --dport 3210 -j ACCEPT
 
 שני דברים על מחשב ה-Windows, ואחד אופציונלי על מכשיר שנשאר דלוק:
 
-1. גשר השליטה. ממלאים `home-relay/pc-bridge.config.json` לפי `pc-bridge.config.example.json` (אותו סוד כמו `PC_BRIDGE_SECRET`, והכתובת `ws://IP:3212/pc` או `wss://שם.onrender.com/pc`), ואז:
+1. גשר השליטה. ממלאים `home-relay/pc-bridge.config.json` לפי `pc-bridge.config.example.json` (אותו סוד כמו `PC_BRIDGE_SECRET`, והכתובת `ws://IP:3212/pc` או `wss://שם.onrender.com/pc`). אחר כך, פעם אחת, מ-PowerShell בתיקיית HELPER:
 
-```bash
-node home-relay/pc-bridge.mjs
+```powershell
+powershell -ExecutionPolicy Bypass -File .\home-relay\install-bridge-service.ps1
 ```
+
+הסקריפט רושם משימה בשם `HELPER PC Bridge` בסשן של המשתמש שנכנס (לא כ-SYSTEM): בלי חלון, עולה עם ההתחברות ל-Windows, ואפשר להריץ אותו שוב בלי ליצור משימה כפולה. הגשר עצמו מתחבר מחדש כל עוד השרת למטה: 2 שניות, אחר כך 4, 8, 16, 32, ועד דקה, ולא מוותר. ריסטארט של השרת (בערך 15–60 שניות) לא דורש לפתוח חלון. אם התהליך עצמו נפל, המשימה מפעילה אותו מחדש. יומן: `%LOCALAPPDATA%\HelperBridge\bridge.log`.
+
+להסרה:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\home-relay\install-bridge-service.ps1 -Uninstall
+```
+
+חלון לניפוי, כשרוצים לראות את היומן על המסך: `home-relay\start-bridge.bat`. זו לא הדרך הרגילה. אם החלון פתוח, הגשר ברקע מחכה שהוא ייסגר כדי שלא ירוצו שני חיבורים.
 
 2. חלון Webtop בבית, רק אם `WEBTOP_CLOUD` לא דלוק: `webtop-browser.bat`. החלון מאזין רק על `127.0.0.1`. נכנסים ידנית פעם אחת ומשאירים אותו פתוח (ממוזער, לא סגור). עם `WEBTOP_CLOUD=1` אין מה להפעיל בבית בשביל Webtop.
 
@@ -870,13 +880,13 @@ node home-relay/pc-bridge.mjs
 
 הגשר רק מתחבר החוצה. אין פתיחת פורט בבית. כל הודעה חתומה ב-HMAC, מוצפנת, ונדחית אם היא ישנה או חוזרת. `COMPUTER_MODE=ask` נשאר כמו היום: פעולה שמשנה מצב מחכה לאישור בוואטסאפ, ורק אחרי כן נשלחת למחשב.
 
-כדי שהגשר וחלון ה-Webtop יחזרו אחרי הדלקה, שמים קיצור של שניהם בתיקיית Startup של Windows. הגשר צריך את הסשן של המשתמש, בשביל המסך והמקלדת.
+הגשר צריך את הסשן של המשתמש, בשביל המסך, הרמקולים, כרטיס המסך וחלון ה-Webtop. לכן זו משימה בהתחברות ולא שירות Windows שרץ כ-SYSTEM. אחרי הדלקה וכניסה ל-Windows המשימה מעלה את הגשר, ואם `WEBTOP_URL` מלא גם את חלון ה-Webtop (ממוזער), כמו `start-bridge.bat`.
 
 ### כשהמחשב כבוי או בלי גשר
 
 הענן ממשיך לענות בוואטסאפ, אבל הוא לא יכול ללחוץ או לצלם מסך במחשב. כלי כזה לא נכשל בשקט: הוא אומר שהגשר לא ענה וששום פעולה לא בוצעה. קריאת Webtop כן עובדת כשהמחשב כבוי, אם `WEBTOP_CLOUD=1` וההתחברות בענן בתוקף. בלי הדגל, גם קריאת Webtop מחכה לחלון שבבית.
 
-מחשב כבוי לא מתחבר לגשר. הדבר היחיד שיכול להדליק אותו הוא Wake-on-LAN, וגם זה רק אם `wake-relay.mjs` רץ על מכשיר ביתי דלוק (`WAKE_MAC`, ובענן גם `WAKE_RELAY_TOPIC` ו-`WAKE_SECRET`). בלי המשדר הזה הענן אומר שצריך להדליק ידנית. אחרי העלייה והכניסה ל-Windows, הגשר וחלון ה-Webtop עולים מה-Startup והשליטה חוזרת.
+מחשב כבוי לא מתחבר לגשר. הדבר היחיד שיכול להדליק אותו הוא Wake-on-LAN, וגם זה רק אם `wake-relay.mjs` רץ על מכשיר ביתי דלוק (`WAKE_MAC`, ובענן גם `WAKE_RELAY_TOPIC` ו-`WAKE_SECRET`). בלי המשדר הזה הענן אומר שצריך להדליק ידנית. אחרי העלייה והכניסה ל-Windows, משימת `HELPER PC Bridge` מעלה את הגשר (ואת חלון ה-Webtop אם צריך) והשליטה חוזרת. אין צורך לפתוח את `start-bridge.bat`.
 
 ---
 

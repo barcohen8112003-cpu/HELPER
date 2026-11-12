@@ -4,6 +4,10 @@
 //
 //   node home-relay/pc-bridge.mjs
 //
+// On Windows the usual launch is the hidden logon task, not a window you leave open:
+//   powershell -ExecutionPolicy Bypass -File home-relay\install-bridge-service.ps1
+// start-bridge.bat is the visible window, for a manual run.
+//
 // pc-bridge.config.json, next to this file: { "url": "ws://YOUR_SERVER:3212/pc", "secret": "same-as-PC_BRIDGE_SECRET" }
 // Or set PC_BRIDGE_URL and PC_BRIDGE_SECRET in the environment. Needs Node 18 or newer.
 process.env.PC_BRIDGE_EXECUTOR = '1'
