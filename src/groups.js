@@ -280,7 +280,8 @@ function addItem(s, item, nowMs) {
   }
   if (!clean.title) return null
   if (s.items.some((x) => itemKey(x) === itemKey(clean))) return null
-  const full = { id: s.nextItem++, g: item.g, s: item.s, ...clean, at: nowMs, status: 'new', notified: false }
+  // mid: the WhatsApp message it came from, so the math and schoolwork alerts can tell it is the same homework.
+  const full = { id: s.nextItem++, g: item.g, s: item.s, ...(item.mid && { mid: String(item.mid).slice(0, 64) }), ...clean, at: nowMs, status: 'new', notified: false }
   s.items.push(full)
   if (s.senders[item.s]) s.senders[item.s].hits++
   return full
@@ -334,7 +335,7 @@ export async function extract(nowMs = Date.now()) {
   for (const f of found) {
     const m = index[Number(f.msg) - 1]
     if (!m) continue
-    const item = addItem(s, { ...f, g: m.g, s: m.s }, nowMs)
+    const item = addItem(s, { ...f, g: m.g, s: m.s, mid: m.id }, nowMs)
     if (item) fresh.push(item)
   }
   for (const m of picked) m.done = true

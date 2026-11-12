@@ -9,6 +9,7 @@ import { DATA_DIR } from './config.js'
 import { state as store, save } from './store.js'
 import { ingestGroupMetadata, syncParticipatingGroups } from './groups.js'
 import * as inflight from './inflight.js'
+import { homeworkPayload, readCapped } from './wa-media-facts.js'
 
 const CATCH_UP = 12 * 3600
 const MAX_SEEN = 500
@@ -242,36 +243,14 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
               console.log(`[groups] ${e.message}`)
             }
             // Math homework (src/mathwork.js): the same message, plus a way to fetch its photo, or the photo it quotes,
-            // right now. Nothing is downloaded here; the hook fetches only for a homework message. It gets no socket and
-            // no way to send, react or mark read.
+            // right now. Nothing is downloaded here; the hook fetches only for a homework message. View-once and
+            // disappearing media are recognised on the RAW message (before unwrapping) and get no fetcher at all.
+            // The hook gets no socket and no way to send, react or mark read.
             if (groupHooks.homework) {
-              const ctx = content?.extendedTextMessage?.contextInfo || content?.imageMessage?.contextInfo || null
-              const quoted = ctx?.quotedMessage ? normalizeMessageContent(ctx.quotedMessage) : null
-              const fetch = (m) => () => downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage })
+              const fetchFor = (m) => ({ maxBytes = MAX_MEDIA } = {}) => downloadMediaMessage(m, 'stream', {}, { logger, reuploadRequest: sock.updateMediaMessage }).then((stream) => readCapped(stream, maxBytes))
               const known = groupHooks.groupName?.(jid)
               Promise.resolve(known || sock.groupMetadata(jid).then((g) => g.subject).catch(() => ''))
-                .then((groupName) =>
-                  groupHooks.homework({
-                    group: jid,
-                    groupName,
-                    id: msg.key.id,
-                    sender: msg.key.participant || msg.participant || '',
-                    senderName: msg.pushName || '',
-                    at: sentAt,
-                    text,
-                    fromMe: Boolean(msg.key.fromMe),
-                    image: content?.imageMessage ? { mimetype: content.imageMessage.mimetype, fileLength: Number(content.imageMessage.fileLength) || 0 } : null,
-                    download: content?.imageMessage ? fetch(msg) : null,
-                    quoted: ctx?.stanzaId
-                      ? {
-                          id: ctx.stanzaId,
-                          sender: ctx.participant || '',
-                          image: quoted?.imageMessage ? { mimetype: quoted.imageMessage.mimetype, fileLength: Number(quoted.imageMessage.fileLength) || 0 } : null,
-                          download: quoted?.imageMessage ? fetch({ key: { remoteJid: jid, id: ctx.stanzaId, participant: ctx.participant, fromMe: false }, message: ctx.quotedMessage }) : null,
-                        }
-                      : null,
-                  })
-                )
+                .then((groupName) => groupHooks.homework(homeworkPayload(msg, { jid, sentAt, text, groupName, fetchFor })))
                 .catch((e) => console.log(`[mathwork] ${e.message}`))
             }
           }

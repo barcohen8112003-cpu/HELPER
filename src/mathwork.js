@@ -17,6 +17,12 @@
 //   quotes or replies to it. A photo with no homework next to it is never fetched. Capture happens at read time only,
 //   because WhatsApp media cannot always be fetched later; a photo that could not be fetched is "התמונה לא זמינה" in
 //   the report, with the item's text. Nothing describes, guesses or renders what an unseen photo shows.
+// - View-once and disappearing media (own or quoted) are recognised on the raw message (src/wa-media-facts.js) and
+//   are never fetched, stored or replayed: the report says such a photo is unavailable. Files this feature cannot read
+//   (PDF, documents, video, voice) are never fetched either; the report says there is a file it did not read.
+// - The 15MB cap is enforced on the bytes actually downloaded, not only the declared size.
+// - The immediate new-homework alert is shared with src/schoolwork.js (src/homework-alerts.js): the same group
+//   message alerts once; both daily reports still list it.
 // - "A photo of the message" is the real photo that came with it. A text-only homework message is quoted as text,
 //   labelled as a quote, with sender and time. Nothing is drawn and passed off as a screenshot.
 // - Every item and every report line carries its provenance: group, sender display name, time and message id.
@@ -33,6 +39,7 @@ import { DATA_DIR } from './config.js'
 import { state } from './store.js'
 import * as groups from './groups.js'
 import { similarity, accepted, wall } from './schoolwork.js'
+import * as alerts from './homework-alerts.js'
 
 export const DIR = () => path.join(DATA_DIR, 'mathwork')
 const FILE = () => path.join(DIR(), 'state.json')
@@ -216,8 +223,11 @@ async function attachPhoto(s, item, origin, part, fetcher, prov, nowMs) {
     if (!part) throw new Error('no image')
     if (Number(part.fileLength) > MAX_MEDIA) throw new Error('too big')
     if (typeof fetcher !== 'function') throw new Error('no download path')
-    const buffer = await fetcher()
+    // The declared size is the sender's word. The fetcher stops past maxBytes, and the real length is checked here
+    // again, before anything is written.
+    const buffer = await fetcher({ maxBytes: MAX_MEDIA })
     if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error('empty download')
+    if (buffer.length > MAX_MEDIA) throw new Error('too big')
     photo.sha256 = savePhoto(s, buffer, String(part.mimetype || part.mime || 'image/jpeg'), { item: item.id, ...prov }, nowMs)
     photo.status = 'saved'
     // The same photo posted again (a copy in another group): one photo on the item, both posts on its record.
@@ -227,6 +237,21 @@ async function attachPhoto(s, item, origin, part, fetcher, prov, nowMs) {
   }
   item.photos.push(photo)
   return photo
+}
+
+// View-once or disappearing media: recorded as unavailable, with what kind it was. No fetcher is ever called, and
+// nothing about its content is kept.
+function blockedPhoto(item, origin, blocked, prov) {
+  if (item.photos.some((p) => p.msgId === prov.msgId && p.origin === origin)) return
+  item.photos.push({ origin, ...prov, sha256: null, status: 'unavailable', reason: blocked.reason === 'view-once' ? 'view-once' : 'ephemeral', kind: blocked.kind || 'image' })
+}
+// Attachments this feature cannot read (PDF, documents, video, voice): never downloaded, only said.
+function addFiles(item, origin, files, prov) {
+  item.files ??= []
+  for (const f of (files || []).slice(0, 5)) {
+    if (item.files.some((x) => x.msgId === prov.msgId && x.origin === origin && x.fileName === clip(f.fileName, 60))) continue
+    item.files.push({ origin, kind: String(f.kind || 'file'), mimetype: clip(f.mimetype, 80), fileName: clip(f.fileName, 60), ...prov })
+  }
 }
 
 // ── items ──────────────────────────────────────────────────────────────────────────────────────────
@@ -241,7 +266,8 @@ function newItem(s, hw, prov, nowMs) {
     due: hw.due,
     prov, // the first message that carried it
     also: [], // the same homework, posted again (another group, another sender, a reply): [{ ...prov }]
-    photos: [], // [{ origin: 'own' | 'quoted', sha256, status: 'saved' | 'unavailable' | 'deleted', reason, ...prov }]
+    photos: [], // [{ origin: 'own' | 'quoted', sha256, status: 'saved' | 'unavailable' | 'deleted', reason, kind?, ...prov }]
+    files: [], // attachments not read: [{ origin, kind, mimetype, fileName, ...prov }]
     status: 'open',
     firstSeen: nowMs,
     closedAt: 0,
@@ -303,15 +329,29 @@ export async function onGroupMessage(m, nowMs = Date.now()) {
     fresh = true
   }
   persist()
-  // The photos, now or never: its own, and the one it quotes or replies to.
-  if (m.image) await attachPhoto(s, item, 'own', m.image, m.download, prov, nowMs)
-  if (m.quoted?.image) {
-    // WhatsApp gives the quoted photo's id and sender id, not its sender's name or time: those are not made up. The
-    // time shown is when the reply quoted it, and `via` names the reply.
+  // The photos, now or never: its own, and the one it quotes or replies to. View-once / disappearing media (flagged
+  // on the raw message, src/wa-media-facts.js) is never fetched, whatever else the message says.
+  if (m.blocked) blockedPhoto(item, 'own', m.blocked, prov)
+  else if (m.image) await attachPhoto(s, item, 'own', m.image, m.download, prov, nowMs)
+  if (!m.blocked) addFiles(item, 'own', m.files, prov)
+  if (m.quoted && (m.quoted.blocked || m.quoted.image || m.quoted.files?.length)) {
+    // WhatsApp gives the quoted message's id and sender id, not its sender's name or time: those are not made up.
+    // The time shown is when the reply quoted it, and `via` names the reply.
     const qprov = { ...prov, msgId: quotedId || `${prov.msgId}:quoted`, senderName: '', senderHash: m.quoted.sender ? senderHash(m.quoted.sender) : '', via: prov.msgId }
-    await attachPhoto(s, item, 'quoted', m.quoted.image, m.quoted.download, qprov, nowMs)
+    if (m.quoted.blocked) blockedPhoto(item, 'quoted', m.quoted.blocked, qprov)
+    else {
+      if (m.quoted.image) await attachPhoto(s, item, 'quoted', m.quoted.image, m.quoted.download, qprov, nowMs)
+      addFiles(item, 'quoted', m.quoted.files, qprov)
+    }
   }
-  if (fresh) s.pending.push({ key: `mathwork-alert:${item.id}`, text: alertText(item, nowMs), ids: [item.id], at: nowMs })
+  // One immediate alert per homework across this report and schoolwork's (src/homework-alerts.js). Both daily
+  // reports still list it.
+  const ref = { g: prov.groupJid, s: prov.senderHash, mid: prov.msgId, day: hw.due?.day || '', text: hw.text }
+  if (fresh) {
+    if (alerts.claimedByOther(ref, 'mathwork', nowMs)) item.alerted = true
+    else s.pending.push({ key: `mathwork-alert:${item.id}`, text: alertText(item, nowMs), ids: [item.id], at: nowMs })
+  }
+  alerts.claim(ref, 'mathwork', nowMs)
   persist()
   return item
 }
@@ -322,9 +362,28 @@ function photoNote(s, item) {
   const gone = item.photos.filter((p) => !saved.includes(p))
   const out = []
   if (saved.length) out.push(`📷 ${saved.length === 1 ? 'התמונה מההודעה נשלחת מיד אחרי' : `${saved.length} תמונות מההודעה נשלחות מיד אחרי`}`)
-  for (const p of gone) out.push(`📷 התמונה לא זמינה${p.status === 'deleted' ? (p.reason === 'expired' ? ` (נמחקה אחרי ${settings().keepDays} ימים)` : ' (נמחקה)') : ''} · ${provLine(p)}`)
+  for (const p of gone) {
+    const what = p.kind === 'video' ? 'סרטון' : p.kind === 'voice' || p.kind === 'audio' ? 'הקלטה' : 'תמונה'
+    if (p.reason === 'view-once') out.push(`📷 ${what} לצפייה חד-פעמית: לא נשמר ולא זמין · ${provLine(p)}`)
+    else if (p.reason === 'ephemeral') out.push(`📷 ${what} מהודעה נעלמת: לא נשמר ולא זמין · ${provLine(p)}`)
+    else out.push(`📷 התמונה לא זמינה${p.status === 'deleted' ? (p.reason === 'expired' ? ` (נמחקה אחרי ${settings().keepDays} ימים)` : ' (נמחקה)') : ''} · ${provLine(p)}`)
+  }
   return out
 }
+const FILE_LABEL = (f) => {
+  const m = String(f.mimetype || '').toLowerCase()
+  const n = String(f.fileName || '').toLowerCase()
+  if (m.includes('pdf') || n.endsWith('.pdf')) return 'PDF'
+  if (/word|msword|officedocument\.wordprocessing/.test(m) || /\.docx?$/.test(n)) return 'Word'
+  if (/excel|spreadsheet/.test(m) || /\.xlsx?$/.test(n)) return 'Excel'
+  if (/powerpoint|presentation/.test(m) || /\.pptx?$/.test(n)) return 'PowerPoint'
+  if (f.kind === 'video' || m.startsWith('video/')) return 'סרטון'
+  if (f.kind === 'voice') return 'הודעה קולית'
+  if (f.kind === 'audio' || m.startsWith('audio/')) return 'קובץ קול'
+  if (m.startsWith('image/')) return 'תמונה שנשלחה כקובץ'
+  return m || 'קובץ'
+}
+const fileLines = (item) => (item.files || []).map((f) => `📎 יש קובץ מצורף שלא נקרא (${FILE_LABEL(f)})${f.fileName ? `: ${f.fileName}` : ''} · ${provLine(f)}`)
 const quoteOf = (item) => [`💬 ציטוט מההודעה המקורית (טקסט, לא צילום מסך) · ${item.prov.senderName || 'לא ידוע'}, ${stamp(item.prov.at)}:`, ...item.text.split('\n').slice(0, 8).map((l) => `> ${l.slice(0, 200)}`)]
 
 export function itemBlock(s, item, nowMs) {
@@ -336,6 +395,8 @@ export function itemBlock(s, item, nowMs) {
     if (item.text && item.text !== item.title) lines.push(`   טקסט ההודעה: ${clip(item.text, 300)}`)
     lines.push(...photoNote(s, item).map((l) => `   ${l}`))
   } else lines.push(...quoteOf(item).map((l) => `   ${l}`))
+  // Never silently left out: a file that came with the homework is said, even though it was not read.
+  lines.push(...fileLines(item).map((l) => `   ${l}`))
   lines.push(`   מקור: ${provLine(item.prov)}`)
   for (const a of item.also.slice(0, 4)) lines.push(`   גם: ${provLine(a)}`)
   if (item.also.length > 4) lines.push(`   ועוד ${item.also.length - 4} פעמים שנכתב`)
@@ -528,6 +589,7 @@ export function retention(nowMs = Date.now()) {
     const n = i.also.length
     i.also = i.also.filter((a) => !muted(a.groupJid))
     i.photos = i.photos.filter((p) => !muted(p.groupJid))
+    i.files = (i.files || []).filter((f) => !muted(f.groupJid))
     if (i.also.length !== n) changed = true
   }
   if (s.items.length !== before) changed = true

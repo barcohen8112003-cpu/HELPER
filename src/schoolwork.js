@@ -20,6 +20,7 @@ import { createHash } from 'node:crypto'
 import { DATA_DIR, config } from './config.js'
 import { state } from './store.js'
 import * as groups from './groups.js'
+import * as alerts from './homework-alerts.js'
 
 const FILE = () => path.join(DATA_DIR, 'schoolwork.json')
 const MAX_CLOSED = 300 // closed items kept for the record; open items are never dropped for room
@@ -455,10 +456,12 @@ export async function fromGroups(items, notify, nowMs = Date.now()) {
   if (!enabled() || !settings().groups.length) return null
   const g = groups.load().groups
   const entries = []
+  const refs = new Map() // item id -> the source message, for the alert shared with src/mathwork.js
   for (const i of items || []) {
     const name = g[i.g]?.name || ''
     if (!name || g[i.g]?.muted || !allowedGroup(name)) continue
     const base = { sourceId: `${i.id}:${i.at}`, title: i.title, course: name, due: i.date ? { day: i.date, time: i.time || null } : null }
+    refs.set(`groups:${base.sourceId}`, { g: i.g, s: i.s, mid: i.mid || '', day: i.date || '', text: i.title })
     if (i.type === 'homework') entries.push({ ...base, confidence: i.date ? 'medium' : 'low' })
     else if ((i.type === 'cancel' || i.type === 'change') && HOMEWORK_WORDS.test(i.title)) entries.push({ ...base, kind: i.type })
   }
@@ -466,6 +469,17 @@ export async function fromGroups(items, notify, nowMs = Date.now()) {
   const s = load()
   ;(s.sources.groups ??= {}).baselined = true
   const out = ingest('groups', entries, nowMs)
+  // The same homework already alerted by the math report (src/mathwork.js, same group message) is listed here as
+  // usual but not alerted a second time. One alerted here first is claimed, so the math report does not repeat it.
+  let skipped = false
+  out.fresh = out.fresh.filter((item) => {
+    const ref = refs.get(item.id)
+    if (!ref) return true
+    if (alerts.claimedByOther(ref, 'schoolwork', nowMs)) return !(item.alerted = skipped = true)
+    alerts.claim(ref, 'schoolwork', nowMs)
+    return true
+  })
+  if (skipped) persist()
   await announce(notify, out.fresh, out.updated, nowMs)
   return out
 }

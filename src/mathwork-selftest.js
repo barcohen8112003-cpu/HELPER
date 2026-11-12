@@ -341,12 +341,154 @@ let D
   groups.feedback({ kind: 'group', name: 'חשבון מגמה', how: 'unmute' })
 }
 
+// ── view-once and disappearing media: read on the RAW message, never fetched ─────────────
+{
+  const { homeworkPayload, facts, readCapped } = await import('./wa-media-facts.js')
+  const { normalizeMessageContent } = await import('@whiskeysockets/baileys')
+  const fetched = []
+  const fetchFor = (m) => async () => (fetched.push(m.key?.id), bytes(`raw-${m.key?.id}`))
+  // What src/whatsapp.js does: text from the normalized content, media facts from the raw message.
+  const textOf = (raw) => {
+    const c = normalizeMessageContent(raw)
+    return c?.conversation || c?.extendedTextMessage?.text || c?.imageMessage?.caption || c?.documentMessage?.caption || ''
+  }
+  const raw = (id, message, t = '2026-12-01T08:00:00Z') => ({ key: { remoteJid: G_MATH, id, participant: PHONE_A }, pushName: 'המורה רונית', messageTimestamp: sec(t), message })
+  const run = async (m, nowIso) => MW.onGroupMessage(homeworkPayload(m, { jid: G_MATH, sentAt: Number(m.messageTimestamp), text: textOf(m.message), groupName: 'מתמטיקה י3 - 5 יח"ל', fetchFor }), at(nowIso))
+  const files = () => fs.readdirSync(DIR).filter((f) => f !== 'state.json').length
+
+  // The reviewer's exact fixture.
+  const before = files()
+  const vo = raw('VO1', { viewOnceMessageV2: { message: { imageMessage: { caption: 'ש"ב למחר עמ׳34', mimetype: 'image/jpeg', fileLength: 1234 } } } })
+  const p = homeworkPayload(vo, { jid: G_MATH, sentAt: 1, text: textOf(vo.message), groupName: 'x', fetchFor })
+  check('view-once (V2): the hook gets no image and no fetcher', p.image === null && p.download === null && p.blocked?.reason === 'view-once' && p.files.length === 0)
+  const VO = await run(vo, '2026-12-01T08:00:01Z')
+  check('view-once (V2): the homework text is kept', VO && VO.text.includes('ש"ב למחר') && VO.refs.some((r) => r.includes('34')))
+  check('view-once (V2): nothing downloaded, nothing written', fetched.length === 0 && files() === before)
+  check('view-once (V2): the photo line says view-once and unavailable', VO.photos[0]?.reason === 'view-once' && VO.photos[0].status === 'unavailable' && !VO.photos[0].sha256 && MW.reportText(at('2026-12-01T08:01:00Z')).includes('📷 תמונה לצפייה חד-פעמית: לא נשמר ולא זמין · מתמטיקה י3 - 5 יח"ל · המורה רונית · 1/12 10:00 · הודעה VO1'))
+  // Every wrapper and flag, and wrappers nested in each other.
+  const img = { caption: 'שיעורי בית למחר', mimetype: 'image/jpeg', fileLength: 999 }
+  const variants = {
+    viewOnceMessage: { viewOnceMessage: { message: { imageMessage: img } } },
+    viewOnceMessageV2Extension: { viewOnceMessageV2Extension: { message: { imageMessage: img } } },
+    'ephemeral > viewOnce': { ephemeralMessage: { message: { viewOnceMessageV2: { message: { imageMessage: img } } } } },
+    'imageMessage.viewOnce flag': { imageMessage: { ...img, viewOnce: true } },
+    'view-once video': { viewOnceMessage: { message: { videoMessage: { caption: 'שיעורי בית', mimetype: 'video/mp4' } } } },
+  }
+  for (const [name, message] of Object.entries(variants)) {
+    const f = facts(message)
+    check(`view-once variant "${name}" is blocked`, f.blocked?.reason === 'view-once' && f.image === null && f.files.length === 0, JSON.stringify(f.blocked))
+  }
+  const eph = facts({ ephemeralMessage: { message: { imageMessage: img } } })
+  check('disappearing-message photo is blocked too', eph.blocked?.reason === 'ephemeral' && eph.image === null)
+  check('a photo with contextInfo.expiration is blocked as disappearing', facts({ imageMessage: { ...img, contextInfo: { expiration: 604800 } } }).blocked?.reason === 'ephemeral')
+  // Quoted view-once: the reply's text is kept, the quoted photo is never fetched.
+  const qvo = raw('QVO1', { extendedTextMessage: { text: 'שיעורי בית לחמישי: זה מהתמונה', contextInfo: { stanzaId: 'VOPHOTO', participant: PHONE_B, quotedMessage: { viewOnceMessageV2: { message: { imageMessage: { mimetype: 'image/jpeg', fileLength: 500 } } } } } } }, '2026-12-01T08:10:00Z')
+  const QVO = await run(qvo, '2026-12-01T08:10:01Z')
+  check('quoted view-once: text kept, photo not fetched or stored', QVO && fetched.length === 0 && files() === before && QVO.photos[0]?.origin === 'quoted' && QVO.photos[0].reason === 'view-once')
+  const qflag = raw('QVO2', { extendedTextMessage: { text: 'להגיש עד 9.12 שאלות 4-6', contextInfo: { stanzaId: 'VOPHOTO2', participant: PHONE_B, quotedMessage: { imageMessage: { mimetype: 'image/jpeg', viewOnce: true } } } } }, '2026-12-01T08:12:00Z')
+  const QF = await run(qflag, '2026-12-01T08:12:01Z')
+  check('quoted photo with the viewOnce flag: not fetched', QF && fetched.length === 0 && QF.photos[0]?.reason === 'view-once')
+  check('the report says the quoted photo was view-once', MW.reportText(at('2026-12-01T08:13:00Z')).includes('תמונה לצפייה חד-פעמית: לא נשמר ולא זמין · מתמטיקה י3 - 5 יח"ל · שולח לא ידוע · צוטטה ב-1/12 10:10 · הודעה VOPHOTO'))
+  // A normal photo through the same path is still captured.
+  const normal = raw('NP1', { imageMessage: { caption: 'שיעורי בית ל-10.12: עמ\' 140', mimetype: 'image/jpeg', fileLength: 30 } }, '2026-12-01T08:20:00Z')
+  const NP = await run(normal, '2026-12-01T08:20:01Z')
+  check('a normal photo is still captured', NP && fetched.join() === 'NP1' && NP.photos[0]?.status === 'saved' && files() === before + 1)
+  const qn = raw('QN1', { extendedTextMessage: { text: 'שיעורי בית ל-11.12 מהדף הזה', contextInfo: { stanzaId: 'NPHOTO', participant: PHONE_B, quotedMessage: { imageMessage: { mimetype: 'image/jpeg', fileLength: 40 } } } } }, '2026-12-01T08:21:00Z')
+  const QN = await run(qn, '2026-12-01T08:21:01Z')
+  check('a normal quoted photo is still captured', QN && fetched.includes('NPHOTO') && QN.photos[0]?.status === 'saved')
+
+  // ── attachments the feature cannot read ──
+  const pdf = raw('PDF1', { documentMessage: { caption: 'שיעורי בית לחמישי בטריגו', mimetype: 'application/pdf', fileName: 'דף עבודה 7.pdf', fileLength: 5000 } }, '2026-12-01T08:30:00Z')
+  const PDF = await run(pdf, '2026-12-01T08:30:01Z')
+  check('a PDF on a homework message: item kept, PDF never downloaded', PDF && !fetched.includes('PDF1') && PDF.files[0]?.mimetype === 'application/pdf' && PDF.files[0].fileName === 'דף עבודה 7.pdf')
+  const wrapped = raw('PDF2', { documentWithCaptionMessage: { message: { documentMessage: { caption: 'מטלה בסטטיסטיקה ל-12.12', mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', fileName: 'מטלה.docx' } } } }, '2026-12-01T08:31:00Z')
+  const W = await run(wrapped, '2026-12-01T08:31:01Z')
+  const qdoc = raw('QD1', { extendedTextMessage: { text: 'שיעורי בית: לפתור את הקובץ עד 14.12', contextInfo: { stanzaId: 'DOCMSG', participant: PHONE_B, quotedMessage: { documentMessage: { mimetype: 'application/pdf', fileName: 'שאלון.pdf' } } } } }, '2026-12-01T08:32:00Z')
+  const QD = await run(qdoc, '2026-12-01T08:32:01Z')
+  const t = MW.reportText(at('2026-12-01T08:40:00Z'))
+  check('report: own PDF said explicitly', t.includes('📎 יש קובץ מצורף שלא נקרא (PDF): דף עבודה 7.pdf · מתמטיקה י3 - 5 יח"ל · המורה רונית · 1/12 10:30 · הודעה PDF1'), t)
+  check('report: Word document in a caption wrapper said explicitly', W && t.includes('יש קובץ מצורף שלא נקרא (Word): מטלה.docx'))
+  check('report: quoted PDF said explicitly, with its own message id', QD && QD.files[0]?.origin === 'quoted' && t.includes('יש קובץ מצורף שלא נקרא (PDF): שאלון.pdf · מתמטיקה י3 - 5 יח"ל · שולח לא ידוע · צוטטה ב-1/12 10:32 · הודעה DOCMSG'))
+  check('no document was ever downloaded', !fetched.includes('PDF2') && !fetched.includes('DOCMSG') && !fetched.includes('QD1'))
+
+  // ── the size cap is on the real bytes ──
+  const n = files()
+  const LIE = await MW.onGroupMessage(msg({ id: 'LIE1', at: sec('2026-12-01T08:50:00Z'), text: 'שיעורי בית ל-15.12 עמ\' 7', image: { mimetype: 'image/jpeg', fileLength: 1000 }, download: async ({ maxBytes } = {}) => (downloads.push(`lie:${maxBytes}`), Buffer.alloc(16 * 1024 * 1024, 1)) }), at('2026-12-01T08:50:01Z'))
+  check('declared 1000 bytes, real 16MB: unavailable, nothing written', LIE.photos[0].status === 'unavailable' && LIE.photos[0].reason === 'too big' && files() === n)
+  check('the fetcher is told the cap', downloads.includes(`lie:${15 * 1024 * 1024}`))
+  const { Readable } = await import('node:stream')
+  let destroyed = false
+  const big = new Readable({ read() { this.push(Buffer.alloc(1024 * 1024)) } })
+  big.on('close', () => (destroyed = true))
+  let err = null
+  await readCapped(big, 3 * 1024 * 1024).catch((e) => (err = e))
+  await new Promise((r) => setImmediate(r))
+  check('the stream reader aborts past the cap', err?.tooBig === true && (destroyed || big.destroyed))
+  check('the stream reader returns a small download whole', (await readCapped(Readable.from([Buffer.from('ab'), Buffer.from('cd')]), 10)).toString() === 'abcd')
+}
+
+// ── one alert when schoolwork and the math report see the same homework ─────────────
+{
+  process.env.SCHOOLWORK = 'on'
+  process.env.SCHOOLWORK_GROUPS = 'מתמטיקה'
+  const { createHash } = await import('node:crypto')
+  const hashOf = (jid) => createHash('sha256').update(jid).digest('hex').slice(0, 12)
+  let model = { items: [] }
+  groups.setModel(async () => JSON.stringify(model))
+  const both = async (id, text, title, date, isoAt, order) => {
+    const m = msg({ id, at: sec(isoAt), text })
+    const nowMs = at(isoAt) + 1000
+    const math = () => MW.onGroupMessage(m, nowMs)
+    const school = async () => {
+      groups.capture({ group: G_MATH, id, sender: PHONE_A, senderName: 'המורה רונית', at: sec(isoAt), text })
+      model = { items: [{ msg: 1, type: 'homework', title, date, importance: 4 }] }
+      groups.load().lastExtract = 0
+      await groups.tick({ onFresh: (items) => SW.fromGroups(items, notify, nowMs) }, nowMs)
+    }
+    if (order === 'math-first') (await math(), await school())
+    else (await school(), await math())
+  }
+  sent.length = 0
+  await both('OV1', 'שיעורי בית ל-8.12: עמ\' 120 שאלות 1-4', 'שיעורי בית במתמטיקה עמוד 120', '2026-12-08', '2026-12-02T08:00:00Z', 'math-first')
+  check('the groups item carries the source message id and sender hash', groups.load().items.some((i) => i.mid === 'OV1' && i.s === hashOf(PHONE_A) && i.g === G_MATH))
+  const swItem = SW.load().items.find((i) => i.title.includes('עמוד 120'))
+  check('schoolwork still lists the item', swItem && swItem.status === 'open')
+  check('schoolwork did not alert it (math claimed it first)', swItem.alerted === true && !sent.some((x) => x.key?.startsWith('schoolwork-alert')) && SW.load().pending.length === 0)
+  await MW.mathworkJob(notify, null, null, at('2026-12-02T08:05:00Z'))
+  const ov1 = sent.filter((x) => x.text.includes('120'))
+  check('the same homework alerts exactly once (math first)', ov1.length === 1 && ov1[0].key === 'mathwork-alert:math:OV1', JSON.stringify(ov1.map((x) => x.key)))
+
+  sent.length = 0
+  await both('OV2', 'שיעורי בית ל-9.12: עמ\' 130 שאלות 5-8', 'שיעורי בית במתמטיקה עמוד 130', '2026-12-09', '2026-12-02T09:00:00Z', 'school-first')
+  await MW.mathworkJob(notify, null, null, at('2026-12-02T09:05:00Z'))
+  const ov2 = sent.filter((x) => x.text.includes('130'))
+  check('the same homework alerts exactly once (schoolwork first)', ov2.length === 1 && ov2[0].key.startsWith('schoolwork-alert'), JSON.stringify(ov2.map((x) => x.key)))
+  const mItem = MW.load().items.find((i) => i.id === 'math:OV2')
+  check('the math report still lists it, marked as already announced', mItem && mItem.status === 'open' && mItem.alerted === true && !MW.load().pending.some((p) => p.ids.includes('math:OV2')))
+  const swText = await SW.summaryText(at('2026-12-02T13:00:00Z'), { daily: true })
+  const mwText = MW.reportText(at('2026-12-02T16:00:00Z'), { daily: true })
+  check('both daily lists keep both items', swText.includes('עמוד 120') && swText.includes('עמוד 130') && mwText.includes('הודעה OV1') && mwText.includes('הודעה OV2'))
+  // A different homework from the same group is not swallowed by the shared key.
+  sent.length = 0
+  await both('OV3', 'שיעורי בית ל-16.12: עמ\' 150 שאלות 9-10', 'שיעורי בית במתמטיקה עמוד 150', '2026-12-16', '2026-12-02T10:00:00Z', 'math-first')
+  const s3 = groups.load().items.find((i) => i.mid === 'OV3')
+  check('a new message is its own claim (math alerts it, schoolwork lists it)', s3 && MW.load().pending.some((p) => p.ids.includes('math:OV3')))
+  // Without a message id (older groups item), group + sender + due day + words still match.
+  const { claimedByOther, claim } = await import('./homework-alerts.js')
+  claim({ g: G_MATH, s: hashOf(PHONE_A), mid: 'X9', day: '2026-12-20', text: 'שיעורי בית עמוד 300 שאלות 1-3' }, 'mathwork', at('2026-12-02T11:00:00Z'))
+  check('fallback match: same group, sender, day and words', Boolean(claimedByOther({ g: G_MATH, s: hashOf(PHONE_A), mid: '', day: '2026-12-20', text: 'עמוד 300 שאלות 1-3 שיעורי בית' }, 'schoolwork', at('2026-12-02T11:00:00Z'))))
+  check('fallback does not match another sender', !claimedByOther({ g: G_MATH, s: hashOf(PHONE_B), mid: '', day: '2026-12-20', text: 'שיעורי בית עמוד 300 שאלות 1-3' }, 'schoolwork', at('2026-12-02T11:00:00Z')))
+  check('the shared file holds no phone number', !fs.readFileSync(path.join(tmp, 'homework-alerts.json'), 'utf8').includes('972500'))
+  delete process.env.SCHOOLWORK
+  delete process.env.SCHOOLWORK_GROUPS
+}
+
 // ── backup leaves data/mathwork/ out ─────────────────────────────────────
 {
   const H = await MW.onGroupMessage(msg({ id: 'HW-H', at: sec('2026-11-30T10:00:00Z'), text: 'שיעורי בית למחר עמ\' 5', image: img, download: dl('H') }), at('2026-11-30T10:00:00Z'))
   check('a photo is on disk for the backup check', fs.existsSync(path.join(DIR, `${H.photos[0].sha256}.jpg`)))
   const files = Object.keys(collect(tmp, path.join(tmp, '.env')))
-  check('the Drive backup takes nothing under data/mathwork/', files.length > 0 ? !files.some((f) => f.includes('mathwork')) : true, JSON.stringify(files))
+  check('the Drive backup takes nothing under data/mathwork/ or the shared alert file', files.length > 0 ? !files.some((f) => f.includes('mathwork') || f.includes('homework-alerts')) : true, JSON.stringify(files))
 }
 
 // ── tool and forget ──────────────────────────────────────────────────────
