@@ -43,6 +43,18 @@ FILLERS = ("רגע.", "שנייה.", "רגע, בודקת.")
 SENTENCE_END = re.compile(r"(?<=[.!?…:;])\s+|\n+")
 
 
+def transcripts_logged():
+    # Off by default: the call's words stay out of stdout (docker logs). on = a short transcription check.
+    return os.environ.get("LIVE_VOICE_LOG_TRANSCRIPTS", "").strip().lower() in {"on", "1", "true", "yes"}
+
+
+def heard_line(transcript):
+    text = str(transcript or "")
+    if transcripts_logged():
+        return f"heard: {text[:120]}"
+    return f"heard: {len(text)} chars"
+
+
 def stt_options():
     # A model id with a provider prefix (deepgram/nova-3, assemblyai/universal-streaming-multilingual)
     # runs on LiveKit Inference with the project key pair: no extra key, streaming, built for phone audio.
@@ -436,7 +448,7 @@ async def helper_voice(ctx: agents.JobContext):
     @session.on("user_input_transcribed")
     def _heard(ev):
         if getattr(ev, "is_final", False):
-            print(f"heard: {str(ev.transcript)[:120]}")
+            print(heard_line(ev.transcript))
 
     @session.on("error")
     def _error(ev):

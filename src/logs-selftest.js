@@ -2,11 +2,15 @@
 import assert from 'node:assert/strict'
 
 process.env.LLM_API_KEY = 'my-very-private-llm-key'
+process.env.OPENROUTER_API_KEY = 'or-private-agent-team-key'
+process.env.TELNYX_API_KEY = 'KEYtelnyx-private-value'
 const { redact, toEntry, isSecretSessionLog } = await import('./secret-logs.js')
 let passed = 0
 const t = (fn) => (fn(), passed++)
 
 t(() => assert.equal(redact('LLM HTTP 401: key my-very-private-llm-key is invalid'), 'LLM HTTP 401: key •••• is invalid'))
+t(() => assert.equal(redact('openrouter said or-private-agent-team-key is bad'), 'openrouter said •••• is bad'))
+t(() => assert.equal(redact('telnyx 401 for KEYtelnyx-private-value'), 'telnyx 401 for ••••'))
 t(() => assert.equal(redact('Authorization: Bearer abcdefghijklmnop123'), 'Authorization: Bearer ••••'))
 t(() => assert.equal(redact('using sk-proj-abcdefghijklmnopqrstuv now'), 'using •••• now'))
 t(() => assert.equal(redact('GET https://x.example/v1?key=AIzaSyA1234567890abcdefghijklmnopqrstu&alt=json'), 'GET https://x.example/v1?key=••••&alt=json'))

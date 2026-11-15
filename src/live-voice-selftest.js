@@ -181,5 +181,21 @@ ok(typeof (await sample.toJwt()) === 'string', 'the sdk still mints a string tok
 
 for (const note of Object.values(COST_NOTE)) ok(note.length > 20, 'cost note is written')
 
+// The voice worker keeps the caller's words out of stdout unless LIVE_VOICE_LOG_TRANSCRIPTS is on.
+{
+  const { spawnSync } = await import('node:child_process')
+  const py = spawnSync('python3', ['voice/heard_log_selftest.py'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' })
+  if (py.error || py.status === null) console.log('SKIP python3 not available for voice/heard_log_selftest.py')
+  else {
+    ok(py.status === 0, `voice log helpers run (${(py.stderr || '').trim().slice(0, 200)})`)
+    const r = py.status === 0 ? JSON.parse(py.stdout) : {}
+    const lengthOnly = `heard: ${r.said_len} chars`
+    for (const key of ['unset', 'off', '0', '']) ok(r[key] === lengthOnly, `LIVE_VOICE_LOG_TRANSCRIPTS=${key || '(empty)'}: only the length is printed`)
+    ok(!String(r.unset).includes('1234') && !String(r.off).includes('חלב'), 'by default no words of the call reach the log')
+    for (const key of ['on', 'true', 'YES', '1']) ok(r[key] === `heard: ${r.said_120}`, `LIVE_VOICE_LOG_TRANSCRIPTS=${key}: first 120 chars, as before`)
+    ok(r.none === 'heard: 0 chars', 'an empty transcript does not crash the log line')
+  }
+}
+
 console.log(failed ? `${failed} failed, ${passed} passed` : `ok ${passed}`)
 process.exit(failed ? 1 : 0)

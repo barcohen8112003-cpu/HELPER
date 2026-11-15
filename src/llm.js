@@ -89,7 +89,8 @@ export const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completion
 
 // Calls an explicit model via OpenRouter with strictly 1 attempt, no lineup, and no fallback.
 // Enforces OpenRouter endpoint URL verification and rejects non-OpenRouter addresses before dispatch.
-// Uses OpenRouter authorization (LLM_API_KEY or OPENROUTER_API_KEY).
+// Uses OPENROUTER_API_KEY only. The main LLM_API_KEY is never used here, so the main provider's key
+// can never be sent to OpenRouter by accident.
 export async function callExplicitModel({
   model = 'google/gemini-2.5-flash',
   messages,
@@ -98,7 +99,7 @@ export async function callExplicitModel({
   signal,
   fetchFn = fetch,
   endpointUrl = OPENROUTER_ENDPOINT,
-  apiKey = process.env.OPENROUTER_API_KEY || config.llm?.apiKey || process.env.LLM_API_KEY,
+  apiKey = process.env.OPENROUTER_API_KEY,
 }) {
   const normalizedModel = model.startsWith('google/') ? model : `google/${model}`
 
@@ -114,7 +115,7 @@ export async function callExplicitModel({
 
   // 3. Strict authorization check: requires API key without making any network call
   if (!apiKey) {
-    throw new Error('OpenRouter לא מחובר. חסר מפתח LLM_API_KEY / OPENROUTER_API_KEY (יש להגדיר ב-.env)')
+    throw new Error('OpenRouter לא מחובר. חסר מפתח OPENROUTER_API_KEY (יש להגדיר ב-.env). LLM_API_KEY לא משמש במסלול הזה.')
   }
 
   const body = {

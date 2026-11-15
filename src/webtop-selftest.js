@@ -297,6 +297,15 @@ const pubOrigin = await hit('POST', '/api/settings', { cookie, origin: `http://$
 ok(pubOrigin.status === 200, 'the public origin may POST')
 const loopOrigin = await hit('POST', '/api/settings', { cookie, origin: `http://127.0.0.1:${port}`, body: '{}' })
 ok(loopOrigin.status === 200, 'the loopback origin still may POST')
+// The agent-team OpenRouter key and the Telnyx key are secrets: the page learns only that they are set.
+process.env.OPENROUTER_API_KEY = 'or-ui-secret-value-123'
+process.env.TELNYX_API_KEY = 'telnyx-ui-secret-value-456'
+const stateRes = await hit('GET', '/api/state', { cookie })
+const uiState = JSON.parse(stateRes.body || '{}')
+ok(stateRes.status === 200 && uiState.settings?.OPENROUTER_API_KEY?.set === true && uiState.settings?.TELNYX_API_KEY?.set === true, 'OPENROUTER_API_KEY and TELNYX_API_KEY show only as set')
+ok(!stateRes.body.includes('or-ui-secret-value-123') && !stateRes.body.includes('telnyx-ui-secret-value-456'), 'the settings page never receives the OpenRouter or Telnyx key value')
+delete process.env.OPENROUTER_API_KEY
+delete process.env.TELNYX_API_KEY
 const emptyType = await hit('POST', '/api/phone/type', { cookie, origin: `http://127.0.0.1:${port}`, body: JSON.stringify({ text: '' }) })
 ok(emptyType.status === 200, 'an empty phone type does not need the phone')
 const badKey = await hit('POST', '/api/phone/key', { cookie, origin: `http://127.0.0.1:${port}`, body: JSON.stringify({ key: 'nope' }) })
