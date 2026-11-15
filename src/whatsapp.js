@@ -222,6 +222,14 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
       return content?.protocolMessage || msg?.message?.protocolMessage || null
     }
     const peerSeen = new Set()
+    // fetchGroupHistory listens here while it waits: every reply from the phone (kind), and every message taken from
+    // one. Messages taken in absorbPeer arrive on no socket event for the group, so without this they were not counted.
+    const historyTaps = new Set()
+    const tapHistory = (kind, msg) => {
+      for (const tap of historyTaps) {
+        try { tap(kind, msg) } catch {}
+      }
+    }
     const absorbPeer = async (msg) => {
       const p = protocolOf(msg)
       if (!p) return
@@ -234,13 +242,17 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
         ? 'historySync'
         : (p.peerDataOperationRequestResponseMessage ? 'pdoResponse' : `type:${p.type}`)
       console.log(`[whatsapp] peer ${kind}`)
+      tapHistory(kind)
       if (p.historySyncNotification) {
         try {
           const data = await downloadAndProcessHistorySyncNotification(p.historySyncNotification, {})
           const msgs = data.messages || []
           let taken = 0
           for (const m of msgs) {
-            if (takeGroupMessage(m, { ignoreSince: true })) taken++
+            if (takeGroupMessage(m, { ignoreSince: true })) {
+              taken++
+              tapHistory('message', m)
+            }
           }
           console.log(`[whatsapp] history blob messages=${msgs.length} taken=${taken}`)
         } catch (e) {
@@ -255,7 +267,7 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
         if (!bytes) continue
         try {
           const web = proto.WebMessageInfo.decode(bytes)
-          takeGroupMessage(web, { ignoreSince: true })
+          if (takeGroupMessage(web, { ignoreSince: true })) tapHistory('message', web)
         } catch (e) {
           console.log(`[whatsapp] pdo decode: ${e.message}`)
         }
@@ -497,25 +509,46 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
       if (!oldest?.id) return { n: 0, timedOut: false, reason: 'no-cursor', pulled: false }
       let n = 0
       let lastHit = 0
+      // Anything at all from the phone while we wait: an on-demand history set, a peer reply, a resend.
+      // n === 0 with replies === 0 means the phone never answered (offline, asleep, or ignoring the request).
+      let replies = 0
+      const counted = new Set()
+      const hit = (msg) => {
+        const id = msg?.key?.id
+        if (id && counted.has(id)) return false
+        if (id) counted.add(id)
+        n++
+        lastHit = Date.now()
+        return true
+      }
       const take = (messages) => {
         for (const msg of messages || []) {
           if (msg.key?.remoteJid !== jid) continue
-          n++
-          lastHit = Date.now()
-          takeGroupMessage(msg, { ignoreSince: true })
+          if (hit(msg)) takeGroupMessage(msg, { ignoreSince: true })
         }
       }
-      const onSet = ({ messages }) => take(messages)
+      const onSet = ({ messages }) => {
+        replies++
+        take(messages)
+      }
       const onUpsert = ({ messages }) => take(messages)
+      // Already taken inside absorbPeer: only counted here.
+      const onTap = (kind, msg) => {
+        if (kind !== 'message') return void replies++
+        if (msg?.key?.remoteJid === jid) hit(msg)
+      }
       sock.ev.on('messaging-history.set', onSet)
       sock.ev.on('messages.upsert', onUpsert)
+      historyTaps.add(onTap)
       const delay = (ms) => new Promise((r) => setTimeout(r, ms))
       try {
         const key = { remoteJid: jid, id: oldest.id, fromMe: Boolean(oldest.fromMe) }
         const ts = Number(oldest.at) || 0
         const tsMs = ts > 1e12 ? ts : ts * 1000
-        // A cursor just after the newest known message, so that message (the Tuesday photo) is included too.
-        const askTs = tsMs + 1000
+        // The anchor's own time, as WhatsApp Web sends it. The phone answers with messages older than the anchor.
+        // (It used to be anchor + 1s to "include" the anchor, but the anchor is a message we already hold, and a
+        // timestamp that matches no message is one more reason for the phone to ignore the request.)
+        const askTs = tsMs
         // Match the hashed sender we already stored, so a group resend includes the participant. The raw id stays in memory only.
         const hashOf = (x) => createHash('sha256').update(String(x || '')).digest('hex').slice(0, 12)
         const byHash = new Map()
@@ -564,15 +597,18 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
           if (n > 0 && lastHit && Date.now() - lastHit >= 8000) break
         }
         const timedOut = n === 0 && Date.now() - start >= timeoutMs - 50
-        await waitSchoolMedia(120000)
-        console.log(`[whatsapp] fetchGroupHistory n=${n} timedOut=${timedOut} waited=${Date.now() - start}ms`)
-        return { n, timedOut, pulled: n > 0 }
+        // Photos only come with messages: nothing arrived, nothing to wait for (this used to add two more minutes).
+        if (n > 0) await waitSchoolMedia(120000)
+        const reason = n > 0 ? '' : replies ? 'phone-replied-without-messages' : 'no-reply-from-phone'
+        console.log(`[whatsapp] fetchGroupHistory n=${n} replies=${replies} timedOut=${timedOut} waited=${Date.now() - start}ms${reason ? ` reason=${reason}` : ''}`)
+        return { n, timedOut, pulled: n > 0, replies, ...(reason && { reason }) }
       } catch (e) {
         console.log(`[whatsapp] fetchGroupHistory: ${e.message}`)
         return { n, timedOut: false, reason: e.message, pulled: false }
       } finally {
         try { sock.ev.off('messaging-history.set', onSet) } catch {}
         try { sock.ev.off('messages.upsert', onUpsert) } catch {}
+        historyTaps.delete(onTap)
       }
     },
   }
