@@ -67,8 +67,43 @@ export function webtopPageBlocked(text) {
 let cloudBlocked = false
 export const webtopCloudBlockedNow = () => cloudBlocked
 
+// Chromium's own "This site can't be reached" page: the tab never got to Webtop at all. On the VPS this is
+// almost always the WEBTOP_PROXY route (Tailscale exit node) being down: ERR_SOCKS_CONNECTION_FAILED,
+// ERR_PROXY_CONNECTION_FAILED, a DNS timeout through the proxy, and so on. -> the net error code, or ''.
+export const WEBTOP_UNREACHABLE_STATUS = 'Webtop לא נטען מהשרת: הדפדפן לא הגיע לאתר'
+const NET_ERROR = /\b(ERR_[A-Z_]{4,60})\b/
+export function webtopNetError(snap) {
+  const href = String(snap?.href || '')
+  const text = String(snap?.text || '')
+  const code = (text.match(NET_ERROR) || [])[1] || ''
+  if (/^chrome-error:/i.test(href)) return code || 'ERR_UNKNOWN'
+  // Only a short page that is nothing but Chromium's error screen. A real Webtop page that mentions ERR_ is not one.
+  if (code && text.length < 600 && /can.t be reached|unable to connect|no internet|לא ניתן להגיע/i.test(text)) return code
+  return ''
+}
+
+export function isWebtopUnreachableError(err) {
+  return Boolean(err && err.code === 'webtop-unreachable')
+}
+
+function unreachablePage(net) {
+  const viaProxy = Boolean(config.webtop.cloud && config.webtop.proxy)
+  return Object.assign(
+    fail(
+      `${WEBTOP_UNREACHABLE_STATUS} (${net}).`,
+      viaProxy
+        ? 'הדפדפן בענן יוצא דרך WEBTOP_PROXY (ה-exit node של Tailscale). צריך שהמכשיר שמשמש exit node יהיה מחובר ל-Tailscale.'
+        : 'אין חיבור מהדפדפן לאתר. אני ממשיך לנסות.',
+      'webtop-unreachable',
+    ),
+    { net },
+  )
+}
+
 export function classifyWebtopSnapshot(snap) {
   const text = `${snap?.text || ''}\n${snap?.href || ''}`
+  // Not a page from Webtop at all, so it says nothing about a block or a login: the blocked flag is left as it was.
+  if (webtopNetError(snap)) return 'unreachable'
   if (webtopPageBlocked(text)) {
     cloudBlocked = true
     return 'blocked'
@@ -89,6 +124,8 @@ function blockedPage() {
 // The keepalive loop's reaction. A block is silent: the settings page says so, and WhatsApp is not pinged again.
 export function webtopKeepAliveFailure(err) {
   if (isWebtopBlockedError(err)) return 'silent'
+  // The proxy route is down: tracked like any other failure (reported once it repeats), never a re-login notice.
+  if (isWebtopUnreachableError(err)) return 'track'
   if (isWebtopLoginError(err)) return 'login'
   return 'track'
 }
@@ -96,7 +133,7 @@ export function webtopKeepAliveFailure(err) {
 // Cloud keepalive falls back to the home window only for a block. A login page stays on the cloud browser
 // so the re-login notice still fires, and a signed-in home window cannot hide it.
 export function keepAliveAfterCloudError(err, bridgeUp) {
-  return isWebtopBlockedError(err) && bridgeUp ? 'home' : 'throw'
+  return (isWebtopBlockedError(err) || isWebtopUnreachableError(err)) && bridgeUp ? 'home' : 'throw'
 }
 
 function signedOut() {
@@ -140,7 +177,8 @@ export async function runSessionRead(local, home, route) {
   try {
     return await local()
   } catch (e) {
-    if (route.fallback === 'home' && (isWebtopLoginError(e) || isWebtopBlockedError(e))) {
+    // A login page, a CloudFront block, or a cloud browser that cannot reach the site at all (proxy down).
+    if (route.fallback === 'home' && (isWebtopLoginError(e) || isWebtopBlockedError(e) || isWebtopUnreachableError(e))) {
       try {
         return await home()
       } catch {
@@ -218,6 +256,7 @@ async function snapshot(call) {
   const { result } = await call('Runtime.evaluate', { expression: SNAPSHOT, returnByValue: true })
   const snap = JSON.parse(result.value)
   const kind = classifyWebtopSnapshot(snap)
+  if (kind === 'unreachable') throw unreachablePage(webtopNetError(snap))
   if (kind === 'blocked') throw blockedPage()
   if (kind === 'login') throw signedOut()
   return snap
@@ -433,7 +472,15 @@ function updatesLocal(opts = {}) {
     const site = (p) => new URL(p, config.webtop.url).href
     const ch = (await captureApi(tab, site('/Timetable_Changes?tabIndex=1&tab=scheduale'), [CHANGES_API]))[CHANGES_API]
     const gr = (await captureApi(tab, site('/Student_Card/6'), [GRADES_API]))[GRADES_API]
-    if (!ch && !gr) throw fail('לא הצלחתי לקרוא ציונים ושינויים מ-Webtop.', 'אני ממשיך לנסות.')
+    if (!ch && !gr) {
+      // Where the tab ended up (path only, no query), so the log says more than "could not read".
+      let where = ''
+      try {
+        const { result } = await tab.call('Runtime.evaluate', { expression: 'location.protocol + "//" + location.host + location.pathname', returnByValue: true })
+        where = String(result?.value || '').slice(0, 120)
+      } catch {}
+      throw Object.assign(fail('לא הצלחתי לקרוא ציונים ושינויים מ-Webtop.', 'אני ממשיך לנסות.'), { detail: `no ${CHANGES_API} / ${GRADES_API} answer within ${API_WAIT_MS / 1000}s${where ? ` at ${where}` : ''}` })
+    }
     // The school-changes board ("שינויי מערכת בית ספריים") for today and tomorrow, for his grade.
     let school = []
     const inst = ch?.request?.institutionCode

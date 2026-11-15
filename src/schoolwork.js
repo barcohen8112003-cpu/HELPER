@@ -124,10 +124,24 @@ export async function runLookback(notify, nowMs = Date.now()) {
   return cur.lookback
 }
 
+// On-demand WhatsApp history is answered by his phone, best effort. When it has not answered after this many
+// rounds, stop asking: the homework list keeps what arrived live in the group (and what Webtop/Classroom say).
+// Before this cap the job asked every 15 minutes forever (75 tries, two minutes of waiting each).
+export const DETAILS_MAX_TRIES = 6
+
+function giveUpDetails(nowMs, tries, why) {
+  const cur = load()
+  console.log(`[schoolwork] details: history not available after ${tries} tries (${why}); using the messages stored live`)
+  cur.lookback = { ...(cur.lookback || {}), details: true, detailsStatus: 'gave-up', detailsGaveUp: why, detailsAt: nowMs, detailsTries: tries }
+  persist()
+  return cur.lookback
+}
+
 // One-shot: re-read the group (including photos) and write book, pages, questions and sections as they appear.
 export async function refreshHomeworkDetails(notify, nowMs = Date.now()) {
   const s = load()
   if (s.lookback?.details) return s.lookback
+  if ((s.lookback?.detailsTries || 0) >= DETAILS_MAX_TRIES) return giveUpDetails(nowMs, s.lookback.detailsTries, 'max-tries')
   if (s.lookback?.detailsStatus === 'pending' && nowMs - (s.lookback.detailsAt || 0) < 4 * 60 * 1000) {
     return s.lookback
   }
@@ -140,7 +154,8 @@ export async function refreshHomeworkDetails(notify, nowMs = Date.now()) {
   if (!lookbackFetch) {
     console.log('[schoolwork] details: WhatsApp is not ready yet, will retry')
     const cur = load()
-    cur.lookback = { ...(cur.lookback || {}), detailsStatus: 'retry' }
+    // Not a try: nothing was asked of the phone.
+    cur.lookback = { ...(cur.lookback || {}), detailsStatus: 'retry', detailsTries: tries - 1 }
     persist()
     return cur.lookback
   }
@@ -163,9 +178,11 @@ export async function refreshHomeworkDetails(notify, nowMs = Date.now()) {
   const detailed = open.filter((i) => DETAIL.test(i.title || ''))
   const lacking = open.filter((i) => !DETAIL.test(i.title || ''))
   const readyPull = Boolean(pulled?.pulled)
-  // If WhatsApp was not connected yet, or history did not come in, try again next round (up to 5 times).
+  // If WhatsApp was not connected yet, or history did not come in, try again next round, at most DETAILS_MAX_TRIES rounds in all.
   if (lacking.length && !readyPull) {
-    console.log(`[schoolwork] details retry ${tries} (pulled=${readyPull})`)
+    const why = (pulled?.results || []).map((r) => r.reason).filter(Boolean)[0] || 'no-history'
+    if (tries >= DETAILS_MAX_TRIES) return giveUpDetails(nowMs, tries, why)
+    console.log(`[schoolwork] details retry ${tries}/${DETAILS_MAX_TRIES} (pulled=${readyPull} reason=${why})`)
     const cur = load()
     cur.lookback = { ...(cur.lookback || {}), details: false, detailsStatus: 'retry', detailsTries: tries, detailsAt: nowMs }
     persist()
