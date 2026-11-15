@@ -12,21 +12,22 @@ export const schoolworkTools = [
     description:
       'שיעורי בית ומטלות פתוחות מכל מקורות בית הספר יחד: Classroom, Webtop וקבוצות הוואטסאפ של בית הספר שהוא בחר. ' +
       'list = מה פתוח עכשיו, עם מועד, מקור, כמה בטוח, ומה לא נבדק ("מה יש לי להגיש?", "יש שיעורי בית?"). ' +
-      'status = אילו מקורות מחוברים, מתי נבדקו, ומה חסר. done = הוא אמר שסיים מטלה (לפי מספר מהרשימה): מסומן רק אצל Helper. ' +
+      'status = אילו מקורות מחוברים, מתי נבדקו, ומה חסר. done = הוא אמר שסיים מטלה (לפי מספר, או "עשיתי" / "סיימתי את המתמטיקה"): מסומן רק אצל Helper ובגיליון ב-V. ' +
       'undo = להחזיר מטלה שסומנה בטעות. forget = למחוק את כל מה שנשמר (רק כשהוא מבקש). ' +
       'אסור להגיד "אין שיעורי בית" כשמקור לא נבדק: להגיד מה לא נבדק.',
     parameters: obj(
       {
         action: { type: 'string', enum: ['list', 'status', 'done', 'undo', 'forget'] },
         items: { type: 'array', items: { type: 'number' }, description: 'done/undo: מספרי המטלות מהרשימה' },
+        said: { type: 'string', description: 'מה שהוא אמר, למשל "עשיתי מתמטיקה" או "סיימתי את 3"' },
       },
       ['action']
     ),
-    async run({ action, items }) {
+    async run({ action, items, said }) {
       if (action === 'status') return schoolwork.statusText()
       if (!schoolwork.enabled()) return OFF
       if (action === 'list') return schoolwork.summaryText()
-      if (action === 'done') return schoolwork.markDone(nums(items))
+      if (action === 'done') return (items && nums(items).length) ? schoolwork.markDone(nums(items)) : schoolwork.markSaidDone(said || 'עשיתי')
       if (action === 'undo') return schoolwork.reopen(nums(items))
       if (action === 'forget') return schoolwork.forget()
       return 'פעולה לא מוכרת'

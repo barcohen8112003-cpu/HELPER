@@ -24,7 +24,10 @@ const sleep = (ms, signal) =>
   })
 
 // The model for conversation turns: the one pinned with /model, else the default.
-export const chatModel = () => state.modelOverride || config.llm.model
+const primaryOn = () => Boolean(config.llm.primary.apiKey && config.llm.primary.baseUrl && config.llm.primary.model)
+export const chatModel = () => state.modelOverride || (primaryOn() ? config.llm.primary.model : config.llm.model)
+// The model for one agent turn: live phone calls can stay on LLM_MODEL (LLM_PRIMARY_LIVE=false) for a faster answer.
+export const turnModel = (ctx) => (ctx?.source === 'live' && !state.modelOverride && !config.llm.primary.live ? config.llm.model : chatModel())
 
 // Until when each model is out of its per-minute budget, as the provider last reported it.
 const limitedUntil = new Map()
@@ -46,7 +49,8 @@ function lineup(preferred) {
 }
 
 // Which endpoint and key a model is reached through.
-const providerOf = (model) => (config.llm.backup.apiKey && model === config.llm.backup.model ? config.llm.backup : config.llm)
+const providerOf = (model) =>
+  primaryOn() && model === config.llm.primary.model ? config.llm.primary : config.llm.backup.apiKey && model === config.llm.backup.model ? config.llm.backup : config.llm
 
 async function request(body, signal) {
   const provider = providerOf(body.model)
@@ -54,7 +58,7 @@ async function request(body, signal) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
     body: JSON.stringify(body),
-    signal: signal ? AbortSignal.any([AbortSignal.timeout(120000), signal]) : AbortSignal.timeout(120000),
+    signal: signal ? AbortSignal.any([AbortSignal.timeout(provider === config.llm.primary ? 60000 : 120000), signal]) : AbortSignal.timeout(provider === config.llm.primary ? 60000 : 120000),
   })
   if (!res.ok) {
     const error = new Error(`LLM HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`)
@@ -64,6 +68,11 @@ async function request(body, signal) {
     // The provider says how long until this model's budget frees up: seconds for the per-minute one, hours for a daily cap.
     const wait = Number(res.headers.get('retry-after')) * 1000
     if (wait > 0) error.wait = wait + 500
+    // The primary provider failing for any reason (bad key, model off, daily quota) hands the turn to the next model.
+    if (provider === config.llm.primary) {
+      error.retry = true
+      if (res.status !== 429 && res.status < 500 && !(error.wait > 0)) error.wait = 10 * 60000
+    }
     if (res.status === 413) error.message = 'הבקשה גדולה מהמכסה לדקה של המודל הזה. נסה /new כדי לקצר את השיחה, או הודעה קצרה יותר.'
     throw error
   }
@@ -128,6 +137,8 @@ export async function llm(messages, tools, preferred = chatModel(), patience = P
       health.error = `${model}: ${String(e.message).slice(0, 120)}`
       // A bad key or bad request will not get better, on this model or another.
       if (e.retry === false || ++failures > MAX_FAILURES) throw e
+      // The primary provider hiccuping (network, timeout, overload) sits out a minute so the turn moves on at once.
+      if (providerOf(model) === config.llm.primary && !e.wait) e.wait = 60000
       // Out of budget, or a server or network hiccup: this model sits out and the next one is tried.
       limitedUntil.set(model, Date.now() + (e.wait || RETRY_DELAYS[Math.min(failures, RETRY_DELAYS.length) - 1]))
     }

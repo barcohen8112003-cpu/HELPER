@@ -400,7 +400,8 @@ const wa = await startWhatsApp(async (m) => {
     if (activeTurn?.ac === ac) activeTurn = null
     finish()
   })
-}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m), bindSync: groups.bindGroupSync }, (m) => Boolean(state.owner) && (isInstinctMessage(m) || isOwner(m)))
+}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m), bindSync: groups.bindGroupSync, isSchoolwork: groups.isSchoolworkGroup }, (m) => Boolean(state.owner) && (isInstinctMessage(m) || isOwner(m)))
+if (wa.fetchGroupHistory) schoolwork.setLookbackFetch((jid, opts) => wa.fetchGroupHistory(jid, opts))
 connectInstinct({ send: (jid, text) => wa.sendAs(jid, text), notify: (text) => (state.owner ? wa.send(state.owner.jid, text) : null) })
 
 // Default pairing: the moment the QR is scanned, the assistant lives in the account's "message yourself" chat.
@@ -667,13 +668,17 @@ const bridgeAsk = (text, { voice, source }) => {
   return run
 }
 
-// One spoken turn. Same queue, tools and WhatsApp approval as a chat message. Hanging up declines an open approval.
+// One spoken turn. A plain home command (lights, the projector, the PC) runs at once and skips the model
+// and the queue, the same as in WhatsApp. Anything else uses the same queue, tools and WhatsApp approval
+// as a chat message. Hanging up declines an open approval.
 async function liveTurn(text, { signal } = {}) {
   const onAbort = () => declinePendingConfirm()
   signal?.addEventListener('abort', onAbort, { once: true })
-  const run = queue.then(() => runTurn(`${LIVE_NOTE}\n${text}`, { source: 'live', confirm, sendMedia, say, signal }))
-  queue = run.catch(() => {}).then(() => compact().catch(() => {}))
   try {
+    const quick = await fastCommand(text)
+    if (quick) return quick.reply
+    const run = queue.then(() => runTurn(`${LIVE_NOTE}\n${text}`, { source: 'live', confirm, sendMedia, say, signal }))
+    queue = run.catch(() => {}).then(() => compact().catch(() => {}))
     return await run
   } finally {
     signal?.removeEventListener('abort', onAbort)
