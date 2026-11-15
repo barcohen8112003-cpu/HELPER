@@ -64,6 +64,7 @@ const TESTS = [
   'src/tv-agent-selftest.js',
   'src/google-docs-selftest.js',
   'src/webtop-file-selftest.js',
+  'src/agent-team-selftest.js',
   'src/webtop-watch-selftest.js',
   'src/scrapling-selftest.js',
   'src/groups-selftest.js',

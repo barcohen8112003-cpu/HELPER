@@ -26,6 +26,7 @@ import { memoryBlock, tokens } from './memory.js'
 import { learningBlock } from './learning-tools.js'
 import { record as recordAudit } from './audit.js'
 import { learnFrom } from './memory-learn.js'
+import { tryOrchestrateAgentTeam } from './agent-team/orchestrator.js'
 import { agentRules, planBlock, looksLikeGoal, needsVerify, verifyPrompt, planText, savedPlan, keepPlan, clearPlan } from './planner.js'
 import { proactiveRules, loopsBlock, noteUserMessage } from './proactive.js'
 import { checkLinks } from './links.js'
@@ -455,7 +456,7 @@ function shortenOldResults(messages) {
 // Tools on the CONFIRM_ALWAYS list ask unless the user chose COMPUTER_MODE=auto for the computer tools. Tools marked
 // risk: 'write' (memory_confirm, and anything in the toolkit that changes something outside Helper) always ask:
 // "auto" is a choice about the computer, not about letting a web page or mail decide what Helper remembers or sends.
-const needsApproval = (tool) => tool.risk === 'write' || (config.computerMode !== 'auto' && config.confirmAlways.includes(tool.name))
+export const needsApproval = (tool) => tool.risk === 'write' || (config.computerMode !== 'auto' && config.confirmAlways.includes(tool.name))
 
 // What the user is shown. Anything that looks like a secret is hidden, so a PIN never appears in the chat or the log.
 // A tool can describe its own request when the plain argument list would not say what is being approved.
@@ -494,7 +495,7 @@ const lastUserText = (messages) => {
 }
 
 // Runs one requested call and returns the tool message for it.
-async function runCall(call, tools, ctx) {
+export async function runCall(call, tools, ctx) {
   // A tool that was not sent for this message (routing left its domain out) still runs when the model names it:
   // routing is about what the model reads, never about what Helper can do. Its domain opens for the rest of the turn.
   let tool = tools.find((t) => t.name === call.function.name)
@@ -712,7 +713,12 @@ export async function runTurn(userText, ctx, image) {
       save()
       return team.reply
     }
-    let reply = await converse(state.history, ctx)
+    // Subagent team (src/agent-team). Off unless AGENT_TEAM_ENABLED is on/true/yes/1. null = this turn continues.
+    let reply = config.agentTeam?.enabled
+      ? await tryOrchestrateAgentTeam(userText, { ...ctx, history: state.history.slice(0, -1), summary: state.summary })
+      : null
+    if (reply) state.history.push({ role: 'assistant', content: reply })
+    else reply = await converse(state.history, ctx)
     // A link that no tool opened this turn is opened once before it goes out; a dead one is taken out (src/links.js).
     const checked = await checkLinks(reply, seenThisTurn(mark)).catch(() => reply)
     if (checked !== reply) {

@@ -348,7 +348,8 @@ const wa = await startWhatsApp(async (m) => {
       const wantsVoice = input.voice || state.voiceMode === 'always'
       const spokenReply = Boolean(config.whatsappSpokenReplies && wantsVoice)
       // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      let reply = await runTurn(input.text, { source: 'whatsapp', spokenReply, confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background, msgId }, input.image)
+      // messageId is the agent-team dedup key. msgId is the existing team conductor key. Both stay.
+      let reply = await runTurn(input.text, { source: 'whatsapp', spokenReply, confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background, msgId, messageId: m.key?.id || m.id }, input.image)
       // Every message gets an answer. Nothing came back and no emoji was chosen as the answer: one short question.
       if ((!reply?.trim() || /^SKIP\b/.test(reply.trim())) && !reacted) {
         console.log('[agent] the model returned no answer; asking him instead of staying silent')
