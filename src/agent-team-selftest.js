@@ -598,11 +598,47 @@ console.log('--- בדיקות צוות סוכנים בזמן ריצה (Helper Or
       fetchFn: spyFetch,
     })
   } catch (e) {
-    if (e.message.includes('חסר מפתח LLM_API_KEY / OPENROUTER_API_KEY')) missingKeyError = true
+    if (e.message.includes('חסר מפתח OPENROUTER_API_KEY')) missingKeyError = true
   }
 
-  ok(missingKeyError, 'Missing authorization threw clear error (חסר מפתח LLM_API_KEY / OPENROUTER_API_KEY)')
+  ok(missingKeyError, 'Missing authorization threw clear error (חסר מפתח OPENROUTER_API_KEY)')
   ok(!networkHit, 'Zero network calls made when key was missing')
+}
+
+// 8f-2. The main LLM_API_KEY is never a fallback for OpenRouter: with only LLM_API_KEY set, no call goes out
+{
+  const saved = { or: process.env.OPENROUTER_API_KEY, llm: process.env.LLM_API_KEY, cfg: config.llm.apiKey }
+  delete process.env.OPENROUTER_API_KEY
+  process.env.LLM_API_KEY = 'main-provider-key-must-not-leak'
+  config.llm.apiKey = 'main-provider-key-must-not-leak'
+  let sentAuth = null
+  const spyFetch = async (url, options) => {
+    sentAuth = options?.headers?.Authorization || 'none'
+    throw new Error('NETWORK_HIT')
+  }
+  let message = ''
+  try {
+    // No apiKey argument: the default is the one under test.
+    await callExplicitModel({ model: 'google/gemini-2.5-flash', messages: [{ role: 'user', content: 'test' }], fetchFn: spyFetch })
+  } catch (e) {
+    message = e.message
+  }
+  ok(sentAuth === null, 'Only LLM_API_KEY set: zero network calls, the main key is never sent to OpenRouter')
+  ok(message.includes('חסר מפתח OPENROUTER_API_KEY'), 'Only LLM_API_KEY set: error names OPENROUTER_API_KEY')
+  ok(!message.includes('main-provider-key-must-not-leak'), 'Error message does not quote the main key')
+
+  // With OPENROUTER_API_KEY set, that key (and only that key) is sent.
+  process.env.OPENROUTER_API_KEY = 'openrouter-only-key'
+  try {
+    await callExplicitModel({ model: 'google/gemini-2.5-flash', messages: [{ role: 'user', content: 'test' }], fetchFn: spyFetch })
+  } catch {}
+  ok(sentAuth === 'Bearer openrouter-only-key', 'OPENROUTER_API_KEY set: exactly that key is the bearer token')
+
+  if (saved.or === undefined) delete process.env.OPENROUTER_API_KEY
+  else process.env.OPENROUTER_API_KEY = saved.or
+  if (saved.llm === undefined) delete process.env.LLM_API_KEY
+  else process.env.LLM_API_KEY = saved.llm
+  config.llm.apiKey = saved.cfg
 }
 
 // 8g. Regular path provider remains completely untouched

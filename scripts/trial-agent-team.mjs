@@ -12,9 +12,9 @@ import { callExplicitModel, OPENROUTER_ENDPOINT } from '../src/llm.js'
 async function runSingleTrial() {
   console.log('=== ניסוי מבודד יחיד: צוות סוכנים דרך OpenRouter (Helper Orchestrator) ===\n')
 
-  const apiKey = process.env.OPENROUTER_API_KEY || config.llm?.apiKey || process.env.LLM_API_KEY
+  const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) {
-    console.error('❌ שגיאה: חסרה הרשאת OpenRouter (LLM_API_KEY או OPENROUTER_API_KEY ב-.env).')
+    console.error('❌ שגיאה: חסר OPENROUTER_API_KEY ב-.env (LLM_API_KEY לא משמש במסלול הזה).')
     process.exit(1)
   }
 
