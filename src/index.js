@@ -52,6 +52,7 @@ import { recoverTeam, teamStatus } from './team/conductor.js'
 import { allTools } from './tools.js'
 import { record as recordAudit } from './audit.js'
 import { createPanel, panelConfig, startPanelServer } from './panel.js'
+import { createEventFeed, eventsConfig } from './panel-events.js'
 import { createExecutor } from './panel-execute.js'
 import { panelContext } from './panel-scopes.js'
 import { connectInstinct, isInstinctMessage, onInstinctMessage, stopInstinctChat, recoverInstinct, flushInstinctRecovery, instinctRecoveryPending, reconcileInstinctRecovery } from './instinct.js'
@@ -157,6 +158,14 @@ let queue = Promise.resolve()
 let activeTurn = null
 // Bumped by "עצור" and "שיחה חדשה": messages that were already waiting in the queue are dropped, not answered late.
 let stopEpoch = 0
+// The desktop avatar's feed (src/panel-events.js): set only with PANEL_ENABLED=on and PANEL_EVENTS=on, null otherwise.
+// avatarEvent takes a type name and nothing else, so no text, sender or title can reach the feed.
+let avatarFeed = null
+function avatarEvent(type) {
+  try {
+    avatarFeed?.publish(type)
+  } catch {}
+}
 
 function announcePairing() {
   pairCode = String(randomInt(100000, 1000000))
@@ -452,13 +461,19 @@ function declinePendingConfirm() {
 // Starts a background task (start_background_task). Its result, or why it failed, arrives as its own message.
 // `run(signal, setStep)` replaces the agent for work done by something else (Claude Code).
 function background(title, instruction, run) {
-  return startJob(
+  const done = backgroundDone({ external: Boolean(run), send: (text) => wa.send(state.owner.jid, text) })
+  const job = startJob(
     title,
     run || ((signal, setStep) => runBackground(title, instruction, { source: 'job', confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep })),
     // runBackground adds its own result to the conversation; a task run by something else, or one that failed,
     // leaves its status there (never the result or the error text), so "סיימת?" has something to refer to.
-    backgroundDone({ external: Boolean(run), send: (text) => wa.send(state.owner.jid, text) })
+    (...args) => {
+      avatarEvent('task-end')
+      return done(...args)
+    }
   )
+  avatarEvent('task-start')
+  return job
 }
 
 function askOnce(question, media) {
@@ -535,6 +550,7 @@ if (config.learning) loadUserTools().then((n) => n && console.log(`[tools] נט�
 
 const monitoring = createMonitoring({
   send: (text) => wa.send(state.owner.jid, text),
+  onSent: (type) => avatarEvent(type === 'alert' ? 'alert' : 'message'),
   getDay,
   news: () => (newsInBrief() ? newsDigest() : ''),
   // Spoken morning brief on the face page. presentSpeech does nothing while FACE_ENABLED is off.
@@ -570,6 +586,7 @@ function notify(text, urgent = false, key, kindName) {
   const already = Boolean(key && state.sentKeys.includes(key))
   if (urgent || (!inQuietHours() && (already || takeProactiveSlot()))) {
     if (!urgent && !already) noticeSent(kind)
+    avatarEvent(urgent ? 'alert' : 'message')
     return outbox.notify(text, urgent, key)
   }
   if (key) {
@@ -685,6 +702,8 @@ function panelTurn(text, { actor, scopes, history, onWaiting }) {
   return run
 }
 const panelCfg = panelConfig()
+// The avatar feed rides on the panel: no panel, no feed. PANEL_EVENTS=on turns it on; it is off by default.
+if (panelCfg.enabled && eventsConfig().enabled) avatarFeed = createEventFeed()
 const panel = panelCfg.enabled
   ? createPanel({
       file: path.join(DATA_DIR, 'panel.json'),
@@ -699,6 +718,7 @@ const panel = panelCfg.enabled
       notify: (text) => notify(text, true),
       fast: { action: fastAction },
       execute: createExecutor(),
+      events: avatarFeed,
       audit: recordAudit,
       origin: panelCfg.origin,
       port: panelCfg.port,

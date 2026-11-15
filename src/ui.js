@@ -394,7 +394,8 @@ export function startUi({ connectedSince, restart, agent, liveTurn, panel = null
     // The new secret is returned once, in this response, and is not stored anywhere in readable form.
     if (route.startsWith('panel/')) {
       if (!panelRef) throw new Error('הפאנל המרוחק כבוי (PANEL_ENABLED=on בקובץ .env, ואז הפעלה מחדש)')
-      if (route === 'panel/create') return panelRef.issue({ label: body.label, scopes: body.scopes })
+      // kind: 'panel' (a browser), or 'consumer:desktop' (HELPER for Windows' avatar, which may only read the event feed).
+      if (route === 'panel/create') return panelRef.issue({ label: body.label, scopes: body.scopes, kind: body.kind === 'consumer:desktop' ? 'consumer:desktop' : 'panel' })
       if (route === 'panel/revoke') return { ok: panelRef.revoke(body.id) }
       if (route === 'panel/scopes') return { scopes: panelRef.setScopes(body.id, body.scopes) }
       if (route === 'panel/settings') return { settings: panelRef.setSettings(body.settings || {}) }

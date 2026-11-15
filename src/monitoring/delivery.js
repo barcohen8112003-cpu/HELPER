@@ -56,6 +56,12 @@ export function nightText(s) {
 //   onBrief?(text) => void  optional, after the morning message has been sent }
 export function createDelivery(deps) {
   const now = () => deps.now()
+  // deps.onSent(type): a type name only ('message' | 'alert'), for the avatar's feed. Its failure never stops a send.
+  const signal = (type) => {
+    try {
+      deps.onSent?.(type)
+    } catch {}
+  }
 
   // The intent is written to disk before the message leaves, and cleared only after it has left.
   // A crash in between leaves a 'sending' record, which the next start treats as "possibly sent".
@@ -116,7 +122,9 @@ export function createDelivery(deps) {
     const interrupt = out.decision === 'interrupt' && !NEVER_INTERRUPT.includes(category)
     // An interrupt goes out now, quiet hours or not. Anything else goes out now only outside quiet hours.
     if (interrupt || !quiet) {
-      await sendNow(formatAlert(interrupt, event, out.summary), { event_id: event.id, watch })
+      const sent = await sendNow(formatAlert(interrupt, event, out.summary), { event_id: event.id, watch })
+      // The desktop avatar hears only that something went out and how urgent it was, never what (src/panel-events.js).
+      if (sent) signal(interrupt ? 'alert' : 'message')
       return interrupt ? 'interrupted' : 'sent'
     }
     watch.pending_batch.push({ event_id: event.id, source: event.source, title: out.summary || event.title, at: iso(now()), deadline: out.deadline || null, topic: out.topic || '', incomplete: Boolean(out.incomplete) })
@@ -138,7 +146,8 @@ export function createDelivery(deps) {
         watch.pending_batch = watch.pending_batch.filter((x) => x !== item)
         watch.stats.interrupts++
         persist()
-        await sendNow(`דחוף - ${sourceLabel(item.source)}\n${item.title}\nמקור: ${item.source} - המועד מתקרב: ${new Date(item.deadline).toLocaleString('he-IL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`, { event_id: item.event_id, watch })
+        const sent = await sendNow(`דחוף - ${sourceLabel(item.source)}\n${item.title}\nמקור: ${item.source} - המועד מתקרב: ${new Date(item.deadline).toLocaleString('he-IL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`, { event_id: item.event_id, watch })
+        if (sent) signal('alert')
       }
     }
   }

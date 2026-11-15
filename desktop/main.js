@@ -193,6 +193,135 @@ function answer(text, extra = {}) {
 }
 let bubbleHovered = false
 
+// ---- the avatar ---------------------------------------------------------------------------------------
+// A small character in a corner of the screen (ui/avatar.html). Off until turned on in the tray. It dances while
+// music HELPER started is playing, reacts to a message or a task, and jumps on an urgent alert. Events from the
+// cloud carry a type only (src/avatar-feed.js); the window gets a state name only, never any text.
+
+const AVATAR_W = 140, AVATAR_H = 170
+let avatarWin = null, avatarState = null, avatarFeed = null, avatarFeedKey = '', avatarTimer = null, avatarDrag = null
+let avatarStatus = 'stopped'
+
+/** Where the avatar goes: where it was dragged to, if that is still on a screen; else the main screen's bottom corner. */
+function avatarHome() {
+  const p = store.settings().avatarPos
+  if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+    const on = screen.getAllDisplays().some((d) => p.x >= d.workArea.x - AVATAR_W / 2 && p.x <= d.workArea.x + d.workArea.width - AVATAR_W / 2 && p.y >= d.workArea.y - AVATAR_H / 2 && p.y <= d.workArea.y + d.workArea.height - AVATAR_H / 2)
+    if (on) return { x: Math.round(p.x), y: Math.round(p.y) }
+  }
+  const wa = screen.getPrimaryDisplay().workArea
+  // Bottom left: Windows' own notifications appear bottom right, so the avatar stays out of their way.
+  return { x: wa.x + 16, y: wa.y + wa.height - AVATAR_H - 8 }
+}
+
+function sendAvatar(s) {
+  const w = avatarWin
+  if (!w || w.isDestroyed()) return
+  const msg = { state: s.state, variant: s.variant || '' }
+  if (w.webContents.isLoading()) w.webContents.once('did-finish-load', () => { if (!w.isDestroyed()) w.webContents.send('avatar', msg) })
+  else w.webContents.send('avatar', msg)
+}
+
+function makeAvatar() {
+  if (avatarWin && !avatarWin.isDestroyed()) return avatarWin
+  const at = avatarHome()
+  avatarWin = new BrowserWindow({
+    x: at.x, y: at.y, width: AVATAR_W, height: AVATAR_H, show: false, frame: false, transparent: true, resizable: false,
+    movable: false, skipTaskbar: true, alwaysOnTop: true, focusable: false, hasShadow: false, backgroundColor: '#00000000',
+    // backgroundThrottling stays on: while it is hidden its animations cost nothing.
+    webPreferences: { preload: PRELOAD, contextIsolation: true, nodeIntegration: false },
+  })
+  avatarWin.setAlwaysOnTop(true, 'floating')   // under HELPER's bubble and rings, over ordinary windows
+  avatarWin.setIgnoreMouseEvents(true, { forward: true })
+  avatarWin.loadFile(path.join(ROOT, 'ui', 'avatar.html'))
+  watchConsole(avatarWin, 'avatar')
+  avatarWin.once('ready-to-show', () => { if (avatarWin && !avatarWin.isDestroyed()) { avatarWin.showInactive(); sendAvatar(avatarState.tick()) } })
+  avatarWin.on('closed', () => { avatarWin = null })
+  return avatarWin
+}
+
+function avatarTick() {
+  clearTimeout(avatarTimer)
+  if (!avatarState) return
+  avatarState.tick()
+  const ms = avatarState.nextChangeIn()
+  if (ms != null) avatarTimer = setTimeout(avatarTick, ms + 30)
+}
+
+/** An event for the avatar: { type } only. Nothing happens while the avatar is off. */
+function avatarEvent(ev) {
+  if (!avatarState) return
+  avatarState.event({ type: ev && ev.type })
+  avatarTick()
+}
+
+function avatarMusic(on) {
+  if (!avatarState) return
+  avatarState.music(on)
+  avatarTick()
+}
+
+function endAvatarDrag() {
+  if (!avatarDrag) return
+  clearInterval(avatarDrag.timer)
+  clearTimeout(avatarDrag.limit)
+  avatarDrag = null
+  if (avatarWin && !avatarWin.isDestroyed()) {
+    const [x, y] = avatarWin.getPosition()
+    store.saveSettings({ avatarPos: { x, y } })
+    avatarWin.setIgnoreMouseEvents(true, { forward: true })
+  }
+}
+
+function startAvatarDrag() {
+  if (!avatarWin || avatarWin.isDestroyed() || avatarDrag) return
+  const c = screen.getCursorScreenPoint()
+  const [x, y] = avatarWin.getPosition()
+  const dx = c.x - x, dy = c.y - y
+  avatarDrag = {
+    timer: setInterval(() => {
+      if (!avatarWin || avatarWin.isDestroyed()) return endAvatarDrag()
+      const p = screen.getCursorScreenPoint()
+      avatarWin.setPosition(p.x - dx, p.y - dy)
+    }, 16),
+    limit: setTimeout(endAvatarDrag, 60000),   // a lost mouse-up never leaves it stuck to the pointer
+  }
+}
+
+const AVATAR_STATUS = {
+  connected: 'מחובר', starting: 'מתחבר…', stopped: 'כבוי', 'not-set': 'לא הוגדר (avatar-link.ps1)',
+  unreachable: 'השרת לא זמין כרגע, מנסה שוב בשקט', denied: 'הקוד לא מורשה (להדליק "אירועי אווטאר" באתר ההגדרות)',
+  off: 'כבוי בשרת (PANEL_EVENTS)',
+}
+
+/** Brings the avatar and its feed in line with the settings: on, off, or a new address or code. */
+function applyAvatar() {
+  const s = store.settings()
+  if (!s.avatarEnabled) {
+    clearTimeout(avatarTimer)
+    endAvatarDrag()
+    if (avatarWin && !avatarWin.isDestroyed()) avatarWin.destroy()
+    avatarWin = null
+    avatarState = null
+  } else {
+    if (!avatarState) avatarState = require('./src/avatar-state').createAvatarState({ onChange: sendAvatar })
+    makeAvatar()
+  }
+  const want = s.avatarEnabled && s.avatarEvents
+  const key = want ? `${s.avatarPanelUrl}\n${s.avatarCredential}` : ''
+  if (avatarFeed && key !== avatarFeedKey) { avatarFeed.stop(); avatarFeed = null }
+  if (want && !avatarFeed) {
+    avatarFeed = require('./src/avatar-feed').createAvatarFeed({
+      url: s.avatarPanelUrl, credential: s.avatarCredential, log,
+      onEvent: (ev) => avatarEvent({ type: ev.type }),
+      onStatus: (st) => { avatarStatus = st; refreshTray() },
+    })
+    avatarFeed.start()
+  }
+  avatarFeedKey = key
+  if (!avatarFeed) avatarStatus = 'stopped'
+}
+
 // ---- talking --------------------------------------------------------------------------------------
 
 function startListening() {
@@ -492,6 +621,7 @@ async function handleAsk(raw, { voice = false } = {}) {
   mark = null
   clearMarks()
 
+  avatarEvent({ type: 'task-start' })
   handsServer.startRecording()
   const steps = []
   let lookedAtScreen = false
@@ -547,6 +677,7 @@ async function finish(seq, heard, text, route, started, error = false, voice = f
   if (seq !== askSeq) return
   voice = voice || spokenAsk === seq
   store.log({ heard, route, ms: Date.now() - started, error, answer: String(text).slice(0, 200) })
+  if (route === 'brain' || route === 'cloud') avatarEvent({ type: 'task-end' })
   answer(text, { heard, route, error, note })
   refreshTray()   // the history in the tray menu
   // A spoken ask gets a spoken answer (errors too, so a failure is never silent).
@@ -719,6 +850,8 @@ function startHotkeys() {
     }
   })
 
+  uIOhook.on('mouseup', () => endAvatarDrag())
+
   uIOhook.on('keyup', (e) => {
     const k = e.keycode
     down.delete(k)
@@ -770,6 +903,12 @@ function trayMenu() {
     { label: 'להפעיל עם Windows', type: 'checkbox', checked: s.startAtLogin, click: (i) => { store.saveSettings({ startAtLogin: i.checked }); applyLogin() } },
     { label: 'לפתוח את הגשר למחשב עם HELPER', type: 'checkbox', checked: s.bridgeAtStart, click: (i) => { store.saveSettings({ bridgeAtStart: i.checked }); if (i.checked) require('./src/bridge').start({ exe: brain.claudeCommand(), cwd: path.join(ROOT, '..'), log }); refreshTray() } },
     { label: bridgeLabel(), enabled: false },
+    { label: 'אווטאר על המסך', submenu: [
+      { label: 'להציג את האווטאר', type: 'checkbox', checked: s.avatarEnabled, click: (i) => { store.saveSettings({ avatarEnabled: i.checked }); applyAvatar(); refreshTray() } },
+      { label: 'אירועים מ-HELPER בענן (סוג בלבד, בלי תוכן)', type: 'checkbox', checked: s.avatarEvents, enabled: Boolean(s.avatarPanelUrl && s.avatarCredential), click: (i) => { store.saveSettings({ avatarEvents: i.checked }); applyAvatar(); refreshTray() } },
+      { label: 'אירועים: ' + (s.avatarEnabled && s.avatarEvents ? AVATAR_STATUS[avatarStatus] || avatarStatus : 'כבוי'), enabled: false },
+      { label: 'להחזיר לפינה', enabled: s.avatarEnabled, click: () => { store.saveSettings({ avatarPos: null }); if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } } },
+    ] },
     { type: 'separator' },
     { label: s.helperToken ? 'HELPER בענן: מחובר' : 'HELPER בענן: לא מחובר (connect.ps1)', enabled: false },
     { label: claude === 'signed-out' ? 'Claude Code: צריך ‎/login' : claude === 'missing' ? 'Claude Code: לא מותקן' : claude === 'ok' ? 'Claude Code: מחובר' : 'Claude Code: עוד לא נבדק', enabled: false },
@@ -894,6 +1033,12 @@ app.whenReady().then(async () => {
   ipcMain.on('mics', (e, labels) => { if (Array.isArray(labels)) { knownMics = labels.map(String).filter(Boolean); refreshTray() } })
   ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); giveKeyboardBack(); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('pill-audio', (e, data) => onAudio(data))
+  // The avatar: over it the window catches the mouse (to drag it); anywhere else clicks go through.
+  ipcMain.on('avatar-hover', (e, on) => { if (avatarWin && !avatarWin.isDestroyed() && !avatarDrag) avatarWin.setIgnoreMouseEvents(!on, { forward: true }) })
+  ipcMain.on('avatar-drag', (e, phase) => { if (phase === 'start') startAvatarDrag(); else endAvatarDrag() })
+  // Music HELPER started or stopped on this PC (play, media keys): the avatar dances while it plays.
+  hands.onStep((step) => { if (!avatarState) return; const m = require('./src/avatar-state').musicFromStep(step); if (m !== null) avatarMusic(m) })
+  screen.on('display-removed', () => { if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } })
 
   const icon = nativeImage.createFromPath(path.join(ROOT, 'ui', 'icon.png'))
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 16, height: 16 }))
@@ -913,6 +1058,9 @@ app.whenReady().then(async () => {
   if (store.settings().bridgeAtStart) {
     require('./src/bridge').start({ exe: brain.claudeCommand(), cwd: path.join(ROOT, '..'), log })
   }
+
+  // The avatar, only when it was turned on (tray: "אווטאר על המסך"). Off by default.
+  applyAvatar()
 
   log('started')
   if (!askFromArgs(process.argv)) {
@@ -965,4 +1113,5 @@ app.on('before-quit', () => {
   speech && speech.stop()
   brain && brain.cancel()
   try { require('./src/bridge').stop() } catch { }
+  try { avatarFeed && avatarFeed.stop() } catch { }
 })

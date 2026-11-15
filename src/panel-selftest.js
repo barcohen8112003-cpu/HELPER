@@ -191,7 +191,7 @@ ok(!panelConfig({}).enabled && panelConfig({}).listen === '127.0.0.1' && panelCo
     const po = await req(port, 'POST', p, { headers: { Authorization: `Bearer ${a.secret}` }, body: {} })
     ok(g.status === 404 && po.status === 404, `13. not served on the panel port: ${p}`)
   }
-  ok(PANEL_ROUTES.length === 9, 'exactly nine routes (six from the first panel, catalog, and execute with its result)')
+  ok(PANEL_ROUTES.length === 10, 'exactly ten routes (six from the first panel, catalog, execute with its result, and the avatar events feed)')
 
   // 7. Speaking as another client.
   const spoof = await req(port, 'POST', '/panel/api/ask', { headers: t.asSession(sa), body: { text: 'שלום', id: 'spoof000001', source: 'android_app' } })
@@ -416,7 +416,7 @@ ok(!panelConfig({}).enabled && panelConfig({}).listen === '127.0.0.1' && panelCo
   ok(Object.isFrozen(ACTION_CATALOG) && ACTION_CATALOG.every((a) => Object.isFrozen(a) && Object.isFrozen(a.params)), 'C2. the catalog is frozen')
   ok(ACTION_CATALOG.every((a) => !('handler' in a)), 'C3. no handlers yet: nothing in the catalog can switch a device')
   ok(JSON.stringify(DEVICE_ACTIONS) === JSON.stringify(PANEL_ACTIONS.map((a) => ({ id: a.id, label: a.label }))), 'C4. DEVICE_ACTIONS is derived from the catalog')
-  ok(JSON.stringify(KNOWN_SCOPES) === JSON.stringify(['status', 'ask:read', 'device:lights:on', 'device:lights:off', 'device:tv:off']), 'C5. the known scopes did not change')
+  ok(JSON.stringify(KNOWN_SCOPES) === JSON.stringify(['status', 'ask:read', 'device:lights:on', 'device:lights:off', 'device:tv:off', 'events:avatar']), 'C5. the known scopes: base, device switches, and the avatar events feed last')
   ok(PANEL_ACTIONS.every((a) => a.risk !== 'high'), 'C6. no high-risk action is offered to the panel')
   // The closed schemas.
   ok(checkParams('lights:on', { room: 'סלון' }).ok && checkParams('lights:off', { room: 'all' }).ok, 'C7. a room from the list is accepted, "all" is an explicit choice')

@@ -547,6 +547,12 @@ docker compose -f docker-compose.yml -f docker-compose.tailscale.yml exec tailsc
 
 ## המחשב: שליטה, מכונה וירטואלית, הדלקה מרחוק
 
+### אווטאר חי על המסך (כבוי כברירת מחדל)
+ב-HELPER למחשב (`desktop/`) יש דמות קטנה שיושבת בפינת המסך: רוקדת כשמתנגנת מוזיקה ש-HELPER הפעיל, מגיבה כשיצאה אליך הודעה או כשמשימה מתחילה ונגמרת, וקופצת על התראה דחופה. היא כבויה עד שמדליקים אותה במגש ("אווטאר על המסך").
+
+מהשרת היא מקבלת אירועים דרך `GET /panel/api/events`: סוג (`message` / `task-start` / `task-end` / `alert`), זמן ודחיפות בלבד, **בלי שום תוכן**. הנתיב קיים רק עם `PANEL_ENABLED=on` וגם `PANEL_EVENTS=on` (ברירת מחדל כבוי), ועונה רק ל-credential שהבעלים הדליק לו באתר ההגדרות את ההרשאה החדשה `events:avatar`. credential מסוג "אווטאר במחשב" (`consumer:desktop`) יכול להחזיק רק את ההרשאה הזאת. בדיקות: `npm run check:panel-events` ו-`node desktop/test/avatar-check.js`. פרטים ב-[desktop/README.md](desktop/README.md).
+
+
 ### שליטה ב-Windows
 עם `COMPUTER_MODE=ask` או `auto`:
 

@@ -1,5 +1,5 @@
 // The remote panel: one small HTTPS page (behind a reverse proxy) where the owner, or a client he allows, types a
-// request and gets HELPER's answer. It is its own listener, on its own port, and it knows exactly nine routes:
+// request and gets HELPER's answer. It is its own listener, on its own port, and it knows exactly ten routes:
 //
 //   GET  /panel                 static sign-in page, the same for every visitor, no personal data
 //   POST /panel/api/login       the credential, in the body only -> short server-side session cookie
@@ -11,6 +11,9 @@
 //                               connection state (connection only, never proof that a device will obey)
 //   POST /panel/api/execute     session: { id, action, params } -> 202 running; one catalog action, no model
 //   GET  /panel/api/execute/<id> session: succeeded | failed | unknown | running, for that id only
+//   GET  /panel/api/events      Bearer, scope events:avatar, PANEL_EVENTS=on: long poll of content-free events for
+//                               the desktop avatar ({id, type, severity, at} only; src/panel-events.js). Cursor in
+//                               the Last-Event-ID header, never in the address.
 //
 // Device actions run only through execute. A device sentence sent to ask ("תדליק את האורות") is refused there and
 // runs nothing: one path, one gate, one lock (src/device-lock.js).
@@ -27,6 +30,7 @@ import http from 'node:http'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { cleanKind, cleanScopes, deviceGate, KNOWN_SCOPES, DEVICE_ACTIONS } from './panel-scopes.js'
 import { PANEL_ACTIONS, publicSchema, findAction, checkParams } from './panel-actions.js'
+import { EVENTS_SCOPE } from './panel-events.js'
 
 export const PANEL_ROUTES = Object.freeze([
   ['GET', '/panel'],
@@ -38,6 +42,7 @@ export const PANEL_ROUTES = Object.freeze([
   ['GET', '/panel/api/catalog'],
   ['POST', '/panel/api/execute'],
   ['GET', '/panel/api/execute/<id>'],
+  ['GET', '/panel/api/events'],
 ])
 
 const PAGE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'panel.html')
@@ -49,6 +54,9 @@ const ID_RE = /^[A-Za-z0-9_-]{8,80}$/
 const HISTORY_KEEP = 20
 const REQUEST_KEEP = 500
 const REQUEST_DAYS = 14
+// The avatar's long poll: one open wait per credential at a time, and a ceiling per hour (a 25 s poll is ~144/hour).
+const EVENTS_PER_HOUR = 400
+const EVENTS_OPEN_PER_CRED = 2
 
 export const DEFAULT_SETTINGS = Object.freeze({ askPerHour: 30, statusPerHour: 120, loginPerMinute: 10, dailyCap: 200 })
 
@@ -90,7 +98,7 @@ function loadStore(file) {
   // Credentials saved before kinds existed are panel credentials, unchanged. A non-panel kind never keeps a scope.
   for (const c of store.credentials) {
     if (c.kind === undefined) c.kind = 'panel'
-    else if (cleanKind(c.kind) && cleanKind(c.kind) !== 'panel') c.scopes = []
+    else if (cleanKind(c.kind) && cleanKind(c.kind) !== 'panel') c.scopes = cleanScopes(c.scopes, c.kind)
   }
   // A request that was running when the process stopped has an unknown outcome. It is never run again by itself.
   for (const r of Object.values(store.requests)) if (r.state === 'running') Object.assign(r, { state: 'unknown', note: 'check audit' })
@@ -151,6 +159,7 @@ function pageWithCsp(html) {
 //   fast                 { action(text) -> id|null } (src/fast-commands.js): only to recognise a device sentence in ask
 //   execute(action, params, { actor }) -> { state, detail, reason } (src/panel-execute.js)
 //   audit(entry)         src/audit.js record
+//   events               src/panel-events.js feed, or null (the default): GET /panel/api/events is 404 without it
 //   origin               the public https origin, e.g. https://panel.example.com; local loopback is allowed besides
 //   port, trustProxy, now, waitMs, runTimeoutMs, log
 export function createPanel(deps) {
@@ -163,6 +172,8 @@ export function createPanel(deps) {
     fast = { action: () => null, run: async () => null },
     audit = () => {},
     execute = async () => ({ state: 'failed', detail: 'ביצוע לא מוגדר', reason: 'not_configured' }),
+    events = null,
+    eventsWaitMs = 25000,
     origin = '',
     port = 3214,
     trustProxy = false,
@@ -178,6 +189,7 @@ export function createPanel(deps) {
   const sessions = new Map() // sid -> { credId, csrf, created, seen }
   const rate = limiter(now)
   const running = new Map() // key -> Promise
+  const eventsOpen = new Map() // credential id -> open long polls
   const page = pageWithCsp(fs.existsSync(PAGE) ? fs.readFileSync(PAGE, 'utf8') : '<!doctype html><title>HELPER</title>')
 
   const origins = [origin, `http://127.0.0.1:${port}`, `http://localhost:${port}`].filter(Boolean)
@@ -436,9 +448,42 @@ export function createPanel(deps) {
     return [202, { state: 'running', id, action: action.id }, {}, cred.id]
   }
 
+  // GET /panel/api/events: the avatar's long poll. Only {id, type, severity, at} ever leaves here (the feed stores
+  // nothing else). A panel credential or a device consumer may use it, and only with the events:avatar scope.
+  async function eventsRoute(req, cred) {
+    if (!(cred.kind === 'panel' || String(cred.kind).startsWith('consumer:')) || !cred.scopes.includes(EVENTS_SCOPE)) return [403, { error: 'לא מורשה' }, {}, cred.id]
+    const lim = rate.take(`events:${cred.id}`, EVENTS_PER_HOUR, 3600000)
+    if (!lim.ok) return [429, { error: 'יותר מדי בקשות', retryAfter: lim.retryAfter }, {}, cred.id]
+    const open = eventsOpen.get(cred.id) || 0
+    if (open >= EVENTS_OPEN_PER_CRED) return [429, { error: 'כבר מחכה לאירועים', retryAfter: 5 }, {}, cred.id]
+    const raw = String(req.headers['last-event-id'] || '').trim()
+    // No cursor: start from now (nothing old is replayed). A cursor that is not a plain number is refused.
+    if (!raw) return [200, { ok: true, events: [], cursor: events.cursor() }, {}, cred.id]
+    if (!/^\d{1,12}$/.test(raw)) return [400, { error: 'Last-Event-ID לא תקין' }, {}, cred.id]
+    // A cursor from before a server restart: start again from now.
+    if (Number(raw) > events.cursor()) return [200, { ok: true, events: [], cursor: events.cursor() }, {}, cred.id]
+    const ac = new AbortController()
+    const onClose = () => ac.abort()
+    req.on?.('close', onClose)
+    eventsOpen.set(cred.id, open + 1)
+    try {
+      const list = await events.wait(Number(raw), eventsWaitMs, ac.signal)
+      const out = list.map((e) => ({ id: e.id, type: e.type, severity: e.severity, at: e.at }))
+      const cursor = out.length ? out.at(-1).id : Number(raw)
+      return [200, { ok: true, events: out, cursor }, {}, cred.id]
+    } finally {
+      req.off?.('close', onClose)
+      const left = (eventsOpen.get(cred.id) || 1) - 1
+      if (left > 0) eventsOpen.set(cred.id, left)
+      else eventsOpen.delete(cred.id)
+    }
+  }
+
   async function route(req, res, url) {
     const method = req.method
     const p = url.pathname
+    // The avatar feed is not there at all unless the server turned it on (PANEL_EVENTS=on).
+    if (p === '/panel/api/events' && (method !== 'GET' || !events)) return [404, { error: 'not found' }]
     if (method === 'GET' && p === '/panel') {
       // A fresh value for the sign-in form's CSRF check (double submit: cookie and header must match).
       return send(res, 200, page.html, { 'Content-Security-Policy': page.csp, 'Set-Cookie': `${PRE}=${token(18)}; Secure; SameSite=Strict; Path=/panel; Max-Age=3600` })
@@ -462,7 +507,7 @@ export function createPanel(deps) {
 
     const isApi =
       (method === 'POST' && (p === '/panel/api/logout' || p === '/panel/api/ask' || p === '/panel/api/execute')) ||
-      (method === 'GET' && (p === '/panel/api/status' || p === '/panel/api/catalog' || /^\/panel\/api\/(ask|execute)\/[^/]+$/.test(p)))
+      (method === 'GET' && (p === '/panel/api/status' || p === '/panel/api/catalog' || p === '/panel/api/events' || /^\/panel\/api\/(ask|execute)\/[^/]+$/.test(p)))
     if (!isApi) return [404, { error: 'not found' }]
 
     const me = who(req)
@@ -479,6 +524,7 @@ export function createPanel(deps) {
       if (me.sid) sessions.delete(me.sid)
       return [200, { ok: true }, { 'Set-Cookie': `${SID}=; Secure; HttpOnly; SameSite=Strict; Path=/panel; Max-Age=0` }, cred.id]
     }
+    if (p === '/panel/api/events') return eventsRoute(req, cred)
     // Every other route here is for panel credentials. A producer or a device consumer gets nothing from them.
     if (cred.kind !== 'panel') return [403, { error: 'לא מורשה' }, {}, cred.id]
     if (p === '/panel/api/catalog') {
@@ -616,6 +662,7 @@ export function createPanel(deps) {
     list,
     usage,
     settings: () => ({ ...store.settings }),
+    eventsOn: Boolean(events),
     // For the self-tests: wait for every running request.
     idle: () => Promise.all([...running.values()]),
     _sessions: sessions,
@@ -630,6 +677,7 @@ export function panelSummary(panel, cfg = panelConfig()) {
     origin: cfg.origin,
     routes: PANEL_ROUTES.map(([m, p]) => `${m} ${p}`),
     scopes: KNOWN_SCOPES,
+    events: Boolean(panel?.eventsOn),
     devices: DEVICE_ACTIONS,
     credentials: panel ? panel.list() : [],
     settings: panel ? panel.settings() : { ...DEFAULT_SETTINGS },

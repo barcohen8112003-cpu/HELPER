@@ -77,6 +77,8 @@ const TESTS = [
   'src/live-voice-selftest.js',
   'src/whatsapp-speech-selftest.js',
   'src/panel-selftest.js',
+  'src/panel-events-selftest.js',
+  'desktop/test/avatar-check.js',
   'src/bound-actions-selftest.js',
   'src/office-edit-selftest.js',
   'src/gmail-plus-selftest.js',

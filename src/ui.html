@@ -375,7 +375,8 @@ function renderPanel(P, copyBtn) {
     renderPanel.fresh = ''
   }
   for (const c of (P.credentials || []).filter((x) => x.active)) {
-    const switches = (P.devices || []).map((d) => {
+    const consumer = String(c.kind || 'panel').startsWith('consumer:')
+    const switches = (consumer ? [] : P.devices || []).map((d) => {
       const scope = 'device:' + d.id
       const box = h('input', { type: 'checkbox', checked: c.scopes.includes(scope), onchange: () => {
         const next = box.checked ? [...c.scopes, scope] : c.scopes.filter((x) => x !== scope)
@@ -383,6 +384,14 @@ function renderPanel(P, copyBtn) {
       } })
       return h('label', { class: 'small', style: 'display:inline-flex;gap:6px;margin-inline-end:14px' }, box, d.label)
     })
+    // The desktop avatar's feed: types only (message, task, alert), never content. Off until switched on here.
+    if (P.events && (consumer || c.kind === 'panel' || !c.kind)) {
+      const ev = h('input', { type: 'checkbox', checked: c.scopes.includes('events:avatar'), onchange: () => {
+        const next = ev.checked ? [...c.scopes, 'events:avatar'] : c.scopes.filter((x) => x !== 'events:avatar')
+        act('panel/scopes', { id: c.id, scopes: next }, ev.checked ? 'אירועי אווטאר: פועל' : 'אירועי אווטאר: כבוי')
+      } })
+      switches.push(h('label', { class: 'small', style: 'display:inline-flex;gap:6px;margin-inline-end:14px' }, ev, 'אירועי אווטאר (סוג בלבד, בלי תוכן)'))
+    }
     rows.push(h('div', { class: 'row block' },
       h('div', {}, h('b', {}, c.label), h('span', { class: 'small' }, ` · ${c.id} · נוצר ${new Date(c.createdAt).toLocaleDateString('he-IL')} · ${c.scopes.join(', ')}`)),
       h('div', {}, switches),
@@ -398,6 +407,17 @@ function renderPanel(P, copyBtn) {
       await load()
     } catch (err) { toast(err.message) }
   } }, h('label', {}, 'credential חדש (קריאה בלבד)'), name, h('button', { class: 'primary' }, 'צור')))
+  if (P.events) {
+    rows.push(h('form', { class: 'fields', onsubmit: async (e) => {
+      e.preventDefault()
+      try {
+        const out = await post('panel/create', { label: 'אווטאר במחשב', scopes: [], kind: 'consumer:desktop' })
+        renderPanel.fresh = out.secret
+        toast('נוצר, עם אירועים כבויים. העתק את הקוד, הדבק אותו ב-avatar-link.ps1, ואז הדלק כאן את "אירועי אווטאר"')
+        await load()
+      } catch (err) { toast(err.message) }
+    } }, h('label', {}, 'credential לאווטאר במחשב (רק אירועים, בלי תוכן)'), h('button', { class: 'primary' }, 'צור')))
+  }
   const S = P.settings || {}
   const lim = {}
   const field = (k, label) => [h('label', {}, label), (lim[k] = h('input', { type: 'number', min: '0', value: S[k] }))]

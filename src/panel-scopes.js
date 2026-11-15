@@ -9,6 +9,7 @@
 // and addresses inside the server's own network.
 
 import { PANEL_ACTIONS } from './panel-actions.js'
+import { EVENTS_SCOPE } from './panel-events.js'
 
 export const PANEL_READ_TOOLS = Object.freeze([
   'web_search',
@@ -26,11 +27,15 @@ export const PANEL_READ_TOOLS = Object.freeze([
 export const DEVICE_ACTIONS = Object.freeze(PANEL_ACTIONS.map((a) => Object.freeze({ id: a.id, label: a.label })))
 
 export const BASE_SCOPES = Object.freeze(['status', 'ask:read'])
-export const KNOWN_SCOPES = Object.freeze([...BASE_SCOPES, ...DEVICE_ACTIONS.map((a) => `device:${a.id}`)])
+// events:avatar: the content-free event feed for the desktop avatar (src/panel-events.js). Never a base scope: off
+// on every credential until the owner switches it on in the settings site.
+export const KNOWN_SCOPES = Object.freeze([...BASE_SCOPES, ...DEVICE_ACTIONS.map((a) => `device:${a.id}`), EVENTS_SCOPE])
+// The only scope a device consumer ('consumer:<device>') may hold.
+export const CONSUMER_SCOPES = Object.freeze([EVENTS_SCOPE])
 
 // What kind of client a credential is. Only 'panel' (a person, or a program acting like one) gets the base scopes
 // and may hold device switches. 'producer' (sends notices) and 'consumer:<device>' (receives them on one device)
-// have no scopes yet: their routes come later, and every route that exists now refuses them.
+// have no base scopes: a consumer may hold only CONSUMER_SCOPES (the avatar's event feed), a producer nothing.
 export const CREDENTIAL_KINDS = Object.freeze(['panel', 'producer', 'consumer'])
 const CONSUMER_RE = /^consumer:[a-z][a-z0-9-]{1,20}$/
 
@@ -41,10 +46,15 @@ export function cleanKind(kind) {
   return k === 'panel' || k === 'producer' || CONSUMER_RE.test(k) ? k : null
 }
 
-// Only names on KNOWN_SCOPES survive, each once. For a 'panel', status and ask:read are always there; any other
-// kind gets none of them, whatever the list asks for.
+// Only names on KNOWN_SCOPES survive, each once. For a 'panel', status and ask:read are always there; a consumer
+// keeps only CONSUMER_SCOPES it was given; a producer gets nothing, whatever the list asks for.
 export function cleanScopes(list, kind = 'panel') {
-  if (cleanKind(kind) !== 'panel') return []
+  const k = cleanKind(kind)
+  if (k && k.startsWith('consumer:')) {
+    const want = new Set((Array.isArray(list) ? list : []).map(String))
+    return CONSUMER_SCOPES.filter((s) => want.has(s))
+  }
+  if (k !== 'panel') return []
   const want = new Set([...BASE_SCOPES, ...(Array.isArray(list) ? list : [])].map(String))
   return KNOWN_SCOPES.filter((s) => want.has(s))
 }

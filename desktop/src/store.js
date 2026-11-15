@@ -17,6 +17,14 @@ const DEFAULTS = {
   pointKey: 'ctrl+alt+p',
   startAtLogin: true,
   bridgeAtStart: true,         // open the bridge to this PC (Claude Code's Remote Control) when HELPER starts
+  // The live avatar on the screen (ui/avatar.html). Off until the owner turns it on in the tray.
+  avatarEnabled: false,
+  avatarPos: null,             // {x, y} where it was dragged to; null: the bottom corner of the main screen
+  // Events from HELPER on the cloud (a message went out, a task, an urgent alert): types only, never content.
+  // Off until turned on, and it needs the panel address and the avatar's own credential (avatar-link.ps1).
+  avatarEvents: false,
+  avatarPanelUrl: '',          // e.g. https://naor-helper.duckdns.org
+  avatarCredential: '',        // hpn_… made on the settings site ("credential לאווטאר במחשב")
 }
 
 function init(dataDir) {

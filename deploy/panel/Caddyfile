@@ -35,6 +35,11 @@
 		method POST
 		path /panel/api/execute
 	}
+	# The desktop avatar's content-free event feed (src/panel-events.js). 404 on the server unless PANEL_EVENTS=on.
+	@panel_events {
+		method GET
+		path /panel/api/events
+	}
 	@panel_execute_result {
 		method GET
 		path_regexp ^/panel/api/execute/[A-Za-z0-9_-]{8,80}$
@@ -70,6 +75,9 @@
 		reverse_proxy 127.0.0.1:3214
 	}
 	handle @panel_execute_result {
+		reverse_proxy 127.0.0.1:3214
+	}
+	handle @panel_events {
 		reverse_proxy 127.0.0.1:3214
 	}
 	handle {

@@ -15,6 +15,7 @@
 | `GET` | `/panel/api/catalog` | כן. פעולות המכשיר שה-credential מורשה להן, עם סכמת פרמטרים סגורה ומצב חיבור (חיבור בלבד, לא הוכחת ביצוע) |
 | `POST` | `/panel/api/execute` | כן. `{ "id": "מזהה-ייחודי", "action": "lights:off", "params": { "room": "סלון" } }` → `202 {state:"running"}`. פעולה מהקטלוג בלבד, בלי מודל |
 | `GET` | `/panel/api/execute/<id>` | כן. `running` (202), או `succeeded` / `failed` / `unknown` עם `detail` |
+| `GET` | `/panel/api/events` | Bearer בלבד, עם ההרשאה `events:avatar`, ורק כש-`PANEL_EVENTS=on` (אחרת 404). long poll לאווטאר במחשב: `{id, type, severity, at}` בלבד, בלי שום תוכן. הסמן בכותרת `Last-Event-ID`, לא בכתובת |
 
 הפאנל מאזין על **פורט משלו** (`PANEL_PORT`, ברירת מחדל 3214, על `127.0.0.1`). על הפורט הזה כל נתיב אחר מחזיר 404. אתר ההגדרות, `/dash`, `/face` ו-`/bridge/*` נמצאים על 3210 ולא מוגשים כאן בכלל. כך גם proxy שמעביר יותר מדי לא מגיע לשום דבר מהם.
 

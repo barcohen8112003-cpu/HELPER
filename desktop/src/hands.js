@@ -697,10 +697,16 @@ const actions = {
 /** Steps whose effect is visible and harmless to repeat: only these become learned shortcuts. */
 const REPLAYABLE = new Set(['open', 'focus', 'close', 'place', 'desktop', 'volume', 'media', 'web', 'search', 'play', 'key', 'wait', 'clipboard', 'system', 'workspace', 'browser_tab', 'press', 'tab', 'goto', 'scroll'])
 
+/** Told about each step that ran (the avatar dances when a step started music). Its failure never fails a step. */
+let stepObserver = null
+function onStep(fn) { stepObserver = typeof fn === 'function' ? fn : null }
+
 async function run(step) {
   const fn = actions[step.cmd]
   if (!fn) throw new Error('פעולה לא מוכרת: ' + step.cmd)
-  return await fn(step.args || {})
+  const out = await fn(step.args || {})
+  try { if (stepObserver) stepObserver({ cmd: step.cmd, args: step.args || {} }) } catch { }
+  return out
 }
 
 /** Runs steps in order; returns one line per step ('' for a silent one). A step that fails stops the rest. */
@@ -716,4 +722,4 @@ async function runAll(steps) {
   return lines
 }
 
-module.exports = { actions, run, runAll, setUi, recentOpened, listWindows, findWindow, waitWindow, pickDisplay, REPLAYABLE, strip, siteUrl, splitWindowAndText }
+module.exports = { actions, run, runAll, setUi, onStep, recentOpened, listWindows, findWindow, waitWindow, pickDisplay, REPLAYABLE, strip, siteUrl, splitWindowAndText }
