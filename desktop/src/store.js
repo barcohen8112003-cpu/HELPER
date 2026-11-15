@@ -9,6 +9,7 @@ let dir = null
 const DEFAULTS = {
   helperUrl: 'http://37.60.240.231:3210',
   helperToken: '',
+  brain: '',                   // '' Claude Code on this PC, then the cloud; 'api': LLM_API_KEY only; 'cloud': HELPER on the cloud only
   model: 'haiku',              // haiku: fast; sonnet: for harder work
   micName: 'voicemod',         // part of the microphone's name; empty: Windows' default
   speakAnswers: true,          // a spoken answer to a spoken ask: HELPER's voice from the cloud, Windows' Hebrew voice offline

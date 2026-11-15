@@ -312,6 +312,7 @@ async function pingHelper() {
 
 /** Which brain answers here now, in words. */
 function brainName() {
+  if (/^cloud$/i.test(store.settings().brain || '')) return 'HELPER בענן בלבד'
   const apiOnly = /^api$/i.test(config.get('HELPER_BRAIN') || store.settings().brain || '')
   if (!apiOnly && claudeCommand() && claudeState !== 'signed-out') return 'Claude Code'
   if (config.llmApiKey) return 'מודל דרך המפתח, ' + (config.llmModel || 'ברירת מחדל')

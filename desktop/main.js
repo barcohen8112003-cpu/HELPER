@@ -673,6 +673,21 @@ async function handleAsk(raw, { voice = false } = {}) {
     }
   }
 
+  // 2b. "brain": "cloud" in settings.json (tray: "מוח: HELPER בענן בלבד"): every ask that is not an instant command
+  // goes to HELPER on the cloud, with no Claude Code and no model on this PC. The cloud does PC actions over the
+  // home bridge (home-relay/pc-bridge.mjs).
+  if (/^cloud$/i.test(store.settings().brain || '')) {
+    mark = null
+    clearMarks()
+    try {
+      const h = await brain.askHelper(raw, { voice: voice && store.settings().speakAnswers })
+      if (seq !== askSeq) return
+      return finish(seq, raw, h.reply || 'אין תשובה', 'cloud', started, false, voice, h.audio)
+    } catch (e) {
+      return finish(seq, raw, e.message || 'לא הצלחתי להגיע ל-HELPER בענן', 'cloud', started, true, voice)
+    }
+  }
+
   // 3. The brain. The screen comes along when the ask is about it, or when the user pointed at something.
   const extra = { screens: physicalDisplays().map((d, i) => `${i + 1}: ${d.bounds.width}x${d.bounds.height} ב-(${d.bounds.x},${d.bounds.y})`).join(', ') }
   const fg = win32.foreground()
@@ -988,6 +1003,7 @@ function trayMenu() {
       { label: 'מהיר (Haiku)', type: 'radio', checked: s.model === 'haiku', click: () => { store.saveSettings({ model: 'haiku' }); refreshTray() } },
       { label: 'חכם (Sonnet)', type: 'radio', checked: s.model === 'sonnet', click: () => { store.saveSettings({ model: 'sonnet' }); refreshTray() } },
     ] },
+    { label: 'מוח: HELPER בענן בלבד (בלי Claude Code)', type: 'checkbox', checked: /^cloud$/i.test(s.brain || ''), click: (i) => { store.saveSettings({ brain: i.checked ? 'cloud' : '' }); refreshTray() } },
     { label: 'תשובות בקול של HELPER', type: 'checkbox', checked: s.speakAnswers, click: (i) => { store.saveSettings({ speakAnswers: i.checked }) } },
     { label: 'להפעיל עם Windows', type: 'checkbox', checked: s.startAtLogin, click: (i) => { store.saveSettings({ startAtLogin: i.checked }); applyLogin() } },
     { label: 'לפתוח את הגשר למחשב עם HELPER', type: 'checkbox', checked: s.bridgeAtStart, click: (i) => { store.saveSettings({ bridgeAtStart: i.checked }); if (i.checked) require('./src/bridge').start({ exe: brain.claudeCommand(), cwd: path.join(ROOT, '..'), log }); refreshTray() } },
