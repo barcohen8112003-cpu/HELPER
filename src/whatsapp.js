@@ -1,13 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import './secret-logs.js'
 import pino from 'pino'
 import QRCode from 'qrcode'
-import baileys, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, normalizeMessageContent, jidNormalizedUser, downloadMediaMessage } from '@whiskeysockets/baileys'
+import baileys, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, normalizeMessageContent, jidNormalizedUser, downloadMediaMessage, downloadAndProcessHistorySyncNotification, proto } from '@whiskeysockets/baileys'
 import { DATA_DIR } from './config.js'
 import { state as store, save } from './store.js'
-import { ingestGroupMetadata, syncParticipatingGroups } from './groups.js'
+import { ingestGroupMetadata, syncParticipatingGroups, isSchoolworkGroup } from './groups.js'
+import { readHomeworkMedia, quotedAndCaption } from './schoolwork-media.js'
 import * as inflight from './inflight.js'
 
 const CATCH_UP = 12 * 3600
@@ -107,7 +108,21 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
   async function connect() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
     const { version } = await fetchLatestBaileysVersion().catch(() => ({}))
-    sock = makeWASocket({ auth: state, version, logger, markOnlineOnConnect: false, syncFullHistory: false, getMessage: async (key) => sent.get(key.id) })
+    // Baileys 6.7.24, if shouldSyncHistoryMessage is omitted, ties it to syncFullHistory and then
+    // ignores RECENT and ON_DEMAND history — including school-group homework photos.
+    const HistType = proto.Message?.HistorySyncNotification?.HistorySyncType || {}
+    sock = makeWASocket({
+      auth: state,
+      version,
+      logger,
+      markOnlineOnConnect: false,
+      syncFullHistory: false,
+      shouldSyncHistoryMessage: (msg) => {
+        const t = msg?.syncType
+        return t === HistType.RECENT || t === HistType.ON_DEMAND || t === HistType.PUSH_NAME || t === HistType.INITIAL_BOOTSTRAP || t == null
+      },
+      getMessage: async (key) => sent.get(key.id),
+    })
     sock.ev.on('creds.update', saveCreds)
     let codeAsked = false
     askCode = async (raw) => {
@@ -139,7 +154,118 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
     }
     sock.ev.on('contacts.upsert', (list) => learn(list))
     sock.ev.on('contacts.update', (list) => learn(list))
-    sock.ev.on('messaging-history.set', ({ contacts }) => learn(contacts))
+    const textOfContent = (content) =>
+      content?.conversation || content?.extendedTextMessage?.text || content?.imageMessage?.caption || content?.documentMessage?.caption || content?.videoMessage?.caption || content?.pollCreationMessage?.name || ''
+    const groupTextOf = (msg) => quotedAndCaption(normalizeMessageContent(msg.message), textOfContent)
+    const schoolMediaOf = (msg) => {
+      const content = normalizeMessageContent(msg.message)
+      if (!content || content.viewOnceMessage || content.viewOnceMessageV2) return null
+      const part = content.imageMessage || content.documentMessage
+      if (!part) return null
+      const mime = part.mimetype || ''
+      const name = part.fileName || ''
+      if (content.documentMessage && !/pdf|image\//i.test(mime) && !/\.(pdf|jpe?g|png|webp|gif)$/i.test(name)) return null
+      return { mime, name }
+    }
+    const sentAtOf = (msg) => {
+      const raw = msg.messageTimestamp
+      let n = Number(raw?.toNumber?.() ?? raw)
+      if (n > 1e12) n = Math.floor(n / 1000)
+      return n
+    }
+    // Regular upserts only take messages from this connection onward (`since`). A schoolwork lookback also
+    // captures older group messages, for two weeks, into the local groups buffer — nothing is sent or marked read.
+    const takeGroupMessage = (msg, { ignoreSince = false } = {}) => {
+      const jid = msg.key?.remoteJid
+      if (!jid?.endsWith('@g.us') || !msg.message || !groupHooks?.on()) return false
+      const text = groupTextOf(msg)
+      const sentAt = sentAtOf(msg)
+      const school = Boolean(groupHooks?.isSchoolwork?.(jid) || isSchoolworkGroup(jid))
+      const media = school ? schoolMediaOf(msg) : null
+      if ((!text && !media) || (text && text.startsWith(BOT_MARK))) return false
+      const sentAtSec = sentAt > 1e12 ? Math.floor(sentAt / 1000) : sentAt
+      const twoWeeksAgo = Math.floor((Date.now() - 14 * 86400000) / 1000)
+      // In a school group, homework photos from the last two weeks are taken even if WhatsApp
+      // hands them over as a late upsert after we connected (not only on a history-sync event).
+      const allowOld = ignoreSince || (school && sentAtSec >= twoWeeksAgo)
+      if (!allowOld && sentAtSec < since) return false
+      if (sentAtSec < twoWeeksAgo) return false
+      if (!groupHooks.knows(jid)) sock.groupMetadata(jid).then((m) => groupHooks.setGroupName(jid, m.subject)).catch(() => {})
+      const payload = { group: jid, id: msg.key.id, sender: msg.key.participant || msg.participant || '', senderName: msg.pushName || '', at: sentAt, fromMe: Boolean(msg.key.fromMe) }
+      try {
+        if (text) groupHooks.capture({ ...payload, text })
+      } catch (e) {
+        console.log(`[groups] ${e.message}`)
+        return false
+      }
+      if (media) {
+        const mid = msg.key.id
+        if (!takeGroupMessage._mediaSeen) takeGroupMessage._mediaSeen = new Set()
+        if (takeGroupMessage._mediaSeen.has(mid)) return true
+        takeGroupMessage._mediaSeen.add(mid)
+        enqueueSchoolMedia(async () => {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage })
+            const read = await readHomeworkMedia({ buffer, mime: media.mime, name: media.name, caption: text })
+            const combined = [text, read].filter(Boolean).join('\n')
+            if (combined) groupHooks.capture({ ...payload, text: combined })
+            console.log(`[schoolwork-media] photo ${read ? 'read' : 'empty'} ${(read || '').length} chars`)
+          } catch (e) {
+            console.log(`[schoolwork-media] download: ${e.message}`)
+          }
+        })
+      }
+      return true
+    }
+    const protocolOf = (msg) => {
+      const content = normalizeMessageContent(msg?.message)
+      return content?.protocolMessage || msg?.message?.protocolMessage || null
+    }
+    const peerSeen = new Set()
+    const absorbPeer = async (msg) => {
+      const p = protocolOf(msg)
+      if (!p) return
+      const id = msg.key?.id
+      if (id) {
+        if (peerSeen.has(id)) return
+        peerSeen.add(id)
+      }
+      const kind = p.historySyncNotification
+        ? 'historySync'
+        : (p.peerDataOperationRequestResponseMessage ? 'pdoResponse' : `type:${p.type}`)
+      console.log(`[whatsapp] peer ${kind}`)
+      if (p.historySyncNotification) {
+        try {
+          const data = await downloadAndProcessHistorySyncNotification(p.historySyncNotification, {})
+          const msgs = data.messages || []
+          let taken = 0
+          for (const m of msgs) {
+            if (takeGroupMessage(m, { ignoreSince: true })) taken++
+          }
+          console.log(`[whatsapp] history blob messages=${msgs.length} taken=${taken}`)
+        } catch (e) {
+          console.log(`[whatsapp] history download: ${e.message}`)
+        }
+      }
+      const results = p.peerDataOperationRequestResponseMessage?.peerDataOperationResult || []
+      for (const result of results) {
+        const present = Object.keys(result || {}).filter((k) => result[k] != null && k !== 'toJSON')
+        if (present.length) console.log(`[whatsapp] pdo fields ${present.join(',')}`)
+        const bytes = result.placeholderMessageResendResponse?.webMessageInfoBytes
+        if (!bytes) continue
+        try {
+          const web = proto.WebMessageInfo.decode(bytes)
+          takeGroupMessage(web, { ignoreSince: true })
+        } catch (e) {
+          console.log(`[whatsapp] pdo decode: ${e.message}`)
+        }
+      }
+    }
+
+    sock.ev.on('messaging-history.set', ({ contacts, messages }) => {
+      learn(contacts)
+      for (const msg of messages || []) takeGroupMessage(msg, { ignoreSince: true })
+    })
 
     // Names of every group he is in, not only groups that happen to speak after we connect.
     // Old messages are not fetched. A failure here must not take the socket down.
@@ -227,21 +353,15 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
 
     sock.ev.on('messages.upsert', ({ messages }) => {
       for (const msg of messages) {
+        const protoMsg = protocolOf(msg)
+        if (protoMsg?.historySyncNotification || protoMsg?.peerDataOperationRequestResponseMessage) {
+          enqueueSchoolMedia(() => absorbPeer(msg))
+        }
         const jid = msg.key?.remoteJid
         // A group message never reaches the assistant's chat. It is handed to the groups reader, text only, when that
         // is on; nothing is sent back, reacted to or marked as read.
         if (jid?.endsWith('@g.us') && msg.message && groupHooks?.on()) {
-          const content = normalizeMessageContent(msg.message)
-          const text = content?.conversation || content?.extendedTextMessage?.text || content?.imageMessage?.caption || content?.documentMessage?.caption || content?.pollCreationMessage?.name || ''
-          const sentAt = Number(msg.messageTimestamp)
-          if (text && !text.startsWith(BOT_MARK) && sentAt >= since) {
-            if (!groupHooks.knows(jid)) sock.groupMetadata(jid).then((m) => groupHooks.setGroupName(jid, m.subject)).catch(() => {})
-            try {
-              groupHooks.capture({ group: jid, id: msg.key.id, sender: msg.key.participant || msg.participant || '', senderName: msg.pushName || '', at: sentAt, text, fromMe: Boolean(msg.key.fromMe) })
-            } catch (e) {
-              console.log(`[groups] ${e.message}`)
-            }
-          }
+          takeGroupMessage(msg)
           continue
         }
         if (!jid || !msg.message || jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) continue
@@ -299,6 +419,13 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
       }
     })
   }
+
+  let schoolMediaTail = Promise.resolve()
+  const enqueueSchoolMedia = (fn) => {
+    schoolMediaTail = schoolMediaTail.then(fn).catch((e) => console.log(`[schoolwork-media] ${e.message}`))
+    return schoolMediaTail
+  }
+  const waitSchoolMedia = (ms = 120000) => Promise.race([schoolMediaTail, new Promise((r) => setTimeout(r, ms))])
 
   await connect()
 
@@ -362,6 +489,91 @@ export async function startWhatsApp(onMessage, onReady = () => {}, groupHooks = 
     connectedSince: () => (ready ? openedAt : 0),
     typing(jid) {
       if (ready) sock.sendPresenceUpdate('composing', target(jid)).catch(() => {})
+    },
+    // On-demand group history for the homework lookback. The phone must be online. Times out and returns
+    // what arrived; never throws into the caller. Messages land through messaging-history.set.
+    async fetchGroupHistory(jid, { count = 300, oldest, timeoutMs = 45000, resend = [] } = {}) {
+      if (!ready || !sock) return { n: 0, timedOut: false, reason: 'not-ready', pulled: false }
+      if (!oldest?.id) return { n: 0, timedOut: false, reason: 'no-cursor', pulled: false }
+      let n = 0
+      let lastHit = 0
+      const take = (messages) => {
+        for (const msg of messages || []) {
+          if (msg.key?.remoteJid !== jid) continue
+          n++
+          lastHit = Date.now()
+          takeGroupMessage(msg, { ignoreSince: true })
+        }
+      }
+      const onSet = ({ messages }) => take(messages)
+      const onUpsert = ({ messages }) => take(messages)
+      sock.ev.on('messaging-history.set', onSet)
+      sock.ev.on('messages.upsert', onUpsert)
+      const delay = (ms) => new Promise((r) => setTimeout(r, ms))
+      try {
+        const key = { remoteJid: jid, id: oldest.id, fromMe: Boolean(oldest.fromMe) }
+        const ts = Number(oldest.at) || 0
+        const tsMs = ts > 1e12 ? ts : ts * 1000
+        // A cursor just after the newest known message, so that message (the Tuesday photo) is included too.
+        const askTs = tsMs + 1000
+        // Match the hashed sender we already stored, so a group resend includes the participant. The raw id stays in memory only.
+        const hashOf = (x) => createHash('sha256').update(String(x || '')).digest('hex').slice(0, 12)
+        const byHash = new Map()
+        try {
+          const meta = await sock.groupMetadata(jid)
+          for (const p of meta.participants || []) {
+            for (const id of [p.id, p.lid, p.jid, p.phoneNumber]) {
+              if (id) byHash.set(hashOf(id), id)
+            }
+          }
+        } catch (e) {
+          console.log(`[whatsapp] metadata: ${e.message}`)
+        }
+        const accountLid = sock.authState?.creds?.me?.lid || ''
+        if (typeof sock.sendPeerDataOperationMessage === 'function' && proto?.Message?.PeerDataOperationRequestType?.HISTORY_SYNC_ON_DEMAND) {
+          await sock.sendPeerDataOperationMessage({
+            historySyncOnDemandRequest: {
+              chatJid: jid,
+              oldestMsgFromMe: Boolean(oldest.fromMe),
+              oldestMsgId: oldest.id,
+              oldestMsgTimestampMs: askTs,
+              onDemandMsgCount: count,
+              ...(accountLid ? { accountLid } : {}),
+            },
+            peerDataOperationRequestType: proto.Message.PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND,
+          })
+          console.log(`[whatsapp] history asked lid=${accountLid ? 'yes' : 'no'} resend=${(resend || []).length}`)
+        } else {
+          await sock.fetchMessageHistory(count, key, askTs)
+          console.log(`[whatsapp] history asked resend=${(resend || []).length}`)
+        }
+        for (const m of resend || []) {
+          if (!m?.id) continue
+          const rk = { remoteJid: jid, id: m.id, fromMe: Boolean(m.fromMe) }
+          if (m.s && byHash.has(m.s)) rk.participant = byHash.get(m.s)
+          try {
+            await sock.requestPlaceholderResend(rk)
+            console.log('[whatsapp] resend asked')
+          } catch (e) {
+            console.log(`[whatsapp] resend: ${e.message}`)
+          }
+        }
+        const start = Date.now()
+        while (Date.now() - start < timeoutMs) {
+          await delay(1000)
+          if (n > 0 && lastHit && Date.now() - lastHit >= 8000) break
+        }
+        const timedOut = n === 0 && Date.now() - start >= timeoutMs - 50
+        await waitSchoolMedia(120000)
+        console.log(`[whatsapp] fetchGroupHistory n=${n} timedOut=${timedOut} waited=${Date.now() - start}ms`)
+        return { n, timedOut, pulled: n > 0 }
+      } catch (e) {
+        console.log(`[whatsapp] fetchGroupHistory: ${e.message}`)
+        return { n, timedOut: false, reason: e.message, pulled: false }
+      } finally {
+        try { sock.ev.off('messaging-history.set', onSet) } catch {}
+        try { sock.ev.off('messages.upsert', onUpsert) } catch {}
+      }
     },
   }
 }

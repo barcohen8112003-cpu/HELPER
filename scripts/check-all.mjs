@@ -68,6 +68,8 @@ const TESTS = [
   'src/scrapling-selftest.js',
   'src/groups-selftest.js',
   'src/schoolwork-selftest.js',
+  'src/schoolwork-media-selftest.js',
+  'src/schoolwork-sheet-selftest.js',
   'src/wa-link-selftest.js',
   'src/release-notes-selftest.js',
   'src/bird-selftest.js',

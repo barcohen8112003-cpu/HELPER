@@ -300,6 +300,18 @@ export function pickTargets(parsed, deviceQuery, { strict = false } = {}) {
   const isAll = q.includes('הכל') || q === 'all'
 
   if (!strict && (isAllLights || isAll)) return parsed.filter((p) => (isAll ? true : p.type === 'אורות'))
+  // The projector and the TV are not Google Home tiles. A query like "מקרן בסלון" used to
+  // match the Living Room and Lounge *speakers*, because it contains "סלון".
+  if (/מקרן|טלוויז|projector|(?:^|\s)tv(?:$|\s)/.test(q)) return []
+
+  const wantSpeaker = /רמקול|מוזיקה|speaker|spotify/.test(q)
+  const inLiving = (p) => {
+    const n = p.name.toLowerCase()
+    return n.includes('living') || n.includes('lounge')
+  }
+  // Room words match lights in that room, never a speaker, unless the query is about speakers.
+  const roomOk = (p) => wantSpeaker || p.type === 'אורות'
+
   // Check if user specifically requested a named sub-device (e.g. "mine light", "led", "floor lamp")
   const specificMatches = parsed.filter((p) => {
     const nNorm = normalize(p.name)
@@ -307,8 +319,8 @@ export function pickTargets(parsed, deviceQuery, { strict = false } = {}) {
     if (q.includes('mine') && p.name.toLowerCase().includes('mine')) return true
     if (q.includes('led') || q.includes('לד')) return p.name.toLowerCase().includes('led')
     if (q.includes('floor') || q.includes('מנורת רצפה') || (q.includes('מנורה') && !q.includes('אור'))) return p.name.toLowerCase().includes('floor')
-    if (q.includes('סלון') || q.includes('living')) return p.name.toLowerCase().includes('living') || p.name.toLowerCase().includes('lounge')
-    if (q.includes('לאונג') || q.includes('lounge')) return p.name.toLowerCase().includes('lounge')
+    if (q.includes('סלון') || q.includes('living')) return roomOk(p) && inLiving(p)
+    if (q.includes('לאונג') || q.includes('lounge')) return roomOk(p) && p.name.toLowerCase().includes('lounge')
     if (strict && nNorm.length < 2) return false
     return nNorm.includes(qNorm) || (qNorm.length >= 3 && qNorm.includes(nNorm))
   })

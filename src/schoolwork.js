@@ -20,6 +20,8 @@ import { createHash } from 'node:crypto'
 import { DATA_DIR, config } from './config.js'
 import { state } from './store.js'
 import * as groups from './groups.js'
+import * as hwSheet from './schoolwork-sheet.js'
+import * as lookback from './schoolwork-lookback.js'
 
 const FILE = () => path.join(DATA_DIR, 'schoolwork.json')
 const MAX_CLOSED = 300 // closed items kept for the record; open items are never dropped for room
@@ -42,7 +44,155 @@ export const settings = () => {
     groups: String(process.env.SCHOOLWORK_GROUPS || '').split(',').map((s) => s.trim()).filter(Boolean),
   }
 }
+
 export const enabled = () => settings().on
+
+let lookbackFetch = null
+export function setLookbackFetch(fn) {
+  lookbackFetch = fn
+}
+
+function sheetHelpers() {
+  return { isOpen, pastDue, dueLabel, wall, where, dayNum }
+}
+
+async function syncSheet(nowMs = Date.now()) {
+  try {
+    return await hwSheet.syncHomeworkSheet({ load, persist, helpers: sheetHelpers() }, nowMs)
+  } catch (e) {
+    console.log(`[schoolwork-sheet] ${e.message}`)
+    return { error: e.message }
+  }
+}
+
+function scheduleSheetSync(nowMs = Date.now()) {
+  const t = setTimeout(() => {
+    syncSheet(nowMs).catch((e) => console.log(`[schoolwork-sheet] ${e.message}`))
+  }, 0)
+  t.unref?.()
+}
+
+// Two-week scan of the watched school groups: pull WhatsApp history if we can, ingest without a flood of
+// one-by-one alerts, write the Google Sheet, and send one message with the link.
+export async function runLookback(notify, nowMs = Date.now()) {
+  const s = load()
+  if (s.lookback?.done) return s.lookback
+  s.lookback = { ...(s.lookback || {}), status: 'pending', at: nowMs }
+  persist()
+  const pulled = await lookback.pullHistory(
+    {
+      fetchHistory: lookbackFetch,
+      extract: (t) => groups.extract(t),
+      holdPurge: groups.setHoldPurge,
+    },
+    nowMs,
+  )
+  const items = lookback.collectedHomework(nowMs)
+  ingest('groups', lookback.entriesFromItems(items), nowMs)
+  const open = load().items.filter((i) => isOpen(i) && i.source === 'groups')
+  const sheet = await syncSheet(nowMs)
+  const n = open.length
+  const lines = [
+    n
+      ? `בדקתי את הקבוצה עד שבועיים אחורה. מצאתי ${n} שיעורי בית פתוחים ורשמתי אותם בגיליון.`
+      : 'בדקתי את הקבוצה עד שבועיים אחורה, ולא מצאתי שיעורי בית פתוחים במה שהיה שמור אצלי.',
+  ]
+  if (n) {
+    lines.push(
+      ...open
+        .slice()
+        .sort((a, b) => (a.due?.day || '9999').localeCompare(b.due?.day || '9999'))
+        .map((i) => `• ${itemLine(i, nowMs)}`),
+    )
+  }
+  if (sheet?.link) {
+    lines.push('', `הגיליון: ${sheet.link}`, 'כשסיימת תגיד «עשיתי» ואסמן V. כל ערב ב-18:00 אזכיר מה פתוח, למתי, ומה דחוף יותר.')
+  } else if (sheet?.error) {
+    lines.push('', 'את הגיליון לא הצלחתי לפתוח עכשיו; הרשימה אצלי נשמרה, ואנסה שוב מאוחר יותר.')
+  }
+  if (notify) {
+    try {
+      await notify(lines.join('\n'), true, `schoolwork-lookback:${wall(nowMs).day}`, 'schoolwork')
+    } catch (e) {
+      console.log(`[schoolwork] lookback notice: ${e.message}`)
+    }
+  }
+  const cur = load()
+  if (sheet?.link) cur.sheet = { ...(cur.sheet || {}), announced: true, link: sheet.link, ...(sheet.id ? { id: sheet.id } : {}) }
+  cur.lookback = { done: true, at: nowMs, found: n, pulled: Boolean(pulled?.pulled) }
+  persist()
+  return cur.lookback
+}
+
+// One-shot: re-read the group (including photos) and write book, pages, questions and sections as they appear.
+export async function refreshHomeworkDetails(notify, nowMs = Date.now()) {
+  const s = load()
+  if (s.lookback?.details) return s.lookback
+  if (s.lookback?.detailsStatus === 'pending' && nowMs - (s.lookback.detailsAt || 0) < 4 * 60 * 1000) {
+    return s.lookback
+  }
+  if ((s.lookback?.detailsTries || 0) >= 5 && nowMs - (s.lookback.detailsAt || 0) < 15 * 60 * 1000) {
+    return s.lookback
+  }
+  const tries = (s.lookback?.detailsTries || 0) + 1
+  s.lookback = { ...(s.lookback || {}), detailsStatus: 'pending', detailsAt: nowMs, detailsTries: tries }
+  persist()
+  if (!lookbackFetch) {
+    console.log('[schoolwork] details: WhatsApp is not ready yet, will retry')
+    const cur = load()
+    cur.lookback = { ...(cur.lookback || {}), detailsStatus: 'retry' }
+    persist()
+    return cur.lookback
+  }
+  const pulled = await lookback.pullHistory(
+    {
+      fetchHistory: lookbackFetch,
+      extract: (t) => groups.extract(t),
+      holdPurge: groups.setHoldPurge,
+      fromNewest: true,
+      timeoutMs: 120000,
+    },
+    nowMs,
+  )
+  ingest('groups', lookback.entriesFromItems(lookback.collectedHomework(nowMs)), nowMs)
+  const open = load()
+    .items.filter((i) => isOpen(i) && i.source === 'groups')
+    .slice()
+    .sort((a, b) => (a.due?.day || '9999').localeCompare(b.due?.day || '9999'))
+  const DETAIL = /עמוד(?:ים)?|עמ[׳']\.?|שאלה|שאלות|סעיף|סעיפים|ספר|חוברת|תרגיל/
+  const detailed = open.filter((i) => DETAIL.test(i.title || ''))
+  const lacking = open.filter((i) => !DETAIL.test(i.title || ''))
+  const readyPull = Boolean(pulled?.pulled)
+  // If WhatsApp was not connected yet, or history did not come in, try again next round (up to 5 times).
+  if (lacking.length && !readyPull) {
+    console.log(`[schoolwork] details retry ${tries} (pulled=${readyPull})`)
+    const cur = load()
+    cur.lookback = { ...(cur.lookback || {}), details: false, detailsStatus: 'retry', detailsTries: tries, detailsAt: nowMs }
+    persist()
+    return cur.lookback
+  }
+  const sheet = await syncSheet(nowMs)
+  // Only write to him when we actually have the details as written, so a failed pull is not a second "couldn't read" message.
+  if (detailed.length && notify) {
+    const lines = [
+      'עדכנתי את שיעורי הבית עם הפירוט כמו שרשום (ספר, עמודים, שאלות, סעיפים):',
+      ...open.map((i) => `• ${itemLine(i, nowMs)}`),
+    ]
+    if (sheet?.link) lines.push('', `הגיליון: ${sheet.link}`)
+    try {
+      await notify(lines.join('\n'), true, `schoolwork-details:${wall(nowMs).day}`, 'schoolwork')
+    } catch (e) {
+      console.log(`[schoolwork] details notice: ${e.message}`)
+    }
+  } else {
+    console.log(`[schoolwork] details finished tries=${tries} detailed=${detailed.length} pulled=${readyPull}`)
+  }
+  const cur = load()
+  cur.lookback = { ...(cur.lookback || {}), details: true, detailsAt: nowMs, detailsFound: detailed.length, pulled: readyPull, detailsTries: tries }
+  persist()
+  return cur.lookback
+}
+
 
 // ── time, always in the school's zone, so DST and a server clock in UTC change nothing ────────────────
 const parts = (ms, tz) =>
@@ -78,6 +228,8 @@ const empty = () => ({
   items: [], // see addItem
   sources: {}, // { [source]: { lastOk, lastError, lastErrorAt, baselined, note } }
   lastDaily: '', // the school-zone day the last daily summary went out
+  sheet: null, // { id, link, announced }: the Google Sheet of open homework
+  lookback: null, // { done, at, found }: two-week group scan
   pending: [], // [{ key, text, ids, at }]: alerts written down and not yet accepted by the outbox (see accepted())
   pendingDaily: null, // { day, key, at }: today's summary, until the outbox accepted it
   nextNum: 1,
@@ -152,7 +304,7 @@ function addItem(s, source, e, nowMs) {
     n: s.nextNum++,
     source,
     link: /^https:\/\//.test(e.link || '') ? e.link : '',
-    title: clip(e.title, 160),
+    title: clip(e.detail || e.title, 400),
     course: clip(e.course, 60),
     due: e.due?.day ? { day: e.due.day, time: e.due.time || null } : null,
     status: e.submitted === true ? 'submitted' : 'open',
@@ -227,6 +379,13 @@ export function ingest(source, entries, nowMs = Date.now()) {
     let item = s.items.find((i) => i.id === id) || s.items.find((i) => i.also.some((a) => a.source === source && a.id === e.sourceId))
     if (item) {
       item.lastSeen = nowMs
+      const nextTitle = clip(e.detail || e.title, 400)
+      const richer = (a, b) => a && a.length > (b || '').length && /עמוד(?:ים)?|עמ[׳']\.?|שאלה|שאלות|סעיף|סעיפים|ספר|חוברת|תרגיל/.test(a)
+      // WhatsApp details belong on a groups item; a Classroom or Webtop title stays the source's own wording.
+      if (richer(nextTitle, item.title) && (item.source === 'groups' || source === item.source)) {
+        item.title = nextTitle
+        updated.push({ item, what: 'title' })
+      }
       // A changed due date from the source that owns the item is applied and said; from a copy it is only noted.
       const sameDue = (item.due?.day || '') === (e.due?.day || '') && (item.due?.time || '') === (e.due?.time || '')
       if (!sameDue && e.due?.day && item.source === source) {
@@ -242,6 +401,13 @@ export function ingest(source, entries, nowMs = Date.now()) {
     if (copy) {
       copy.also.push({ source, id: e.sourceId, ...(e.link && /^https:\/\//.test(e.link) && { link: e.link }) })
       copy.lastSeen = nowMs
+      const nextTitle = clip(e.detail || e.title, 400)
+      if (
+        nextTitle &&
+        nextTitle.length > (copy.title || '').length &&
+        /עמוד(?:ים)?|עמ[׳']\.?|שאלה|שאלות|סעיף|סעיפים|ספר|חוברת|תרגיל/.test(nextTitle) &&
+        copy.source === 'groups'
+      ) copy.title = nextTitle
       if (!copy.due && e.due?.day) copy.due = { day: e.due.day, time: e.due.time || null }
       if (RANK[e.confidence] > RANK[copy.confidence]) copy.confidence = e.confidence
       if (!copy.link && /^https:\/\//.test(e.link || '')) copy.link = e.link
@@ -252,7 +418,9 @@ export function ingest(source, entries, nowMs = Date.now()) {
     }
     const added = addItem(s, source, e, nowMs)
     // Already turned in when first seen, or seen on the very first read: remembered, not announced.
-    if (first || added.status !== 'open') added.alerted = true
+    const receivedAt = Number(e.receivedAt || (String(e.sourceId || '').split(':').pop()) || 0)
+    const historical = source === 'groups' && receivedAt > 1e12 && nowMs - receivedAt > 2 * 3600000
+    if (first || added.status !== 'open' || historical) added.alerted = true
     else fresh.push(added)
   }
   src.baselined = true
@@ -260,6 +428,7 @@ export function ingest(source, entries, nowMs = Date.now()) {
   src.lastError = ''
   capClosed(s)
   persist()
+  if (fresh.length || updated.length) scheduleSheetSync(nowMs)
   return { fresh, updated }
 }
 
@@ -301,7 +470,7 @@ const digest = (parts) => createHash('sha256').update(parts.join('|')).digest('h
 async function announce(notify, fresh, updated, nowMs) {
   const s = load()
   const lines = []
-  if (fresh.length) lines.push('📚 *מטלה חדשה:*', ...fresh.map((i) => `• ${itemLine(i, nowMs)}${i.link ? `\n  ${i.link}` : ''}`))
+  if (fresh.length) lines.push('📚 יש לך שיעורי בית:', ...fresh.map((i) => `• ${itemLine(i, nowMs)}${i.link ? `\n  ${i.link}` : ''}`))
   const changes = updated.filter((u) => u.what === 'due' || u.item.reported)
   if (changes.length) {
     if (lines.length) lines.push('')
@@ -458,11 +627,12 @@ export async function fromGroups(items, notify, nowMs = Date.now()) {
   for (const i of items || []) {
     const name = g[i.g]?.name || ''
     if (!name || g[i.g]?.muted || !allowedGroup(name)) continue
-    const base = { sourceId: `${i.id}:${i.at}`, title: i.title, course: name, due: i.date ? { day: i.date, time: i.time || null } : null }
+    const base = { sourceId: `${i.id}:${i.at}`, title: i.shortTitle || i.title, detail: i.title, course: name, due: i.date ? { day: i.date, time: i.time || null } : null, receivedAt: i.at }
     if (i.type === 'homework') entries.push({ ...base, confidence: i.date ? 'medium' : 'low' })
     else if ((i.type === 'cancel' || i.type === 'change') && HOMEWORK_WORDS.test(i.title)) entries.push({ ...base, kind: i.type })
   }
   // The groups are read once a round whether or not anything was found; freshness comes from groups.json.
+  // Items older than two hours are marked historical in ingest and are not announced one-by-one.
   const s = load()
   ;(s.sources.groups ??= {}).baselined = true
   const out = ingest('groups', entries, nowMs)
@@ -555,7 +725,8 @@ export async function summaryText(nowMs = Date.now(), { daily = false, limit = d
   }
   lines.push('', '*מה נבדק:*', ...cov.filter((c) => c.ok).map((c) => `✓ ${c.text}`))
   if (gaps.length) lines.push(...gaps.map((c) => `✗ ${c.text}`))
-  if (open.length) lines.push('', 'סיימת משהו? תגיד לי "סיימתי את 3" ואסמן אצלי. אני לא מסמן כלום ב-Classroom או ב-Webtop.')
+  if (daily && open.length) lines.splice(2, 0, 'מה שדחוף יותר קודם.')
+  if (open.length) lines.push('', 'סיימת משהו? תגיד «עשיתי» או "סיימתי את 3" ואסמן אצלי ובגיליון ב-V. אני לא מסמן כלום ב-Classroom או ב-Webtop.')
   return lines.join('\n')
 }
 
@@ -600,6 +771,7 @@ async function sendDaily(notify, day, nowMs) {
   s.lastDaily = day
   s.pendingDaily = null
   persist()
+  scheduleSheetSync(nowMs)
   return true
 }
 
@@ -607,6 +779,26 @@ async function sendDaily(notify, day, nowMs) {
 // read that was due this round is already in.
 export async function schoolworkJob(notify, _runTask, _monitoring, nowMs = Date.now()) {
   if (!enabled() || !state.owner) return
+  if (!load().lookback?.done) {
+    await runLookback(notify, nowMs).catch((e) => console.log(`[schoolwork] lookback: ${e.message}`))
+  }
+  if (load().lookback?.done && !load().lookback?.details) {
+    await refreshHomeworkDetails(notify, nowMs).catch((e) => console.log(`[schoolwork] details: ${e.message}`))
+  }
+  if (!load().sheet?.link) {
+    const sheet = await syncSheet(nowMs)
+    if (sheet?.link && notify) {
+      try {
+        await hwSheet.announceSheetOnce(
+          notify,
+          { load, persist, helpers: sheetHelpers() },
+          `פתחתי את גיליון שיעורי הבית: ${sheet.link}\nכשסיימת תגיד «עשיתי» ואסמן V.`,
+        )
+      } catch (e) {
+        console.log(`[schoolwork-sheet] announce: ${e.message}`)
+      }
+    }
+  }
   await flushPending(notify)
   prune(nowMs)
   const s = load()
@@ -647,13 +839,40 @@ export function markDone(nums, nowMs = Date.now()) {
     note(i, 'done', 'הוא אמר שסיים', nowMs)
   }
   persist()
+  if (hit.length) scheduleSheetSync(nowMs)
   return hit.length ? `סימנתי אצלי כגמור: ${hit.map((i) => i.title).join(', ')}. ב-Classroom וב-Webtop לא שיניתי כלום.` : 'לא מצאתי מטלה פתוחה במספרים האלה.'
+}
+
+// "עשיתי" / "סיימתי" with or without a number: one matching open item is marked, otherwise he is asked which.
+export function markSaidDone(said, nowMs = Date.now()) {
+  const open = load().items.filter(isOpen)
+  if (!open.length) return 'אין לי מטלה פתוחה לסמן.'
+  const text = String(said || '').trim()
+  const numsFound = [...text.matchAll(/\b(\d+)\b/g)].map((m) => Number(m[1])).filter((n) => open.some((i) => i.n === n))
+  if (numsFound.length) return markDone(numsFound, nowMs)
+  const fold = (s) => String(s || '').toLowerCase().normalize('NFKC').replace(/['׳״"`]/g, '')
+  const cleaned = fold(text).replace(/עשיתי|סיימתי|סימנתי|גמרתי|עשינו|כבר|בבקשה|שיעורי|הבית|ש"ב|ש״ב|המטלה|מטלה|את|אתם/g, ' ')
+  const words = cleaned.split(/\s+/).filter((w) => w.length >= 2 && !STOP.has(w))
+  let matches = open
+  if (words.length) {
+    matches = open.filter((i) => {
+      const hay = fold(`${i.title} ${i.course} ${where(i)}`)
+      return words.some((w) => hay.includes(w))
+    })
+  }
+  if (matches.length === 1) return markDone([matches[0].n], nowMs)
+  if (!words.length && open.length === 1) return markDone([open[0].n], nowMs)
+  const list = (arr) => arr.map((i) => itemLine(i, nowMs)).join('\n')
+  if (!words.length) return `יש כמה מטלות פתוחות. תגיד איזו, או את המספר:\n${list(open)}`
+  if (!matches.length) return `לא מצאתי מטלה פתוחה שמתאימה. מה שפתוח:\n${list(open)}`
+  return `כמה מטלות מתאימות. איזו מהן?\n${list(matches)}`
 }
 export function reopen(nums, nowMs = Date.now()) {
   const s = load()
   const hit = s.items.filter((i) => nums.includes(i.n) && i.status === 'done')
   for (const i of hit) (i.status = 'open'), (i.closedAt = 0), note(i, 'reopened', 'הוא אמר שעוד לא סיים', nowMs)
   persist()
+  if (hit.length) scheduleSheetSync(nowMs)
   return hit.length ? `החזרתי לרשימה: ${hit.map((i) => i.title).join(', ')}.` : 'לא מצאתי מטלה שסימנתי כגמורה במספרים האלה.'
 }
 
@@ -664,6 +883,7 @@ export async function statusText(nowMs = Date.now()) {
     `מעקב שיעורי בית: ${st.on ? 'פעיל' : 'כבוי (SCHOOLWORK=on מפעיל, אחרי אישור)'}`,
     `סיכום יומי: ${st.dailyTime ? `${st.dailyTime} (${st.tz})` : 'כבוי'}`,
     `קבוצות בית ספר: ${st.groups.length ? st.groups.join(', ') : 'לא נבחרו'}`,
+    load().sheet?.link ? `גיליון: ${load().sheet.link}` : 'גיליון: עדיין לא נפתח',
     '',
     ...cov.map((c) => `${c.ok ? '✓' : '✗'} ${c.text}`),
     '',

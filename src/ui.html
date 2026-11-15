@@ -256,6 +256,10 @@ function render(S) {
       ['LLM_BACKUP_BASE_URL', 'ספק גיבוי: כתובת', { hint: 'נכנס לפעולה רק כשהמכסה של הספק הראשי נגמרת. Gemini: https://generativelanguage.googleapis.com/v1beta/openai' }],
       ['LLM_BACKUP_API_KEY', 'ספק גיבוי: מפתח', { secret: true }],
       ['LLM_BACKUP_MODEL', 'ספק גיבוי: מודל'],
+      ['LLM_PRIMARY_BASE_URL', 'ספק מועדף לשיחה: כתובת', { hint: 'רק לתורות שיחה. כשל נופל ל-LLM_MODEL. לדוגמה Coarena Opus.' }],
+      ['LLM_PRIMARY_API_KEY', 'ספק מועדף לשיחה: מפתח', { secret: true }],
+      ['LLM_PRIMARY_MODEL', 'ספק מועדף לשיחה: מודל'],
+      ['LLM_PRIMARY_LIVE', 'ספק מועדף גם בשיחה חיה', { options: [['', 'כן'], ['false', 'לא (שיחה חיה נשארת על LLM_MODEL)']], hint: 'false = שיחות טלפון חיות על LLM_MODEL, לתשובה מהירה יותר.' }],
       ['LLM_LIGHT', 'מצב קל', { options: [['false', 'כבוי'], ['true', 'פעיל (לחבילות חינמיות עם מכסה קטנה)']] }],
     ])),
     connector('דיבור', 'ברירת מחדל: Microsoft Edge על השרת, בלי מפתח. עברית he-IL-HilaNeural או he-IL-AvriNeural. שפה אחרת נבחרת לבד.', S.voice.speak, form(S, [

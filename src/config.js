@@ -85,6 +85,9 @@ const build = () => ({
     fallbackModels: env('LLM_FALLBACK_MODEL').split(',').map((s) => s.trim()).filter(Boolean),
     // A second provider, used only when every model of the first is out of quota or failing.
     backup: { baseUrl: env('LLM_BACKUP_BASE_URL').replace(/\/+$/, ''), apiKey: env('LLM_BACKUP_API_KEY'), model: env('LLM_BACKUP_MODEL') },
+    // A preferred provider for conversation turns only (e.g. Coarena Opus). Any failure there falls back to LLM_MODEL and the rest.
+    // LLM_PRIMARY_LIVE=false keeps live phone calls on LLM_MODEL for speed.
+    primary: { baseUrl: env('LLM_PRIMARY_BASE_URL').replace(/\/+$/, ''), apiKey: env('LLM_PRIMARY_API_KEY'), model: env('LLM_PRIMARY_MODEL'), live: env('LLM_PRIMARY_LIVE') !== 'false' },
     // Light mode: for providers with a small tokens-per-minute budget (free tiers). Short persona, short history, short tool results.
     light: env('LLM_LIGHT') === 'true',
   },
