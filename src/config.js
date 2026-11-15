@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { liveVoiceFrom } from './live-voice.js'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // HELPER_DATA_DIR lets tests run against a throwaway folder instead of the real state.
@@ -50,6 +51,21 @@ function parseQuiet(value) {
   return m ? { from: m[1] * 60 + Number(m[2]), to: m[3] * 60 + Number(m[4]) } : null
 }
 
+// Obscura's egress. Its own value wins. "direct" means none. An empty value reuses the errand proxy,
+// and an empty errand proxy reuses the Webtop proxy, so Israeli shops see the same exit the owner already set.
+export function obscuraProxyFrom(own, errand, webtop) {
+  const pick = (value) => String(value ?? '').trim()
+  const mine = pick(own)
+  if (/^direct$/i.test(mine)) return ''
+  if (mine) return mine
+  const shop = pick(errand)
+  if (/^direct$/i.test(shop)) return ''
+  if (shop) return shop
+  const web = pick(webtop)
+  if (web && !/^direct$/i.test(web)) return web
+  return ''
+}
+
 const DEFAULT_FEEDS = [
   'https://www.ynet.co.il/Integration/StoryRss1854.xml',
   'https://www.maariv.co.il/Rss/RssFeedsMivzakiChadashot',
@@ -69,6 +85,9 @@ const build = () => ({
     fallbackModels: env('LLM_FALLBACK_MODEL').split(',').map((s) => s.trim()).filter(Boolean),
     // A second provider, used only when every model of the first is out of quota or failing.
     backup: { baseUrl: env('LLM_BACKUP_BASE_URL').replace(/\/+$/, ''), apiKey: env('LLM_BACKUP_API_KEY'), model: env('LLM_BACKUP_MODEL') },
+    // A preferred provider for conversation turns only (e.g. Coarena Opus). Any failure there falls back to LLM_MODEL and the rest.
+    // LLM_PRIMARY_LIVE=false keeps live phone calls on LLM_MODEL for speed.
+    primary: { baseUrl: env('LLM_PRIMARY_BASE_URL').replace(/\/+$/, ''), apiKey: env('LLM_PRIMARY_API_KEY'), model: env('LLM_PRIMARY_MODEL'), live: env('LLM_PRIMARY_LIVE') !== 'false' },
     // Light mode: for providers with a small tokens-per-minute budget (free tiers). Short persona, short history, short tool results.
     light: env('LLM_LIGHT') === 'true',
   },
@@ -124,6 +143,8 @@ const build = () => ({
   youtubeKey: env('YOUTUBE_API_KEY'),
   // Each message gets only the tools and instructions of the areas it is about (src/domains.js). off = every tool, always.
   routing: env('TOOL_ROUTING', 'on') !== 'off',
+  // Off until the existing voice has passed a listening check. WhatsApp only.
+  whatsappSpokenReplies: env('WHATSAPP_SPOKEN_REPLIES') === 'on',
   // Speech can live on a different provider than the chat model; it defaults to the same one.
   voice: {
     baseUrl: (env('VOICE_BASE_URL') || env('LLM_BASE_URL', 'https://api.openai.com/v1')).replace(/\/+$/, ''),
@@ -132,7 +153,9 @@ const build = () => ({
     ttsModel: env('TTS_MODEL'),
     ttsVoice: env('TTS_VOICE', 'alloy'),
   },
-  // When a key is set, ElevenLabs handles both directions of voice and the settings above are ignored.
+  // Speech defaults to Edge-TTS (src/tts.js) even when this key is set. TTS_PROVIDER=elevenlabs
+  // selects it for speaking, and a failed Edge request falls back here only when the key and voice id are set.
+  // The key still turns on ElevenLabs transcription when STT_MODEL is empty, and image, video, and the old phone agent.
   elevenlabs: {
     apiKey: env('ELEVENLABS_API_KEY'),
     voiceId: env('ELEVENLABS_VOICE_ID'),
@@ -175,6 +198,11 @@ const build = () => ({
     cloud: ['1', 'true', 'yes'].includes(env('WEBTOP_CLOUD').toLowerCase()),
     // Optional proxy for that Chromium only (http:// or socks5://). A server outside Israel is blocked by Webtop's CloudFront.
     proxy: env('WEBTOP_PROXY'),
+    // WhatsApp notices for new grades, timetable changes, exams and school events (src/webtop-watch.js).
+    alerts: env('WEBTOP_ALERTS', 'true') !== 'false',
+    alertsMinutes: Math.max(15, Number(env('WEBTOP_ALERTS_MINUTES', '60')) || 60),
+    // The page whose own requests include the homework board (dashboard/GetHomeWork). Read only with SCHOOLWORK=on.
+    homeworkPath: env('WEBTOP_HOMEWORK_PATH', '/dashboard'),
   },
   // fetch_page through Scrapling (Python, py/scrapling_worker.py): public HTTPS pages only, with DNS and redirect
   // checks. Off unless SCRAPLING_ENABLED=true. SCRAPLING_PYTHON is the interpreter inside its own venv.
@@ -235,6 +263,21 @@ const build = () => ({
     priceOutPerMTok: Number(env('TEAM_PRICE_OUT_PER_MTOK')) || 0,
     maxUsdPerRequest: Number(env('TEAM_MAX_USD_PER_REQUEST')) || 0,
     maxUsdPerDay: Number(env('TEAM_MAX_USD_PER_DAY')) || 0,
+    // The war room (src/team/warroom.js) for a big task. Same TEAM_MODE switch and the same USD caps as the
+    // flight profile. These ceilings are separate so a flight search stays at 4 calls / 90s, and env can only
+    // lower them. TEAM_WAR_DEADLINE_SECONDS unset follows TEAM_DEADLINE_SECONDS.
+    maxAgents: Math.min(4, Math.max(2, Number(env('TEAM_MAX_AGENTS', '4')) || 4)),
+    maxRounds: Math.min(2, Math.max(1, Number(env('TEAM_MAX_ROUNDS', '2')) || 2)),
+    warMaxCalls: Math.min(8, Math.max(2, Number(env('TEAM_WAR_MAX_CALLS', '8')) || 8)),
+    warMaxInTokens: Math.min(20000, Math.max(2000, Number(env('TEAM_WAR_MAX_IN_TOKENS', '16000')) || 16000)),
+    warMaxOutTokens: Math.min(6000, Math.max(256, Number(env('TEAM_WAR_MAX_OUT_TOKENS', '4000')) || 4000)),
+    warDeadlineMs: env('TEAM_WAR_DEADLINE_SECONDS')
+      ? Math.min(120000, Math.max(10000, Number(env('TEAM_WAR_DEADLINE_SECONDS')) * 1000 || 90000))
+      : Math.max(5000, Math.min(90000, Number(env('TEAM_DEADLINE_SECONDS', '90')) * 1000 || 90000)),
+    warUpdates: (() => {
+      const n = Number(env('TEAM_WAR_UPDATES', '2'))
+      return Number.isFinite(n) ? Math.min(3, Math.max(0, Math.floor(n))) : 2
+    })(),
   },
   // New Classroom assignments prepared by Gemini in its own signed-in browser window (gemini-browser.bat).
   // autowork: auto = start as soon as one arrives, ask = ask in WhatsApp first, off = only when asked.
@@ -252,6 +295,19 @@ const build = () => ({
   errand: {
     port: Number(env('ERRAND_DEBUG_PORT', '9227')) || 9227,
     proxy: env('ERRAND_PROXY'),
+  },
+  // Anonymous public pages (search, fetch, price survey) via Obscura, beside the Chromium windows.
+  // Default on: a missing binary, a dead process, a timeout or a blocked page uses the previous reader.
+  // The port is always bound to 127.0.0.1 inside the container and is not published. 9223/9224/9226/9227
+  // belong to Webtop, Gemini, Google Home and the errand window; a request for one of those is ignored.
+  obscura: {
+    enabled: !['off', '0', 'false', 'no'].includes(env('OBSCURA_ENABLED', 'on').toLowerCase()),
+    port: Number(env('OBSCURA_PORT', '9228')) || 9228,
+    bin: env('OBSCURA_BIN', '/usr/local/bin/obscura'),
+    timeoutMs: Math.min(45000, Math.max(5000, Number(env('OBSCURA_TIMEOUT_MS', '20000')) || 20000)),
+    heapMb: Math.min(512, Math.max(64, Number(env('OBSCURA_V8_HEAP_MB', '192')) || 192)),
+    maxRssMb: Math.min(800, Math.max(160, Number(env('OBSCURA_MAX_RSS_MB', '400')) || 400)),
+    proxy: obscuraProxyFrom(env('OBSCURA_PROXY'), env('ERRAND_PROXY'), env('WEBTOP_PROXY')),
   },
   // "תשאל את ג'מיני": Google's Gemini through its official API (key from aistudio.google.com/apikey).
   // Daily encrypted backup to the owner's Google Drive (src/backup.js).
@@ -292,6 +348,13 @@ const build = () => ({
     host: env('PHONE_ADB_HOST'),
     proxy: env('PHONE_PROXY'),
     mode: ['off', 'ask', 'ask-writes', 'ask-all', 'auto'].includes(env('PHONE_MODE', 'ask')) ? env('PHONE_MODE', 'ask') : 'ask',
+    // Screenshot + accessibility-tree agent. Off unless PHONE_VISION_AGENT=on (also true / 1).
+    vision: ['on', 'true', '1'].includes(env('PHONE_VISION_AGENT', 'off').toLowerCase()) ? 'on' : 'off',
+    visionModel: env('PHONE_VISION_MODEL'),
+    visionWidth: Math.min(720, Math.max(240, Number(env('PHONE_VISION_WIDTH', '480')) || 480)),
+    agentMaxSteps: env('PHONE_AGENT_MAX_STEPS'),
+    // Empty: 180s for the vision loop, 8 minutes for the older tree loop. A set value applies to both.
+    agentTimeoutSec: env('PHONE_AGENT_TIMEOUT_SEC'),
   },
   // Discord, built in (src/discord.js): the bot's token, and optionally the owner's Discord user id.
   discord: { token: env('DISCORD_TOKEN'), ownerId: env('DISCORD_OWNER_ID') },
@@ -300,6 +363,18 @@ const build = () => ({
     secret: env('PC_BRIDGE_SECRET'),
     port: Number(env('PC_BRIDGE_PORT', '0')) || 0,
     url: env('PC_BRIDGE_URL'),
+  },
+  // Live voice (src/live-voice.js). Off unless LIVE_VOICE=on and the LiveKit key pair is set.
+  liveVoice: liveVoiceFrom(process.env),
+  // Talking face (src/face.js). Off unless FACE_ENABLED=on, so a deploy changes nothing until the owner turns it on.
+  // The GPU render runs on the home PC. This process only forwards audio over the existing bridge and frames back.
+  face: {
+    enabled: ['on', '1', 'true', 'yes'].includes(env('FACE_ENABLED', 'off').toLowerCase()),
+    engine: ['pc', 'browser', 'auto'].includes(env('FACE_ENGINE', 'auto').toLowerCase()) ? env('FACE_ENGINE', 'auto').toLowerCase() : 'auto',
+    tv: ['on', 'auto', 'off'].includes(env('FACE_TV', 'auto').toLowerCase()) ? env('FACE_TV', 'auto').toLowerCase() : 'auto',
+    webrtc: ['on', '1', 'true', 'yes'].includes(env('FACE_WEBRTC', 'off').toLowerCase()),
+    localUrl: env('FACE_LOCAL_URL', 'http://127.0.0.1:8771'),
+    lipDelayMs: Math.min(2000, Math.max(0, Number(env('FACE_LIP_DELAY_MS', '350')) || 0)),
   },
 })
 

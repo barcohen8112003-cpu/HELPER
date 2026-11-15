@@ -7,6 +7,11 @@ const path = require('path')
 const { spawn } = require('child_process')
 const store = require('./store')
 const directLlm = require('./direct-llm')
+const config = require('./config')
+
+// Claude Code answers only while the user's Claude plan is active. These are its replies when it is not
+// (signed out, plan ended, no access): from then on every ask goes straight to the API brain.
+const NO_PLAN = /not logged in|please run \/login|invalid api key|authentication|subscription|does not have access|no longer has access|credit balance|upgrade (your|to)|plan (has )?(ended|expired)|billing/i
 
 const HANDS = path.join(__dirname, '..', 'bin', 'hands.mjs').replace(/\\/g, '/')
 const CONTINUE_MS = 3 * 60 * 1000   // a new ask this soon after the last one continues the same conversation
@@ -83,7 +88,7 @@ function rules() {
     '- אחרי משימה שמסדרת חלונות, אם יש ספק שזה הצליח (חלון שלא נפתח, מסך אחר), בדוק עם windows פעם אחת, ותקן.',
     '- בקשה שיש בה שתי משימות נפרדות ("תפתח את X, ותגיד לי מה השעה"): תעשה את שתיהן ותענה על שתיהן במשפט אחד.',
     '- התשובה של הידיים ("כרום בצד שמאל") היא האישור שזה קרה: אל תוסיף "לא וידאתי". רק כשצעד נכשל, או כשאין לך דרך לדעת, תגיד את זה.',
-    '- שאלות אישיות (מה כתבו לו, מה ביומן, מה הוא סיפר לך פעם): helper.',
+    '- כל מה שלא על המחשב הזה הולך ל-helper: הבית (אורות, טלוויזיה, מזגן, תריסים), וואטסאפ, מייל, יומן, תזכורות, וובטופ, טיסות, חדשות, ומה שהוא סיפר לך פעם. שם יש את כל הכלים של HELPER. תעביר לו את הבקשה במילים שלו, ותגיד מה הוא ענה.',
     '- משימה בתוך חלון קיים ("תלחץ על", "תכתוב בשדה", "תשלח לו", "תסמן", "תבחר", "תעבור לטאב"): קודם look על החלון (לא צילום מסך), ואז press / fill לפי השמות שראית, הכל ב-batch אחד אם אפשר. שם שלא מופיע ב-look: look שוב אחרי רגע (דף שנטען), ורק אז screenshot ו-click בפיקסלים.',
     '- אתר: goto בדפדפן הפתוח, לא web (שפותח חלון חדש). "בטאב חדש" → newtab. אתר שכבר פתוח בטאב → tab.',
     '- שאלה על מה שכתוב בחלון או בדף ("מה כתוב פה", "תסכם את הכתבה", "מה המחיר"): read על החלון. צילום מסך רק כשצריך לראות תמונה, עיצוב או משחק.',
@@ -201,7 +206,7 @@ function askClaude(text, extra, onEvent) {
         }
         clearTimeout(early)
         lastText = tool ? null : text || null
-        if (lastText && !/not logged in|please run \/login|invalid api key/i.test(lastText)) {
+        if (lastText && !NO_PLAN.test(lastText)) {
           const answer = lastText
           early = setTimeout(() => {
             if (lastText !== answer) return
@@ -233,7 +238,7 @@ function askClaude(text, extra, onEvent) {
       if (running === child) running = null
       if (out.trim()) onLine(out.trim())
       const resultText = final ? String(final.result || '') : ''
-      if (/not logged in|please run \/login|invalid api key|authentication/i.test(resultText + err)) {
+      if (NO_PLAN.test(resultText + err)) {
         claudeState = 'signed-out'
         return resolve({ ok: false, signedOut: true, text: '' })
       }
@@ -278,7 +283,42 @@ async function askHelper(text, { voice = false } = {}) {
   }
 }
 
-/** HELPER's own voice for a line, as MP3 bytes (ElevenLabs, on the cloud). */
+/**
+ * Is HELPER on the cloud there, and does it take this PC's code? An empty ask is refused right after the code is
+ * checked (400), before any model runs: so it costs nothing and proves both. Resolves {ok, ms} or {ok:false, reason}.
+ */
+async function pingHelper() {
+  const s = store.settings()
+  if (!s.helperUrl || !s.helperToken) return { ok: false, reason: 'לא מחובר למחשב, חסר קוד חיבור' }
+  const started = Date.now()
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 8000)
+  try {
+    const r = await fetch(s.helperUrl.replace(/\/$/, '') + '/bridge/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: 'Bearer ' + s.helperToken },
+      body: JSON.stringify({ text: '', source: 'pc-ping', audio: false }),
+      signal: ctrl.signal,
+    })
+    if (r.status === 400) return { ok: true, ms: Date.now() - started }
+    if (r.status === 403) return { ok: false, reason: 'הקוד של המחשב לא נכון' }
+    return { ok: false, reason: 'ענה בשגיאה ' + r.status }
+  } catch (e) {
+    return { ok: false, reason: e.name === 'AbortError' ? 'לא ענה בזמן' : 'אין חיבור' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Which brain answers here now, in words. */
+function brainName() {
+  const apiOnly = /^api$/i.test(config.get('HELPER_BRAIN') || store.settings().brain || '')
+  if (!apiOnly && claudeCommand() && claudeState !== 'signed-out') return 'Claude Code'
+  if (config.llmApiKey) return 'מודל דרך המפתח, ' + (config.llmModel || 'ברירת מחדל')
+  return 'אין, חסר מפתח'
+}
+
+/** HELPER's own voice for a line, as MP3 bytes (Edge-TTS on the cloud, unless TTS_PROVIDER says otherwise). */
 async function voiceOf(text) {
   const s = store.settings()
   if (!s.helperUrl || !s.helperToken) return null
@@ -295,7 +335,10 @@ async function voiceOf(text) {
  * Unified smart ask: tries Claude Code if available and valid, but falls back seamlessly to direct LLM with full tools & vision.
  */
 async function ask(text, extra, onEvent) {
-  const exe = claudeCommand()
+  // HELPER_BRAIN=api in .env (or "brain": "api" in settings.json): skip Claude Code and use LLM_API_KEY
+  // (OpenRouter etc.) only. For a PC without a Claude plan.
+  const apiOnly = /^api$/i.test(config.get('HELPER_BRAIN') || store.settings().brain || '')
+  const exe = apiOnly ? null : claudeCommand()
   if (exe && claudeState !== 'signed-out') {
     try {
       const res = await askClaude(text, extra, onEvent)
@@ -307,4 +350,4 @@ async function ask(text, extra, onEvent) {
   return await directLlm.ask(text, extra, onEvent)
 }
 
-module.exports = { ask, askClaude, askHelper, voiceOf, cancel, state: () => claudeState, HANDS }
+module.exports = { ask, askClaude, askHelper, pingHelper, brainName, voiceOf, cancel, claudeCommand, state: () => claudeState, HANDS }

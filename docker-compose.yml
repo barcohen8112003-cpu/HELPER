@@ -23,7 +23,9 @@ services:
       TIMEZONE: Asia/Jerusalem
       # Computer actions stay off until .env sets COMPUTER_MODE=ask (or auto) and PC_BRIDGE_SECRET.
       # 3212 is the home bridge (the PC dials out). 3210 is the settings page. Nothing at home is exposed.
-      # 9223, 9226 and 9227 (Webtop, Google Home, errand Chromium) stay on 127.0.0.1 inside the container.
+      # 9223, 9224, 9226 and 9227 (Webtop, Gemini, Google Home, errand Chromium) stay on 127.0.0.1.
+      # 9228 is Obscura, also 127.0.0.1 only. Do not publish any of them.
+      # The talking face does not add a port. The PC dials out on 3212; viewers use 3210.
       PC_BRIDGE_LISTEN: "1"
       PC_BRIDGE_PORT: "3212"
       NODE_ENV: production
@@ -37,6 +39,43 @@ services:
     # Two headed browsers on the shared desktop need more /dev/shm than one headless window.
     # 6080 (noVNC) is intentionally not published. Reach it through the settings site or Tailscale Serve.
     shm_size: "512mb"
+
+  # Live voice. Off with the default `docker compose up` (no profile, no new ports).
+  # Turn on with LIVE_VOICE=on plus the keys in .env, then:
+  #   docker compose --profile live-voice up -d --build
+  # Signaling is proxied through 3210 (already published) and only after HELPER's token.
+  # WebRTC itself needs UDP 50000-50019 and TCP 7881 on the public IP. Do not publish 7880 or 8081.
+  livekit:
+    profiles: ["live-voice"]
+    build:
+      context: ./voice
+      dockerfile: livekit.Dockerfile
+    container_name: helper-livekit
+    restart: on-failure
+    env_file: .env
+    mem_limit: 192m
+    cpus: 0.4
+    ports:
+      - "7881:7881/tcp"
+      - "50000-50019:50000-50019/udp"
+
+  voice-agent:
+    profiles: ["live-voice"]
+    build:
+      context: ./voice
+      dockerfile: Dockerfile
+    container_name: helper-voice
+    restart: on-failure
+    env_file: .env
+    environment:
+      # wss://<project>.livekit.cloud in .env sends the worker to LiveKit Cloud (phone numbers). Default: this server.
+      LIVEKIT_URL: ${LIVEKIT_URL:-ws://livekit:7880}
+      HELPER_URL: http://helper:3210
+    mem_limit: 768m
+    cpus: 2.0
+    depends_on:
+      - helper
+      - livekit
 
 volumes:
   helper-data:

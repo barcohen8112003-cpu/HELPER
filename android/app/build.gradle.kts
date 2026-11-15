@@ -23,6 +23,11 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+        // One APK for the Galaxy S25 (arm64). LiveKit's WebRTC library is about 15MB per ABI and does not
+        // compress; x86, x86_64 and 32-bit ARM are not on that phone. Minification stays off, as before.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     // One fixed key for every release build (from the repository's secrets in CI), so each new APK installs over the
@@ -50,6 +55,7 @@ android {
         }
     }
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
@@ -94,4 +100,7 @@ dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(libs.guava)
     implementation(libs.gson)
+    implementation(libs.livekit.android)
+    implementation(libs.porcupine.android)
+    coreLibraryDesugaring(libs.desugar.jdk)
 }

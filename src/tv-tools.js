@@ -51,10 +51,10 @@ async function appList() {
   return apps
 }
 
-// Off is two presses half a second apart: the first wakes the TV's own power prompt (or is swallowed by the projector),
-// the second does it. If the TV is already asleep after the first, its link to HELPER is gone and the second has nothing
-// to land on, which is the expected end, so only a failure of the FIRST press is an error.
-export async function tvPowerOff({ presses = 2, gapMs = 500, call = tvCall, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+// Off is five presses half a second apart: this projector needs that many on the power key, and a TV's own prompt
+// is covered the same way. If the set is already asleep after an earlier press, its link to HELPER is gone and the
+// rest have nothing to land on, which is the expected end, so only a failure of the FIRST press is an error.
+export async function tvPowerOff({ presses = 5, gapMs = 500, call = tvCall, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   await call('key', { key: 'sleep' })
   for (let i = 1; i < presses; i++) {
     await sleep(gapMs)
@@ -66,15 +66,31 @@ export async function tvPowerOff({ presses = 2, gapMs = 500, call = tvCall, slee
   }
 }
 
+
+// On is one press of the same key: a second press would turn it back off.
+export async function tvPowerOn({ call = tvCall } = {}) {
+  await call('key', { key: 'sleep' })
+}
+
 export const tvTools = [
   {
     name: 'tv_power_off',
     enabled: tvConnected,
-    description: 'מכבה את הטלוויזיה או המקרן: לוחץ פעמיים על כפתור הכיבוי בהפרש של חצי שנייה. "תכבה את הטלוויזיה", "תכבה את המקרן".',
+    description: 'מכבה את הטלוויזיה או המקרן: לוחץ חמש פעמים על כפתור הכיבוי בהפרשים של חצי שנייה. "תכבה את הטלוויזיה", "תכבה את המקרן".',
     parameters: obj({}, []),
     async run() {
       await tvPowerOff()
       return 'כיביתי.'
+    },
+  },
+  {
+    name: 'tv_power_on',
+    enabled: tvConnected,
+    description: 'מדליק את הטלוויזיה או המקרן: לוחץ פעם אחת על כפתור ההפעלה. "תדליק את המקרן", "תפעיל את הטלוויזיה". להדלקה או כיבוי השתמשי בזה או ב-tv_power_off, לא ב-tv_do.',
+    parameters: obj({}, []),
+    async run() {
+      await tvPowerOn()
+      return 'הדלקתי.'
     },
   },
   {
@@ -115,7 +131,7 @@ export const tvTools = [
   {
     name: 'tv_do',
     enabled: tvConnected,
-    description: 'מבצע כל משימה בטלוויזיה מקצה לקצה: הסוכן רואה מה יש על המסך (רשימה וצילום) ולוחץ כמו בשלט עד שזה קורה. "תפעיל בסטרימיו את נפוליאון ותבחר מקור", "תמצא את הפרק הבא של...", "תדליק כתוביות", "תשים ביוטיוב שיר של...". לכל מה שהשלט הפשוט וה-tv_play לא גומרים לבד. קנייה או השכרה באפליקציה עוצרת לאישור. מחזיר DONE, NEED_USER, DENIED או FAIL.',
+    description: 'מבצע כל משימה בטלוויזיה מקצה לקצה: הסוכן רואה מה יש על המסך (רשימה וצילום) ולוחץ כמו בשלט עד שזה קורה. "תפעיל בסטרימיו את נפוליאון ותבחר מקור", "תמצא את הפרק הבא של...", "תדליק כתוביות", "תשים ביוטיוב שיר של...". לכל מה שהשלט הפשוט, tv_power_on, tv_power_off ו-tv_play לא גומרים לבד. אל תשתמש בזה רק כדי להדליק או לכבות את המקרן או הטלוויזיה. קנייה או השכרה באפליקציה עוצרת לאישור. מחזיר DONE, NEED_USER, DENIED או FAIL.',
     parameters: obj({ goal: str('המטרה במילים של המשתמש, מלאה, עם שם הסרט/סדרה באנגלית אם יש') }),
     async run({ goal }, ctx) {
       // It can take minutes (a torrent buffering), longer than the TV waits for an answer: it runs in the background,

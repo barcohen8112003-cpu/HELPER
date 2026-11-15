@@ -52,6 +52,7 @@ export async function removeAccount(email) {
   fs.writeFileSync(FILE, JSON.stringify(accounts, null, 2))
   tokens.delete(email)
   status.delete(email)
+  granted.delete(email)
   if (token) await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', body: new URLSearchParams({ token }), signal: AbortSignal.timeout(15000) }).catch(() => {})
 }
 
@@ -76,6 +77,7 @@ export async function connectWithCode(code, redirectUri) {
   if (!info.email) throw new Error('לא התקבלה כתובת מייל')
   saveAccount(info.email, data.refresh_token)
   tokens.delete(info.email)
+  granted.delete(info.email)
   status.set(info.email, { ok: true, at: Date.now() })
   return info.email
 }
@@ -95,6 +97,9 @@ const tokens = new Map()
 // { [email]: { ok, error, at } }: the result of the last real token exchange with Google, per account.
 // A stored key is not proof the account works: Google can expire or revoke it at any time.
 const status = new Map()
+// { [email]: [scope, ...] }: what Google says the stored key actually grants, from the last token exchange. The SCOPES
+// list above is what Helper asks for; an account connected before a scope was added does not have it.
+const granted = new Map()
 
 export const googleAccountStatus = (email) => status.get(email) || null
 
@@ -125,8 +130,37 @@ export async function accessToken(email, { fresh = false } = {}) {
     })
   }
   status.set(email, { ok: true, at: Date.now() })
+  if (typeof data.scope === 'string') granted.set(email, data.scope.split(/\s+/).filter(Boolean))
   tokens.set(email, { token: data.access_token, expires: Date.now() + data.expires_in * 1000 })
   return data.access_token
+}
+
+// The scopes the account's key really has, or null when Google could not be asked (or did not say).
+export async function grantedScopes(email) {
+  if (!granted.has(email)) await accessToken(email, { fresh: true }).catch(() => {})
+  return granted.get(email) || null
+}
+
+// A Google REST call with any method. Errors carry `status` (the HTTP code) and `reason` (Google's own reason, e.g.
+// insufficientPermissions, notFound, failedPrecondition), so a caller can tell "refused" from "no answer".
+export async function gcall(email, method, url, { json, headers = {}, timeoutMs = 30000 } = {}) {
+  const res = await fetch(url, {
+    method,
+    headers: { Authorization: `Bearer ${await accessToken(email)}`, ...(json !== undefined && { 'Content-Type': 'application/json' }), ...headers },
+    body: json !== undefined ? JSON.stringify(json) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  const text = await res.text()
+  let data = null
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch {}
+  if (!res.ok) {
+    const reason = data?.error?.errors?.[0]?.reason || data?.error?.status || ''
+    const message = data?.error?.message || text.slice(0, 200)
+    throw Object.assign(new Error(`Google HTTP ${res.status}${reason ? ` ${reason}` : ''}: ${String(message).slice(0, 200)}`), { status: res.status, reason })
+  }
+  return data ?? {}
 }
 
 // Tests every connected account against Google, at most once per `maxAgeMs` each. Never throws.

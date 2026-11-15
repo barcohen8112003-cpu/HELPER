@@ -291,10 +291,11 @@ export function phonePrompt(english = false) {
 
 // The HELPER app is on the socket: one tool, no ADB, and no "please connect" message.
 export function phoneAppReadyPrompt(english = false) {
+  const seeing = config.phone.vision === 'on'
   if (english) {
-    return '- The HELPER app is connected. You have full control of his phone through run_on_phone. Use it for any phone task (alarms, apps, messages, settings, screenshots, notifications). Do not use the phone_* tools and do not ask him to connect anything. Setting an alarm, opening an app or reading the screen does not need WhatsApp approval; run_on_phone asks only before send, pay, call or delete.\n'
+    return `- The HELPER app is connected. You have full control of his phone through run_on_phone. Use it for any phone task (alarms, apps, messages, settings, screenshots, notifications). Do not use the phone_* tools and do not ask him to connect anything. Setting an alarm, opening an app or reading the screen does not need WhatsApp approval; run_on_phone asks only before send, pay, call, delete, a settings change, or a bank or payment app.${seeing ? ' PHONE_VISION_AGENT is on: each step is a downscaled screenshot plus the accessibility tree, planned by a cheap vision model, with short progress lines and a final screenshot on WhatsApp.' : ''}\n`
   }
-  return '• האפליקציה של HELPER מחוברת לטלפון. יש לך שליטה מלאה בטלפון דרך run_on_phone. השתמש בו לכל משימה בטלפון (שעון מעורר, אפליקציות, הודעות, הגדרות, מסך, התראות). אל תשתמש בכלי phone_* ואל תבקש ממנו לחבר משהו. שעון מעורר, פתיחת אפליקציה וקריאת המסך לא דורשים אישור בוואטסאפ; run_on_phone מבקש אישור רק לפני שליחה, תשלום, שיחה או מחיקה.\n'
+  return `• האפליקציה של HELPER מחוברת לטלפון. יש לך שליטה מלאה בטלפון דרך run_on_phone. השתמש בו לכל משימה בטלפון (שעון מעורר, אפליקציות, הודעות, הגדרות, מסך, התראות). אל תשתמש בכלי phone_* ואל תבקש ממנו לחבר משהו. שעון מעורר, פתיחת אפליקציה וקריאת המסך לא דורשים אישור בוואטסאפ; run_on_phone מבקש אישור רק לפני שליחה, תשלום, שיחה, מחיקה, שינוי הגדרות, או אפליקציית בנק או תשלום.${seeing ? ' סוכן הראייה דלוק: כל צעד הוא צילום מסך מוקטן ועץ הנגישות, עם עדכון קצר וצילום בסיום לוואטסאפ.' : ''}\n`
 }
 
 // No app and no ADB. Lead with the app, and mention wireless debugging only as a last fallback.

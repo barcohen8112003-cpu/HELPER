@@ -18,6 +18,22 @@ export function makeBudget(limits, { spentToday = 0, live = false } = {}) {
   return {
     used,
     limits,
+    // Reserves every call in the batch, or none of them. A parallel wave must not send the calls that fit
+    // and silently drop the rest: the whole wave is refused before any of it is sent.
+    reserveMany(specs) {
+      const snap = { calls: used.calls, inTokens: used.inTokens, outTokens: used.outTokens, usd: used.usd }
+      const out = []
+      try {
+        for (const s of specs) out.push(this.reserve(s.inTokens, s.wantOut))
+        return out
+      } catch (e) {
+        used.calls = snap.calls
+        used.inTokens = snap.inTokens
+        used.outTokens = snap.outTokens
+        used.usd = snap.usd
+        throw e
+      }
+    },
     // Returns the output cap for this call; throws BudgetError when it does not fit.
     reserve(inTokens, wantOut) {
       if (used.calls + 1 > limits.maxModelCalls) throw new BudgetError(`הגעתי למגבלה של ${limits.maxModelCalls} קריאות מודל לבקשה`)

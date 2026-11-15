@@ -2,6 +2,7 @@
 // 100 of them, so about 100 searches a day). Without a key, or when the API fails (quota, bad key), it reads
 // YouTube's own results page as before.
 import { config } from './config.js'
+import { youtubePublic } from './obscura.js'
 
 let http = (url, opts) => fetch(url, { ...opts, signal: AbortSignal.timeout(opts?.timeout || 15000) })
 export const _setForTest = (opts = {}) => {
@@ -59,7 +60,11 @@ async function searchPage(query, max) {
 
 export async function searchYouTube(query, max = 5) {
   const n = Math.max(1, Math.min(10, max))
-  return (await searchApi(query, n)) || (await searchPage(query, n))
+  const api = await searchApi(query, n)
+  if (api?.length) return api
+  const page = await searchPage(query, n)
+  if (page.length) return page
+  return youtubePublic(query, n)
 }
 
 // The first ordinary video for a search: { id, title } or null.

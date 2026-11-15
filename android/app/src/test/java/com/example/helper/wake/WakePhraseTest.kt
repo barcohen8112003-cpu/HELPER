@@ -9,14 +9,16 @@ class WakePhraseTest {
     fun hearsTheWakePhrase() {
         listOf(
             "היי בוט", "הי בוט", "היי, בוט", "היי בוט.", "אי בוט", "hey bot", "Hey Bot!", "הייבוט", "היבוט",
-            "בוט", "היי בוט מה השעה", "היי הבוט", "hi boat"
+            "בוט", "היי בוט מה השעה", "היי הבוט", "hi boat",
+            "היי הלפר", "הי הלפר", "היי, הלפר", "hey helper", "Hey Helper!", "הייהלפר", "הלפר"
         ).forEach { assertTrue(it, WakePhrase.matches(it)) }
     }
 
     @Test
     fun ignoresOrdinarySpeech() {
         listOf(
-            "", "היי", "הבוט לא עובד", "תגיד לבוט משהו", "but why", "but", "שלום מה נשמע", "היי בוקר טוב"
+            "", "היי", "הבוט לא עובד", "תגיד לבוט משהו", "but why", "but", "שלום מה נשמע", "היי בוקר טוב",
+            "הלפר תכין לי שיעורים להיום", "helper please open the door now"
         ).forEach { assertFalse(it, WakePhrase.matches(it)) }
     }
 }

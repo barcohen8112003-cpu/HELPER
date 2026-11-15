@@ -1,7 +1,12 @@
 // Runs on the user's Windows PC. It only dials out to the assistant in the cloud; no port is opened at home.
-// Computer actions (src/pc.js) and Webtop reads (the Chrome window from webtop-browser.bat, 127.0.0.1:9223) run here.
+// Computer actions (src/pc.js), Webtop reads (the Chrome window from webtop-browser.bat, 127.0.0.1:9223),
+// and the talking-face calls (127.0.0.1:8771, only if face/start-face.ps1 is running) run here.
 //
 //   node home-relay/pc-bridge.mjs
+//
+// On Windows the usual launch is the hidden logon task, not a window you leave open:
+//   powershell -ExecutionPolicy Bypass -File home-relay\install-bridge-service.ps1
+// start-bridge.bat is the visible window, for a manual run.
 //
 // pc-bridge.config.json, next to this file: { "url": "ws://YOUR_SERVER:3212/pc", "secret": "same-as-PC_BRIDGE_SECRET" }
 // Or set PC_BRIDGE_URL and PC_BRIDGE_SECRET in the environment. Needs Node 18 or newer.

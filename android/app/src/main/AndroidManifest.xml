@@ -98,9 +98,29 @@
             </intent-filter>
         </service>
 
-        <!-- "היי בוט": listens in the background while switched on. -->
+        <!-- "היי בוט": the older cloud recognizer, while switched on. -->
         <service
             android:name=".wake.WakeWordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- "היי הלפר": on-device only, off until the owner turns it on. -->
+        <service
+            android:name=".wake.OnDeviceWakeService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <activity
+            android:name=".voice.LiveVoiceActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.Helper" />
+
+        <service
+            android:name=".voice.LiveVoiceService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 

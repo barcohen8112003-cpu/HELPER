@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import WebSocket from 'ws'
+import { imagesBlocked } from './secret-redact.js'
 import { config, DATA_DIR } from './config.js'
 
 const VIEW = { width: 1280, height: 900 }
@@ -339,6 +340,8 @@ async function shot(call) {
 
 // Live JPEG of the tab the person is signing in to. Nothing here is written to disk.
 export function captureFrame(site = 'webtop') {
+  // The errand tab is where the vault fills passwords: after a fill its picture is not sent anywhere (secret-redact.js).
+  if (browserSite(site) === 'errand' && imagesBlocked()) return Promise.reject(new Error('התמונה של דפדפן הקניות מוסתרת מאז שמולאה בו סיסמה שמורה. הפעלה מחדש של העוזר מחזירה אותה.'))
   return withCloudPage(site, async (call) => {
     if (browserSite(site) === 'webtop') {
       try {

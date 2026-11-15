@@ -2,7 +2,7 @@
 // field; Ctrl+Alt+P to point at something on the screen and then ask about it. Instant commands run with no AI;
 // the rest goes to Claude Code on this PC with HELPER's hands, or to HELPER on the cloud.
 'use strict'
-const { app, BrowserWindow, Tray, Menu, nativeImage, screen, desktopCapturer, ipcMain, session, shell, Notification, globalShortcut } = require('electron')
+const { app, BrowserWindow, Tray, Menu, nativeImage, screen, desktopCapturer, ipcMain, session, shell, Notification, globalShortcut, powerMonitor } = require('electron')
 const path = require('path')
 const fs = require('fs')
 
@@ -12,7 +12,7 @@ app.setAppUserModelId('il.helper.desktop')
 app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling')   // our media keys must reach the player
 
 const ROOT = __dirname
-let store, apps, speech, instant, hands, handsServer, brain, win32, hook, voiceOut, phrase
+let store, apps, speech, instant, home, hands, handsServer, brain, win32, hook, voiceOut, phrase
 
 let bubble = null, pill = null, tray = null
 const overlays = new Map()          // display id → transparent window for rings and marks
@@ -188,10 +188,388 @@ function bubbleState(state) {
 function answer(text, extra = {}) {
   mode = 'idle'
   bubbleState(Object.assign({ mode: 'answer', text }, extra))
+  avatarSync()
   const ms = Math.min(20000, 5000 + text.length * 70)
   hideTimer = setTimeout(() => { if (mode === 'idle' && !bubbleHovered) bubbleState({ mode: 'hidden' }) }, ms)
 }
 let bubbleHovered = false
+
+// ---- the avatar ---------------------------------------------------------------------------------------
+// A small figure in a corner of the screen (ui/avatar.html). Off until turned on in the tray. It mirrors what HELPER
+// on this PC is doing right now (listening, thinking, speaking, running tools), dances while music HELPER started
+// is playing, reacts to a message or a task from the cloud, and jumps on an urgent alert. A click asks HELPER (the
+// bubble's own typing box), a right-click opens its menu. Events from the cloud carry a type only
+// (src/avatar-feed.js); the window gets a state name and a design name only, never any text.
+
+const AVATAR_W = 140, AVATAR_H = 170
+let avatarWin = null, avatarState = null, avatarFeed = null, avatarFeedKey = '', avatarTimer = null, avatarDrag = null
+let avatarStatus = 'stopped'
+let avatarSpeaking = false, avatarSpeakTimer = null   // HELPER's voice is playing in the bubble
+let avatarSteps = 0                                   // tool steps (hands) running on this PC right now
+let avatarSyncTimer = null
+const AVATAR_DESIGNS = ['orb', 'chip', 'figure']
+const avatarDesign = () => (AVATAR_DESIGNS.includes(store.settings().avatarDesign) ? store.settings().avatarDesign : 'orb')
+
+/** Where the avatar goes: where it was dragged to, if that is still on a screen; else the main screen's bottom corner. */
+function avatarHome() {
+  const p = store.settings().avatarPos
+  if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+    const on = screen.getAllDisplays().some((d) => p.x >= d.workArea.x - AVATAR_W / 2 && p.x <= d.workArea.x + d.workArea.width - AVATAR_W / 2 && p.y >= d.workArea.y - AVATAR_H / 2 && p.y <= d.workArea.y + d.workArea.height - AVATAR_H / 2)
+    if (on) return { x: Math.round(p.x), y: Math.round(p.y) }
+  }
+  const wa = screen.getPrimaryDisplay().workArea
+  // Bottom left: Windows' own notifications appear bottom right, so the avatar stays out of their way.
+  return { x: wa.x + 16, y: wa.y + wa.height - AVATAR_H - 8 }
+}
+
+function sendAvatar(s) {
+  const w = avatarWin
+  avatarShown = s.state
+  avatarLevelRate()
+  if (!w || w.isDestroyed()) return
+  const msg = { state: s.state, variant: s.variant || '', design: avatarDesign() }
+  if (w.webContents.isLoading()) w.webContents.once('did-finish-load', () => { if (!w.isDestroyed()) w.webContents.send('avatar', msg) })
+  else w.webContents.send('avatar', msg)
+}
+
+// ---- the avatar and music from any app on this PC (off by default) ---------------------------------------
+// Tray "לרקוד לכל מוזיקה במחשב" (avatarSystemMusic): Windows' "now playing" list starts and stops the dance.
+// Tray "לזוז לפי הקצב והעוצמה" (avatarBeat): while it dances, Windows' own peak meter on the speakers (one number,
+// no audio) makes the moves bigger or smaller and kicks on the beat (src/beat.js). Both through one PowerShell
+// worker (src/audio-watch.js), which runs only while the setting is on. Levels are asked for only while the avatar
+// is dancing, go only to the avatar window as numbers, and are never logged or kept.
+let audioWatch = null, avatarFeel = null, avatarShown = 'idle', avatarLevelOn = false, avatarLevelAt = 0, avatarLevelKey = ''
+
+function applyAudioWatch() {
+  const s = store.settings()
+  const want = Boolean(avatarState && s.avatarSystemMusic && process.platform === 'win32')
+  if (!want) {
+    if (audioWatch) { audioWatch.stop(); audioWatch = null }
+    if (avatarState) { avatarState.trackSystem(false); avatarTick() }
+    avatarLevelRate()
+    return
+  }
+  avatarState.trackSystem(true)
+  if (!audioWatch) {
+    audioWatch = require('./src/audio-watch').createAudioWatch({
+      log, ignore: s.avatarMusicIgnore,
+      onPlaying: (on) => { if (avatarState) { avatarState.systemMusic(on); avatarTick() } },
+      onLevel: (x) => avatarLevelIn(x),
+    })
+    audioWatch.start()
+  } else audioWatch.setIgnore(s.avatarMusicIgnore)
+  avatarTick()
+  avatarLevelRate()
+}
+
+/** Levels only while the avatar is on screen and dancing, and the owner asked for it. */
+function avatarLevelRate() {
+  const on = Boolean(audioWatch && store.settings().avatarBeat && avatarWin && !avatarWin.isDestroyed() && avatarShown === 'dance')
+  if (audioWatch) audioWatch.rate(on ? 30 : 0)
+  if (on === avatarLevelOn) return
+  avatarLevelOn = on
+  avatarFeel = null
+  avatarLevelKey = ''
+  if (!on) sendAvatarLevel({ k: -1 })
+}
+
+/** One peak reading → the avatar window, as four numbers, at most about 15 a second (a beat always goes). */
+function avatarLevelIn(x) {
+  if (!avatarLevelOn) return
+  if (!avatarFeel) avatarFeel = require('./src/beat').createBeat()
+  const t = Date.now()
+  const out = avatarFeel.push(x, t)
+  if (!out) return
+  const msg = { e: out.energy, b: out.beat ? 1 : 0, k: out.level, t: out.bpm }
+  const key = msg.e + '|' + msg.k + '|' + msg.t
+  if (!msg.b && (key === avatarLevelKey || t - avatarLevelAt < 66)) return
+  avatarLevelKey = key
+  avatarLevelAt = t
+  sendAvatarLevel(msg)
+}
+
+function sendAvatarLevel(msg) {
+  const w = avatarWin
+  if (!w || w.isDestroyed() || w.webContents.isLoading()) return
+  w.webContents.send('avatar-level', msg)
+}
+
+function makeAvatar() {
+  if (avatarWin && !avatarWin.isDestroyed()) return avatarWin
+  const at = avatarHome()
+  avatarWin = new BrowserWindow({
+    x: at.x, y: at.y, width: AVATAR_W, height: AVATAR_H, show: false, frame: false, transparent: true, resizable: false,
+    movable: false, skipTaskbar: true, alwaysOnTop: true, focusable: false, hasShadow: false, backgroundColor: '#00000000',
+    // backgroundThrottling stays on: while it is hidden its animations cost nothing.
+    webPreferences: { preload: PRELOAD, contextIsolation: true, nodeIntegration: false },
+  })
+  avatarWin.setAlwaysOnTop(true, 'floating')   // under HELPER's bubble and rings, over ordinary windows
+  avatarWin.setIgnoreMouseEvents(true, { forward: true })
+  avatarWin.loadFile(path.join(ROOT, 'ui', 'avatar.html'))
+  watchConsole(avatarWin, 'avatar')
+  avatarWin.once('ready-to-show', () => { if (avatarWin && !avatarWin.isDestroyed()) { avatarWin.showInactive(); sendAvatar(avatarState.tick()) } })
+  avatarWin.on('closed', () => { avatarWin = null })
+  return avatarWin
+}
+
+function avatarTick() {
+  clearTimeout(avatarTimer)
+  if (!avatarState) return
+  avatarState.tick()
+  const ms = avatarState.nextChangeIn()
+  if (ms != null) avatarTimer = setTimeout(avatarTick, ms + 30)
+}
+
+/** An event for the avatar: { type } only. Nothing happens while the avatar is off. */
+function avatarEvent(ev) {
+  if (!avatarState) return
+  avatarState.event({ type: ev && ev.type })
+  avatarTick()
+}
+
+function avatarMusic(on) {
+  if (!avatarState) return
+  avatarState.music(on)
+  avatarTick()
+}
+
+/** The avatar mirrors the app's own state (mode, voice, hands). Cheap: it only tells the window when it changes. */
+function avatarSync() {
+  if (!avatarState) return
+  const st = require('./src/avatar-state')
+  avatarState.activity(st.activityFor({ mode, speaking: avatarSpeaking, working: avatarSteps > 0 }))
+  avatarTick()
+}
+
+function setAvatarSpeaking(on) {
+  avatarSpeaking = Boolean(on)
+  clearTimeout(avatarSpeakTimer)
+  // A missed "ended" never leaves it speaking: a minute at most.
+  if (avatarSpeaking) avatarSpeakTimer = setTimeout(() => { avatarSpeaking = false; avatarSync() }, 60000)
+  avatarSync()
+}
+
+/** Click on the avatar: ask HELPER, the same way as a short press of PD (the bubble's typing box). */
+function avatarClick() {
+  if (mode === 'idle') return startTyping()
+  if (mode === 'typing') { endTyping(); mode = 'idle'; bubbleState({ mode: 'hidden' }) }
+}
+
+/** Right-click on the avatar: talk, type, look, hide, and the rest of HELPER's menu. */
+function avatarMenu() {
+  if (!avatarWin || avatarWin.isDestroyed()) return
+  const d = avatarDesign()
+  Menu.buildFromTemplate([
+    { label: 'לדבר עם HELPER', click: () => { if (mode === 'idle') startListening() } },
+    { label: 'להקליד ל-HELPER', click: () => { if (mode === 'idle') startTyping() } },
+    { type: 'separator' },
+    { label: 'עיצוב', submenu: avatarDesignMenu(d) },
+    { label: 'להחזיר לפינה', click: () => { store.saveSettings({ avatarPos: null }); const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } },
+    { label: 'להסתיר את האווטאר', click: () => { store.saveSettings({ avatarEnabled: false }); applyAvatar(); refreshTray() } },
+    { type: 'separator' },
+    { label: 'כל ההגדרות של HELPER…', click: () => { if (tray) tray.popUpContextMenu(trayMenu()) } },
+  ]).popup({ window: avatarWin })
+}
+
+function avatarDesignMenu(current) {
+  const names = { orb: 'כדור (Orb)', chip: 'שבב (Chip)', figure: 'דמות (Figure)' }
+  return AVATAR_DESIGNS.map((id) => ({ label: names[id], type: 'radio', checked: current === id, click: () => { store.saveSettings({ avatarDesign: id }); if (avatarState) sendAvatar(avatarState.current()); refreshTray() } }))
+}
+
+function endAvatarDrag() {
+  if (!avatarDrag) return
+  clearInterval(avatarDrag.timer)
+  clearTimeout(avatarDrag.limit)
+  avatarDrag = null
+  if (avatarWin && !avatarWin.isDestroyed()) {
+    const [x, y] = avatarWin.getPosition()
+    store.saveSettings({ avatarPos: { x, y } })
+    avatarWin.setIgnoreMouseEvents(true, { forward: true })
+  }
+}
+
+function startAvatarDrag() {
+  if (!avatarWin || avatarWin.isDestroyed() || avatarDrag) return
+  const c = screen.getCursorScreenPoint()
+  const [x, y] = avatarWin.getPosition()
+  const dx = c.x - x, dy = c.y - y
+  avatarDrag = {
+    timer: setInterval(() => {
+      if (!avatarWin || avatarWin.isDestroyed()) return endAvatarDrag()
+      const p = screen.getCursorScreenPoint()
+      avatarWin.setPosition(p.x - dx, p.y - dy)
+    }, 16),
+    limit: setTimeout(endAvatarDrag, 60000),   // a lost mouse-up never leaves it stuck to the pointer
+  }
+}
+
+const AVATAR_STATUS = {
+  connected: 'מחובר', starting: 'מתחבר…', stopped: 'כבוי', 'not-set': 'לא הוגדר (avatar-link.ps1)',
+  unreachable: 'השרת לא זמין כרגע, מנסה שוב בשקט', denied: 'הקוד לא מורשה (להדליק "אירועי אווטאר" באתר ההגדרות)',
+  off: 'כבוי בשרת (PANEL_EVENTS)',
+}
+
+/** Brings the avatar and its feed in line with the settings: on, off, or a new address or code. */
+function applyAvatar() {
+  const s = store.settings()
+  if (!s.avatarEnabled) {
+    clearTimeout(avatarTimer)
+    clearInterval(avatarSyncTimer)
+    avatarSyncTimer = null
+    endAvatarDrag()
+    if (avatarWin && !avatarWin.isDestroyed()) avatarWin.destroy()
+    avatarWin = null
+    avatarState = null
+    avatarShown = 'idle'
+  } else {
+    if (!avatarState) avatarState = require('./src/avatar-state').createAvatarState({ onChange: sendAvatar })
+    makeAvatar()
+    // The app's mode changes in many places; a look five times a second follows all of them for next to nothing.
+    if (!avatarSyncTimer) avatarSyncTimer = setInterval(avatarSync, 200)
+    avatarSync()
+  }
+  applyAudioWatch()
+  const want = s.avatarEnabled && s.avatarEvents
+  const key = want ? `${s.avatarPanelUrl}\n${s.avatarCredential}` : ''
+  if (avatarFeed && key !== avatarFeedKey) { avatarFeed.stop(); avatarFeed = null }
+  if (want && !avatarFeed) {
+    avatarFeed = require('./src/avatar-feed').createAvatarFeed({
+      url: s.avatarPanelUrl, credential: s.avatarCredential, log,
+      onEvent: (ev) => avatarEvent({ type: ev.type }),
+      onStatus: (st) => { avatarStatus = st; refreshTray() },
+    })
+    avatarFeed.start()
+  }
+  avatarFeedKey = key
+  if (!avatarFeed) avatarStatus = 'stopped'
+}
+
+// ---- spoken WhatsApp messages ------------------------------------------------------------------------
+// WhatsApp Desktop's own Windows notification (who and what) said aloud by the voice on this PC. Off until turned on
+// (tray: "הקראת הודעות וואטסאפ"). The cloud is not part of it: the events feed carries types only, and this needs
+// content, so the pickup (src/wa-listen.js) and the voice (src/private-voice.js) both stay here, and it works with
+// HELPER's server down. The text is never logged, shown, kept or sent: app.log gets codes only ("wa: tts-failed").
+
+let waListen = null, waAnn = null
+let waAccess = 'off'               // off | starting | Allowed | Denied | Unspecified | Error
+let waLocked = false
+let waPauseUntil = 0
+let waLast = ''                    // the last decision's code, for the tray ("spoken", "quiet", "not-listed"…)
+const WA_PAUSE_MS = 30 * 60 * 1000
+
+const WA_ACCESS = {
+  off: 'כבוי', starting: 'מתחיל…', Allowed: 'פעיל', Denied: 'אין הרשאה לקרוא התראות (הגדרות Windows → פרטיות → התראות)',
+  Unspecified: 'מחכה לאישור של Windows', Error: 'Windows לא מאפשר לקרוא התראות במחשב הזה',
+}
+
+function waLockedNow() {
+  try { return waLocked || powerMonitor.getSystemIdleState(1) === 'locked' } catch { return waLocked }
+}
+
+function waFront() {
+  try {
+    const fg = win32.foreground()
+    return Boolean(fg && (/^WhatsApp/i.test(fg.app || '') || /^WhatsApp$/i.test(String(fg.title || '').trim())))
+  } catch { return false }
+}
+
+async function waSpeak(line) {
+  const sound = await require('./src/private-voice').privateOf(line, { voice: store.settings().waVoice === 'edge' ? 'edge' : 'windows' })
+  if (!sound) { log('wa: tts-failed'); return false }
+  if (mode !== 'idle') return false   // the owner started talking meanwhile: his ask comes first
+  bubble.webContents.send('play', sound)
+  setAvatarSpeaking(true)             // busy from now, before the bubble says "playing" (the next one waits)
+  avatarEvent({ type: 'message' })    // a wave, no content
+  return true
+}
+
+/** Brings listening in line with the setting: on (start the worker) or off (stop it, forget everything). */
+function applyWa() {
+  const s = store.settings()
+  if (!s.waAnnounce) {
+    if (waListen) waListen.stop()
+    waListen = null
+    waAnn = null
+    waAccess = 'off'
+    return
+  }
+  if (waListen) return
+  const wa = require('./src/wa-announce')
+  waAnn = wa.createAnnouncer({
+    settings: () => store.settings(),
+    env: {
+      running: (t) => t.running !== false,
+      locked: waLockedNow,
+      foreground: waFront,
+      busy: () => mode !== 'idle' || avatarSpeaking,
+      paused: () => Date.now() < waPauseUntil,
+    },
+    speak: waSpeak,
+    // A chat that showed a disappearing-message marker leaves the list (its name is already in the settings).
+    onDisappearing: (chat) => {
+      const st = store.settings()
+      const next = wa.editChats(st.waChats, { op: 'remove', name: chat })
+      if (next.length !== (st.waChats || []).length) { store.saveSettings({ waChats: next }); log('wa: chat-removed disappearing'); refreshTray() }
+    },
+    onDecision: (r) => { waLast = r },
+  })
+  waAccess = 'starting'
+  waListen = require('./src/wa-listen').createListener({
+    log,
+    onAccess: (st) => { waAccess = st; log('wa: access ' + String(st).replace(/[^A-Za-z]/g, '')); refreshTray() },
+    onReady: () => { if (waAnn) waAnn.reset() },
+    onToast: (t) => { if (waAnn) waAnn.toast(t).catch(() => log('wa: announce-error')) },
+  })
+  waListen.start()
+}
+
+/** "תקריא לי הודעות מדנה" and the rest → the answer in the bubble. */
+function waCommandRun(cmd) {
+  const s = store.settings()
+  const wa = require('./src/wa-announce')
+  if (cmd.op === 'hush') {
+    bubble.webContents.send('play', null)
+    waPauseUntil = Date.now() + WA_PAUSE_MS
+    return 'שקט. לא אקריא הודעות בחצי השעה הקרובה'
+  }
+  if (cmd.op === 'off') { store.saveSettings({ waAnnounce: false }); applyWa(); refreshTray(); return 'הפסקתי להקריא הודעות וואטסאפ' }
+  if (cmd.op === 'on') {
+    store.saveSettings({ waAnnounce: true }); waPauseUntil = 0; applyWa(); refreshTray()
+    return (s.waMode || 'allowlist') === 'all' || (s.waChats || []).length ? 'אקריא הודעות וואטסאפ חדשות' : 'אקריא הודעות, אבל עוד אין אף אחד ברשימה. תגיד "תקריא לי הודעות מ…"'
+  }
+  const next = wa.editChats(s.waChats, cmd)
+  if (cmd.op === 'add') {
+    store.saveSettings({ waChats: next, waAnnounce: true }); waPauseUntil = 0; applyWa(); refreshTray()
+    return `סגור. אקריא הודעות ${cmd.kind === 'group' ? 'בקבוצה ' : 'מ'}${cmd.name} (רק טקסט, בלי הודעות נעלמות או חד-פעמיות)`
+  }
+  const had = next.length !== (s.waChats || []).length
+  store.saveSettings({ waChats: next }); refreshTray()
+  return had ? `לא אקריא יותר הודעות מ${cmd.name}` : `${cmd.name} לא היה ברשימה`
+}
+
+function waMenu() {
+  const s = store.settings()
+  const chats = Array.isArray(s.waChats) ? s.waChats : []
+  const quiet = s.waQuiet || {}
+  const save = (patch) => { store.saveSettings(patch); applyWa(); refreshTray() }
+  return [
+    { label: 'להקריא הודעות נכנסות', type: 'checkbox', checked: Boolean(s.waAnnounce), click: (i) => { if (i.checked) waPauseUntil = 0; save({ waAnnounce: i.checked }) } },
+    { label: 'מצב: ' + (s.waAnnounce ? (WA_ACCESS[waAccess] || waAccess) : 'כבוי'), enabled: false },
+    { type: 'separator' },
+    { label: 'רק מאנשים וקבוצות שבחרתי', type: 'radio', checked: (s.waMode || 'allowlist') !== 'all', click: () => save({ waMode: 'allowlist' }) },
+    { label: 'מכולם', type: 'radio', checked: s.waMode === 'all', click: () => save({ waMode: 'all' }) },
+    { label: 'גם קבוצות (במצב "מכולם")', type: 'checkbox', checked: Boolean(s.waGroups), enabled: s.waMode === 'all', click: (i) => save({ waGroups: i.checked }) },
+    { label: `שעות שקט ${quiet.from || '22:00'}–${quiet.to || '07:00'}`, type: 'checkbox', checked: quiet.on !== false, click: (i) => save({ waQuiet: Object.assign({ from: '22:00', to: '07:00' }, quiet, { on: i.checked }) }) },
+    { label: 'קול', submenu: [
+      { label: 'Windows (במחשב בלבד)', type: 'radio', checked: s.waVoice !== 'edge', click: () => save({ waVoice: 'windows' }) },
+      { label: 'Edge (הטקסט נשלח לשירות הדיבור של Microsoft)', type: 'radio', checked: s.waVoice === 'edge', click: () => save({ waVoice: 'edge' }) },
+    ] },
+    { label: Date.now() < waPauseUntil ? 'להמשיך עכשיו (בשקט עד ' + new Date(waPauseUntil).toTimeString().slice(0, 5) + ')' : 'שקט לחצי שעה', click: () => { waPauseUntil = Date.now() < waPauseUntil ? 0 : Date.now() + WA_PAUSE_MS; refreshTray() } },
+    { type: 'separator' },
+    { label: chats.length ? 'ברשימה (לחיצה מוציאה):' : 'הרשימה ריקה. להוסיף: "תקריא לי הודעות מ…"', enabled: false },
+    ...chats.slice(0, 30).map((c) => ({ label: (c.kind === 'group' ? 'קבוצה: ' : '') + c.name, click: () => save({ waChats: require('./src/wa-announce').editChats(store.settings().waChats, { op: 'remove', name: c.name }) }) })),
+  ]
+}
 
 // ---- talking --------------------------------------------------------------------------------------
 
@@ -439,6 +817,24 @@ async function handleAsk(raw, { voice = false } = {}) {
 
   bubbleState({ mode: 'thinking', heard: raw })
 
+  // 0a. Spoken WhatsApp messages: "תקריא לי הודעות מדנה", "תפסיק להקריא הודעות", "תשתוק". No AI, no cloud.
+  const waCmd = mark ? null : require('./src/wa-announce').waCommand(raw)
+  if (waCmd) return finish(seq, raw, waCommandRun(waCmd), 'instant', started, false, waCmd.op === 'hush' ? null : voice)
+
+  // 0. The house and the whole system belong to HELPER on the cloud (Google Home, WhatsApp, its tools): no local
+  // brain in between. A plain "תכבה את האורות" runs there with no model either.
+  const toCloud = mark ? null : home.route(text)
+  if (toCloud === 'status') return systemCheck(seq, raw, started, voice)
+  if (toCloud === 'home') {
+    try {
+      const h = await brain.askHelper(raw, { voice: voice && store.settings().speakAnswers })
+      if (seq !== askSeq) return
+      return finish(seq, raw, h.reply || 'אין תשובה מהבית', 'cloud-home', started, false, voice, h.audio)
+    } catch (e) {
+      return finish(seq, raw, e.message || 'לא הצלחתי להגיע ל-HELPER בענן', 'cloud-home', started, true, voice)
+    }
+  }
+
   // 1. Instant commands: no AI.
   const parsed = mark ? null : instant.parse(text)
   if (parsed) {
@@ -523,7 +919,27 @@ async function handleAsk(raw, { voice = false } = {}) {
   }
 }
 
+/** "תבדוק את המערכת": this PC, the brain in use, the link to the cloud, and HELPER on the cloud on itself. */
+async function systemCheck(seq, raw, started, voice) {
+  bubbleState({ mode: 'thinking', heard: raw, steps: ['בודק את המחשב ואת החיבור לענן'] })
+  let pc = null
+  try { pc = await hands.run({ cmd: 'system' }) } catch { }
+  const cloud = await brain.pingHelper()
+  if (seq !== askSeq) return
+  const local = home.statusLine({ pc, brain: brain.brainName(), cloud })
+  if (!cloud.ok) return finish(seq, raw, local, 'status', started, true, voice)
+  bubbleState({ mode: 'thinking', heard: raw, steps: ['שואל את HELPER בענן מה המצב שלו'] })
+  try {
+    const h = await brain.askHelper('בדיקת מערכת מהמחשב: תגיד בקצרה מה המצב שלך עכשיו. וואטסאפ, הבית החכם, מייל ויומן, ומה לא עובד. בלי לשנות כלום.', { voice: false })
+    if (seq !== askSeq) return
+    return finish(seq, raw, local + '.\n' + (h.reply || 'הענן לא סיפר על עצמו'), 'status', started, false, voice)
+  } catch (e) {
+    return finish(seq, raw, local + '. ' + e.message, 'status', started, true, voice)
+  }
+}
+
 function stepLabel(ev) {
+  if (ev.name === 'ask_helper') return 'שואל את HELPER בענן'
   const i = ev.input || {}
   if (ev.name === 'Read') return /\.png$/i.test(i.file_path || '') ? 'מסתכל על המסך' : 'קורא קובץ'
   if (ev.name === 'WebSearch' || ev.name === 'search_web') return 'מחפש ברשת: ' + String(i.query || '').slice(0, 40)
@@ -545,8 +961,9 @@ let spokenAsk = -1
 
 async function finish(seq, heard, text, route, started, error = false, voice = false, audio = null, note = '') {
   if (seq !== askSeq) return
-  voice = voice || spokenAsk === seq
+  voice = voice === null ? false : voice || spokenAsk === seq
   store.log({ heard, route, ms: Date.now() - started, error, answer: String(text).slice(0, 200) })
+  if (route === 'brain' || route === 'cloud') avatarEvent({ type: 'task-end' })
   answer(text, { heard, route, error, note })
   refreshTray()   // the history in the tray menu
   // A spoken ask gets a spoken answer (errors too, so a failure is never silent).
@@ -719,6 +1136,8 @@ function startHotkeys() {
     }
   })
 
+  uIOhook.on('mouseup', () => endAvatarDrag())
+
   uIOhook.on('keyup', (e) => {
     const k = e.keycode
     down.delete(k)
@@ -746,6 +1165,11 @@ function startHotkeys() {
 
 // ---- tray ---------------------------------------------------------------------------------------
 
+function bridgeLabel() {
+  const b = require('./src/bridge').state()
+  return { on: 'גשר למחשב: פתוח', starting: 'גשר למחשב: נפתח…', 'no-plan': 'גשר למחשב: נסגר מיד (צריך מנוי Claude פעיל ו-‎/login)', missing: 'גשר למחשב: Claude Code לא מותקן', stopped: 'גשר למחשב: סגור', off: 'גשר למחשב: כבוי' }[b] || 'גשר למחשב: ' + b
+}
+
 function trayMenu() {
   const s = store.settings()
   const claude = brain.state()
@@ -763,6 +1187,18 @@ function trayMenu() {
     ] },
     { label: 'תשובות בקול של HELPER', type: 'checkbox', checked: s.speakAnswers, click: (i) => { store.saveSettings({ speakAnswers: i.checked }) } },
     { label: 'להפעיל עם Windows', type: 'checkbox', checked: s.startAtLogin, click: (i) => { store.saveSettings({ startAtLogin: i.checked }); applyLogin() } },
+    { label: 'לפתוח את הגשר למחשב עם HELPER', type: 'checkbox', checked: s.bridgeAtStart, click: (i) => { store.saveSettings({ bridgeAtStart: i.checked }); if (i.checked) require('./src/bridge').start({ exe: brain.claudeCommand(), cwd: path.join(ROOT, '..'), log }); refreshTray() } },
+    { label: bridgeLabel(), enabled: false },
+    { label: 'אווטאר על המסך', submenu: [
+      { label: 'להציג את האווטאר', type: 'checkbox', checked: s.avatarEnabled, click: (i) => { store.saveSettings({ avatarEnabled: i.checked }); applyAvatar(); refreshTray() } },
+      { label: 'אירועים מ-HELPER בענן (סוג בלבד, בלי תוכן)', type: 'checkbox', checked: s.avatarEvents, enabled: Boolean(s.avatarPanelUrl && s.avatarCredential), click: (i) => { store.saveSettings({ avatarEvents: i.checked }); applyAvatar(); refreshTray() } },
+      { label: 'אירועים: ' + (s.avatarEnabled && s.avatarEvents ? AVATAR_STATUS[avatarStatus] || avatarStatus : 'כבוי'), enabled: false },
+      { label: 'לרקוד לכל מוזיקה במחשב', type: 'checkbox', checked: s.avatarSystemMusic, enabled: s.avatarEnabled, click: (i) => { store.saveSettings({ avatarSystemMusic: i.checked }); applyAudioWatch(); refreshTray() } },
+      { label: 'לזוז לפי הקצב והעוצמה (בלי הקלטה)', type: 'checkbox', checked: s.avatarBeat, enabled: s.avatarEnabled && s.avatarSystemMusic, click: (i) => { store.saveSettings({ avatarBeat: i.checked }); applyAudioWatch(); refreshTray() } },
+      { label: 'עיצוב', submenu: avatarDesignMenu(avatarDesign()) },
+      { label: 'להחזיר לפינה', enabled: s.avatarEnabled, click: () => { store.saveSettings({ avatarPos: null }); if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } } },
+    ] },
+    { label: 'הקראת הודעות וואטסאפ', submenu: waMenu() },
     { type: 'separator' },
     { label: s.helperToken ? 'HELPER בענן: מחובר' : 'HELPER בענן: לא מחובר (connect.ps1)', enabled: false },
     { label: claude === 'signed-out' ? 'Claude Code: צריך ‎/login' : claude === 'missing' ? 'Claude Code: לא מותקן' : claude === 'ok' ? 'Claude Code: מחובר' : 'Claude Code: עוד לא נבדק', enabled: false },
@@ -834,6 +1270,7 @@ app.whenReady().then(async () => {
   speech.setVocabulary(apps.vocabulary())
   setTimeout(() => speech.setVocabulary(apps.vocabulary()), 6000)   // again once the Start menu list is fresh
   instant = require('./src/instant')
+  home = require('./src/home')
   hands = require('./src/hands')
   handsServer = require('./src/hands-server')
   brain = require('./src/brain')
@@ -883,10 +1320,28 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('dismiss', () => { endTyping(); mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('mark', (e, rect) => onMark(rect, e.sender))
-  ipcMain.on('voice-state', (e, s) => log('voice', String(s).slice(0, 80)))
+  ipcMain.on('voice-state', (e, s) => {
+    log('voice', String(s).slice(0, 80))
+    setAvatarSpeaking(/^playing/.test(String(s)))
+  })
   ipcMain.on('mics', (e, labels) => { if (Array.isArray(labels)) { knownMics = labels.map(String).filter(Boolean); refreshTray() } })
   ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); giveKeyboardBack(); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('pill-audio', (e, data) => onAudio(data))
+  // The avatar: over it the window catches the mouse (to drag it); anywhere else clicks go through.
+  ipcMain.on('avatar-hover', (e, on) => { if (avatarWin && !avatarWin.isDestroyed() && !avatarDrag) avatarWin.setIgnoreMouseEvents(!on, { forward: true }) })
+  ipcMain.on('avatar-drag', (e, phase) => { if (phase === 'start') startAvatarDrag(); else endAvatarDrag() })
+  ipcMain.on('avatar-click', () => avatarClick())
+  ipcMain.on('avatar-menu', () => avatarMenu())
+  // HELPER's hands on this PC: working while steps run; music HELPER started or stopped (play, media keys) makes
+  // the avatar dance. Counted always (cheap), shown only while the avatar is on.
+  hands.onStep((ev) => {
+    if (ev.phase === 'start') avatarSteps++
+    else avatarSteps = Math.max(0, avatarSteps - 1)
+    if (!avatarState) return
+    if (ev.phase === 'end' && ev.ok) { const m = require('./src/avatar-state').musicFromStep(ev); if (m !== null) avatarMusic(m) }
+    avatarSync()
+  })
+  screen.on('display-removed', () => { if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } })
 
   const icon = nativeImage.createFromPath(path.join(ROOT, 'ui', 'icon.png'))
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 16, height: 16 }))
@@ -901,6 +1356,21 @@ app.whenReady().then(async () => {
   // The speech model loads onto the graphics card in the background (a few seconds), so the first ask is quick.
   speech.start(ROOT, log).then(() => log('speech ready')).catch((e) => log('speech not started:', e.message))
   if (!speech.available(ROOT)) new Notification({ title: 'HELPER', body: 'מנוע הדיבור לא הורד: desktop\\vendor חסר. הכתיבה עובדת.' }).show()
+
+  // The bridge to this PC (Claude Code's Remote Control) opens with HELPER. Tray: "גשר למחשב".
+  if (store.settings().bridgeAtStart) {
+    require('./src/bridge').start({ exe: brain.claudeCommand(), cwd: path.join(ROOT, '..'), log })
+  }
+
+  // The avatar, only when it was turned on (tray: "אווטאר על המסך"). Off by default.
+  applyAvatar()
+
+  // Spoken WhatsApp messages, only when turned on. A locked PC says nothing, and nothing from before the unlock is
+  // said after it (no backlog).
+  powerMonitor.on('lock-screen', () => { waLocked = true; if (waAnn) waAnn.reset(); try { bubble.webContents.send('play', null) } catch { } })
+  powerMonitor.on('unlock-screen', () => { waLocked = false; if (waAnn) waAnn.reset() })
+  powerMonitor.on('resume', () => { if (waAnn) waAnn.reset() })
+  applyWa()
 
   log('started')
   if (!askFromArgs(process.argv)) {
@@ -948,8 +1418,12 @@ app.on('second-instance', (e, argv, cwd, extra) => {
 app.on('window-all-closed', (e) => e.preventDefault())
 app.on('before-quit', () => {
   try { require('./src/uia').stop() } catch { }
+  try { if (audioWatch) audioWatch.stop() } catch { }
   try { globalShortcut.unregisterAll() } catch { }
   try { hook && hook.uIOhook.stop() } catch { }
   speech && speech.stop()
   brain && brain.cancel()
+  try { require('./src/bridge').stop() } catch { }
+  try { avatarFeed && avatarFeed.stop() } catch { }
+  try { waListen && waListen.stop() } catch { }
 })
