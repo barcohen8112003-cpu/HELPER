@@ -31,6 +31,18 @@ const DEFAULTS = {
   avatarSystemMusic: false,
   avatarBeat: false,
   avatarMusicIgnore: [],       // app ids not to dance for, e.g. ["teams", "vlc"] (a part of the id is enough)
+  // Spoken WhatsApp messages (src/wa-announce.js): who and what, from WhatsApp Desktop's own Windows notification,
+  // said by the voice on this PC. Off until the owner turns it on (tray: "הקראת הודעות וואטסאפ"). Nothing goes to the
+  // cloud, and the text is never logged or kept.
+  waAnnounce: false,
+  waMode: 'allowlist',         // allowlist: only the chats below; all: every chat but waBlock (groups only with waGroups)
+  waChats: [],                 // [{name, kind: 'direct'|'group'}], the name as WhatsApp shows it ("תקריא לי הודעות מדנה")
+  waBlock: [],                 // names never said in "all" mode
+  waGroups: false,             // "all" mode: groups too
+  waQuiet: { on: true, from: '22:00', to: '07:00' },
+  waVoice: 'windows',          // windows: Windows' Hebrew voice, on this PC only; edge: edge-tts (Microsoft's online service)
+  waMaxChars: 160,
+  waPerMinute: 4,
 }
 
 function init(dataDir) {

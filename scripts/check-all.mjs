@@ -82,6 +82,7 @@ const TESTS = [
   'src/panel-events-selftest.js',
   'desktop/test/avatar-check.js',
   'desktop/test/audio-react-check.js',
+  'desktop/test/wa-announce-check.js',
   'src/bound-actions-selftest.js',
   'src/office-edit-selftest.js',
   'src/gmail-plus-selftest.js',
