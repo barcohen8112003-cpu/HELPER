@@ -1,8 +1,9 @@
 # HELPER live voice. LiveKit Agents owns the room, the turn detector and barge-in.
-# Groq Whisper hears Hebrew. Speech is ElevenLabs when HELPER has a voice, otherwise edge-tts.
+# Groq Whisper hears Hebrew. Speech is Edge-TTS unless TTS_PROVIDER=elevenlabs.
 # Every reply is a normal HELPER turn: same tools, same WhatsApp approval for send / pay / call / delete.
 # A phone call (LiveKit Cloud number) lands in the same agent. Only the owner's number gets HELPER.
 import asyncio
+import base64
 import os
 import random
 import re
@@ -13,7 +14,7 @@ from livekit.agents import Agent, AgentServer, AgentSession, JobProcess, functio
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.plugins import groq, silero
 
-from edge_pcm import edge_pcm, pcm_frames
+from edge_pcm import choose_voice, iter_pcm, pcm_frames, tts_provider
 
 HELPER = os.environ.get("HELPER_URL", "http://helper:3210").rstrip("/")
 SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
@@ -116,23 +117,79 @@ def split_ready(buf: str):
     return [p.strip() for p in parts[:-1] if p.strip()], parts[-1]
 
 
-async def speak_pcm(text: str) -> bytes:
-    voice = os.environ.get("EDGE_TTS_VOICE") or "he-IL-HilaNeural"
+def _bg(coro):
+    task = asyncio.ensure_future(coro)
+    task.add_done_callback(lambda t: t.exception() if t.done() and not t.cancelled() else None)
+    return task
+
+
+async def helper_pcm(text: str, fallback: bool = False) -> bytes:
+    # ElevenLabs audio, only when this process asked for it. Edge is synthesized here.
+    payload = {"text": text[:1500], "fallback": True} if fallback else {"text": text[:1500]}
     try:
-        status, _kind, body = await _post("/internal/live/tts", {"text": text[:1500]}, 60)
+        status, _kind, body = await _post("/internal/live/tts", payload, 60)
     except Exception:
-        return await edge_pcm(text, voice)
+        return b""
     if status == 200 and isinstance(body, (bytes, bytearray)) and body:
         return bytes(body)
-    if isinstance(body, dict) and body.get("voice"):
-        voice = str(body["voice"])
-    if isinstance(body, dict) and body.get("engine") == "empty":
-        return b""
-    return await edge_pcm(text, voice)
+    return b""
+
+
+async def post_face(text: str, pcm: bytes):
+    # The talking face is off unless FACE_ENABLED=on. Cap the clip so the wav fits the face limit.
+    raw = pcm[:1_800_000]
+    if len(raw) % 2:
+        raw = raw[:-1]
+    if len(raw) < 2 or not SECRET:
+        return
+    try:
+        await _post("/internal/live/face", {"text": text[:500], "pcm": base64.b64encode(raw).decode("ascii")}, 20)
+    except Exception:
+        pass
+
+
+async def stream_frames(text: str):
+    line = " ".join(str(text or "").split()).strip()
+    if not line:
+        return
+    voice, rate, _lang = choose_voice(line)
+    if tts_provider() == "elevenlabs":
+        pcm = await helper_pcm(line, fallback=False)
+        if pcm:
+            for frame in pcm_frames(pcm):
+                yield frame
+            return
+    collected = bytearray()
+    try:
+        async for chunk in iter_pcm(line, voice, rate):
+            if not chunk:
+                continue
+            collected.extend(chunk)
+            for frame in pcm_frames(chunk):
+                yield frame
+    except Exception as e:
+        print(f"edge-tts failed: {e}")
+    if collected:
+        _bg(post_face(line, bytes(collected)))
+        return
+    # Edge produced nothing. ElevenLabs was already tried when it is the selected provider.
+    if tts_provider() == "elevenlabs":
+        return
+    pcm = await helper_pcm(line, fallback=True)
+    if pcm:
+        for frame in pcm_frames(pcm):
+            yield frame
+
+
+async def speak_pcm(text: str) -> bytes:
+    parts = []
+    async for frame in stream_frames(text):
+        parts.append(bytes(frame.data))
+    return b"".join(parts)
 
 
 class HelperTTS(tts.TTS):
-    """The voice HELPER already has (ElevenLabs or edge), exposed as a LiveKit TTS.
+    """Edge-TTS (or ElevenLabs when TTS_PROVIDER asks), exposed as a LiveKit TTS.
 
     The session needs a TTS object for say() (the greeting) to work at all; the
     per-sentence parallel synthesis stays in HelperVoice.tts_node.
@@ -157,7 +214,8 @@ class _HelperChunks(tts.ChunkedStream):
             num_channels=1,
             mime_type="audio/pcm",
         )
-        output_emitter.push(await speak_pcm(self.input_text))
+        async for frame in stream_frames(self.input_text):
+            output_emitter.push(bytes(frame.data))
         output_emitter.flush()
 
 
@@ -189,13 +247,27 @@ class HelperVoice(Agent):
                 task.cancel()
 
     async def tts_node(self, text, model_settings):
-        # Each sentence is synthesized as soon as it is complete; two at a time, played in order.
+        # Each sentence starts as soon as it is complete. Two synthesize at once; playback stays in order.
+        # Frames are yielded as ffmpeg decodes them, not after the whole sentence is done.
         gate = asyncio.Semaphore(2)
         jobs: asyncio.Queue = asyncio.Queue()
+        tasks = []
 
-        async def synth(line: str) -> bytes:
-            async with gate:
-                return await speak_pcm(line)
+        def synth(line: str):
+            q: asyncio.Queue = asyncio.Queue()
+
+            async def run():
+                try:
+                    async with gate:
+                        async for frame in stream_frames(line):
+                            await q.put(frame)
+                except Exception as e:
+                    await q.put(e)
+                finally:
+                    await q.put(None)
+
+            tasks.append(asyncio.ensure_future(run()))
+            return q
 
         async def read():
             buf = ""
@@ -204,9 +276,9 @@ class HelperVoice(Agent):
                     buf += str(chunk)
                     ready, buf = split_ready(buf)
                     for line in ready:
-                        await jobs.put(asyncio.ensure_future(synth(line)))
+                        await jobs.put(synth(line))
                 if buf.strip():
-                    await jobs.put(asyncio.ensure_future(synth(buf.strip())))
+                    await jobs.put(synth(buf.strip()))
             finally:
                 await jobs.put(None)
 
@@ -216,14 +288,20 @@ class HelperVoice(Agent):
                 job = await jobs.get()
                 if job is None:
                     break
-                for frame in pcm_frames(await job):
-                    yield frame
+                while True:
+                    item = await job.get()
+                    if item is None:
+                        break
+                    if isinstance(item, Exception):
+                        print(f"tts {item}")
+                        break
+                    yield item
         finally:
             reader.cancel()
+            for task in tasks:
+                task.cancel()
             while not jobs.empty():
-                job = jobs.get_nowait()
-                if job is not None:
-                    job.cancel()
+                jobs.get_nowait()
 
 
 REALTIME_INSTRUCTIONS = """You are HELPER, Naor's personal assistant, on a live phone call with him. You ARE Helper: never say you are a different assistant, a model, or that you "ask" someone else.

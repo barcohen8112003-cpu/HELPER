@@ -1,10 +1,12 @@
 // node src/pc-bridge-selftest.js
 // The cloud routes computer actions to a home bridge: signature, replay, a real loopback socket,
-// a disconnected PC, and COMPUTER_MODE=ask refusing a state change before anything is sent.
+// a disconnected PC, COMPUTER_MODE=ask refusing a state change before anything is sent,
+// reconnect backoff, and the Windows logon-task installer.
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 import winPath from 'node:path/win32'
+import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { WebSocket } from 'ws'
 
@@ -276,6 +278,192 @@ try {
   ok(!bridge.bridgeConnected(), 'the bridge is marked disconnected after the socket closes')
 } finally {
   await bridge.stopPcBridgeServer()
+}
+
+// ── reconnect: backoff, no give-up, secret stays out of the log ─────────────
+{
+  ok(bridge.BRIDGE_BACKOFF_START_MS === 2000 && bridge.BRIDGE_BACKOFF_MAX_MS === 60000, 'backoff starts at 2s and caps at a minute')
+  ok(bridge.BRIDGE_PING_MS >= 20000 && bridge.BRIDGE_PING_MS <= 60000, 'a busy desktop is not treated as a dead server')
+  ok(
+    bridge.nextBridgeDelay(2000) === 4000 && bridge.nextBridgeDelay(50000) === 60000 && bridge.nextBridgeDelay(60000) === 60000,
+    'the wait doubles and then stays at a minute',
+  )
+  ok(bridge.scrubSecret('bad super-secret-value-99 here', 'super-secret-value-99') === 'bad [secret] here', 'the secret is stripped from a log line')
+  ok(bridge.scrubSecret('status ok', 'ok') === 'status ok', 'a short token is not treated as the secret')
+
+  const logs = []
+  const spun = await bridge.runBridgeLoop({
+    maxCycles: 2,
+    sleep: async () => {},
+    connect: async () => { throw new Error('refused super-secret-value-99') },
+    onRetry: (e) => logs.push(bridge.scrubSecret(e.message, 'super-secret-value-99')),
+  })
+  ok(spun.cycles === 2 && logs.length === 1 && logs[0] === 'refused [secret]', 'one failed dial is not the end, and the secret stays out of the retry log')
+
+  const waits = []
+  const many = await bridge.runBridgeLoop({
+    maxCycles: 8,
+    sleep: async (ms) => { waits.push(ms) },
+    connect: async () => { throw new Error('down') },
+  })
+  ok(
+    many.cycles === 8 && JSON.stringify(waits) === JSON.stringify([2000, 4000, 8000, 16000, 32000, 60000, 60000]),
+    'the bridge keeps retrying and the wait caps at one minute',
+  )
+
+  let n = 0
+  const resetWaits = []
+  await bridge.runBridgeLoop({
+    maxCycles: 4,
+    sleep: async (ms) => { resetWaits.push(ms) },
+    connect: async () => {
+      n += 1
+      if (n === 2) return { closed: Promise.resolve() }
+      throw new Error('down')
+    },
+  })
+  ok(JSON.stringify(resetWaits) === JSON.stringify([2000, 2000, 4000]), 'a connection that came up resets the backoff before the next drop')
+
+  const src = fs.readFileSync(new URL('./pc-bridge.js', import.meta.url), 'utf8')
+  ok(src.includes('stopBeat = watchBridgeSocket(ws)'), 'the home process closes a quiet socket so the loop can dial again')
+  ok(src.includes('scrubSecret(line, cfg.secret)'), 'home-bridge logs go through the secret scrub')
+
+  function fakeSocket({ answer } = {}) {
+    const listeners = {}
+    return {
+      readyState: 1,
+      pings: 0,
+      terminated: false,
+      on(ev, fn) { (listeners[ev] ||= []).push(fn) },
+      once(ev, fn) { this.on(ev, fn) },
+      off(ev, fn) { listeners[ev] = (listeners[ev] || []).filter((f) => f !== fn) },
+      ping() {
+        this.pings += 1
+        if (answer) for (const fn of listeners.pong || []) fn()
+      },
+      terminate() {
+        this.terminated = true
+        this.readyState = 3
+        for (const fn of [...(listeners.close || [])]) fn()
+      },
+    }
+  }
+  {
+    let dead = 0
+    const quiet = fakeSocket()
+    const stopQuiet = bridge.watchBridgeSocket(quiet, { pingMs: 20, onDead: () => { dead += 1 } })
+    try {
+      await new Promise((r) => setTimeout(r, 400))
+      ok(quiet.terminated && dead === 1 && quiet.pings >= 1, 'a socket that never answers a ping is closed so the bridge can reconnect')
+    } finally {
+      stopQuiet()
+    }
+  }
+  {
+    let dead = 0
+    const live = fakeSocket({ answer: true })
+    const stopLive = bridge.watchBridgeSocket(live, { pingMs: 20, onDead: () => { dead += 1 } })
+    try {
+      await new Promise((r) => setTimeout(r, 400))
+      ok(!live.terminated && dead === 0 && live.pings >= 2, 'pings that are answered keep the bridge connected')
+    } finally {
+      stopLive()
+    }
+  }
+
+  await bridge.stopPcBridgeServer()
+  const again = bridge.startPcBridgeServer({ port: 0, host: '127.0.0.1' })
+  try {
+    const addr = await again.ready
+    const url = `ws://127.0.0.1:${addr.port}/pc`
+    let attempts = 0
+    const delays = []
+    const result = await bridge.runBridgeLoop({
+      maxCycles: 3,
+      startMs: 30,
+      maxMs: 200,
+      sleep: async (ms) => {
+        delays.push(ms)
+        await new Promise((r) => setTimeout(r, ms))
+      },
+      connect: async () => {
+        attempts += 1
+        if (attempts === 2) throw new Error('ECONNREFUSED')
+        const link = await bridge.connectHome({ url, secret: SECRET, handlers: { status: () => 'up' } })
+        setTimeout(() => { try { link.close() } catch { /* already closed */ } }, 40)
+        return { closed: new Promise((resolve) => link.ws.once('close', resolve)) }
+      },
+    })
+    ok(attempts === 3 && result.cycles === 3, 'a drop and a refused connection are both retried until the next dial')
+    ok(delays[0] === 30 && delays[1] === 60, 'after a live session the next wait starts over, then grows if the server is still down')
+  } finally {
+    await bridge.stopPcBridgeServer()
+  }
+}
+
+// ── Windows: hidden logon task, same config, no secret in the scripts ──────
+{
+  const relay = bridge.homeRelayDir()
+  const repoRoot = path.join(relay, '..')
+  const read = (name) => {
+    const text = fs.readFileSync(path.join(relay, name), 'utf8')
+    return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text
+  }
+  const bom = (name) => {
+    const b = fs.readFileSync(path.join(relay, name))
+    return b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF
+  }
+  const install = read('install-bridge-service.ps1')
+  const service = read('bridge-service.ps1')
+  const vbs = read('bridge-hidden.vbs')
+  const bat = read('start-bridge.bat')
+  const ignore = fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf8')
+
+  ok(bom('install-bridge-service.ps1') && bom('bridge-service.ps1'), 'the PowerShell scripts are UTF-8 with BOM so Windows PowerShell 5.1 reads the Hebrew')
+  ok(install.includes("TaskName = 'HELPER PC Bridge'"), 'the task has a stable name')
+  ok(install.includes('-AtLogOn'), 'the task starts when the user logs on')
+  ok(/-LogonType Interactive/.test(install) && /-RunLevel Limited/.test(install), 'the task runs in the interactive user session')
+  ok(!/S4U/.test(install) && !/LocalSystem/.test(install) && !/RunLevel Highest/.test(install), 'the task is not a SYSTEM or highest-privileges service')
+  ok(install.includes('-AllowStartIfOnBatteries') && install.includes('-DontStopIfGoingOnBatteries'), 'a laptop on battery still runs the bridge')
+  ok(install.includes('-MultipleInstances IgnoreNew'), 'a second logon does not start a second bridge')
+  ok(install.includes('-RestartCount 999'), 'if the wrapper dies, Task Scheduler starts it again')
+  ok(/ExecutionTimeLimit/.test(install) && /PT0S/.test(install) && /\[TimeSpan\]::Zero/.test(install), 'the task is not capped at three days')
+  const cfgCall = install.indexOf('if (-not (Test-BridgeConfig')
+  const stopCall = install.indexOf('Stop-ScheduledTask')
+  ok(cfgCall !== -1 && stopCall !== -1 && cfgCall < stopCall, 'a bad config does not stop a bridge that is already running')
+  ok(install.includes('Register-ScheduledTask') && install.includes('-Force'), 'install can be run again')
+  ok(install.includes('-Uninstall') && install.includes('Unregister-ScheduledTask'), 'uninstall removes the task')
+  ok(install.includes('pc-bridge.config.json') && install.includes('paste-the-same') && install.includes('YOUR_SERVER'), 'install uses the existing config and rejects the placeholder')
+  ok(!/PC_BRIDGE_SECRET\s*=/.test(install) && !/Set-Content[\s\S]{0,120}pc-bridge\.config\.json/.test(install), 'install does not invent or write a secret')
+  ok(!/Write-Host[^\n]*\$sec\b/.test(install) && !/Write-Host[^\n]*\$cfg\b/.test(install), 'install does not print the secret or the config object')
+  ok(install.includes('*\\bridge-service.ps1*'), 'stopping the service does not match the installer script name')
+  ok(install.includes('בלי חלון') && install.includes('התחברות'), 'the installer tells the owner, in Hebrew, that there is no window and that it starts at logon')
+  ok(install.includes('wscript.exe') && vbs.includes('sh.Run cmd, 0, True') && vbs.includes('WindowStyle Hidden'), 'the launcher hides the console')
+  ok(service.includes('CreateNoWindow = $true') && service.includes('pc-bridge.mjs'), 'the service starts node with no console')
+  ok(service.includes('while ($true)') && service.includes('Start-Sleep -Seconds 15'), 'if node exits, the service starts it again')
+  ok(service.includes('חלון הגשר כבר פתוח'), 'an open debug window is left alone instead of opening a second connection')
+  const marker = service.indexOf('# webtop-once-before-loop\n    Start-WebtopOnce')
+  const loopAt = service.indexOf('while ($true)', marker === -1 ? 0 : marker)
+  ok(marker !== -1 && loopAt > marker && !service.slice(loopAt).includes('Start-WebtopOnce'), 'Webtop opens once when the service starts, not on every reconnect')
+  ok(service.includes('WEBTOP_URL') && service.includes('webtop-browser.bat'), 'a configured Webtop window still comes up with the bridge')
+  ok(service.includes('Hide-Secret') && !/Write-Host/.test(service), 'the hidden service does not print, and log lines can drop the secret')
+  ok(!service.includes('paste-the-same') && !/secret\s*=\s*['"][^'"]{8,}['"]/.test(service), 'the service script does not embed a secret')
+  ok(bat.includes(':loop') && bat.includes('timeout /t 15') && bat.includes('node home-relay\\pc-bridge.mjs') && bat.includes('install-bridge-service.ps1'), 'the visible window remains for a manual run and points at the background task')
+  ok(ignore.includes('home-relay/pc-bridge.config.json'), 'the real bridge config stays gitignored')
+  ok(fs.readFileSync(path.join(relay, 'pc-bridge.config.example.json'), 'utf8').includes('paste-the-same-PC_BRIDGE_SECRET'), 'the example config is still only a placeholder')
+
+  let pwsh = process.env.PWSH || ''
+  if (!pwsh || !fs.existsSync(pwsh)) {
+    const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['pwsh'], { encoding: 'utf8' })
+    pwsh = (which.stdout || '').trim().split(/\r?\n/).find((line) => line && fs.existsSync(line)) || ''
+  }
+  if (pwsh) {
+    const files = ['install-bridge-service.ps1', 'bridge-service.ps1'].map((f) => path.join(relay, f).replace(/'/g, "''"))
+    const run = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command',
+      `$bad = @(); foreach ($f in @('${files.join("','")}')) { $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$t, [ref]$e); if ($e.Count) { $bad += "$($f): $($e[0].Message)" } }; $bad -join '; '`,
+    ], { encoding: 'utf8' })
+    ok(run.status === 0 && !(run.stdout || '').trim(), `the installer and the service parse${(run.stdout || '').trim() ? `: ${(run.stdout || '').trim()}` : ''}`)
+  }
 }
 
 console.log(`${passed} בדיקות עברו, ${failed} נכשלו`)

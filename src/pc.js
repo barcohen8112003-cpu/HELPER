@@ -358,29 +358,83 @@ $timer.Start()
   return `טיימר ל-${mins} דקות ("${label}") הופעל על המסך`
 }
 
-// Says text out loud on the PC's speakers, in the assistant's ElevenLabs voice, or Windows' own voice without a key.
-export async function speakOnPc(text) {
-  if (remoteActive()) return remoteCall('speakOnPc', [text])
-  const { apiKey, voiceId, ttsModel } = config.elevenlabs
-  if (apiKey && voiceId) {
-    const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_64`, {
-      method: 'POST',
-      headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: String(text).slice(0, 1000), model_id: ttsModel }),
-      signal: AbortSignal.timeout(60000),
-    })
-    if (res.ok) {
-      const file = path.join(os.tmpdir(), `helper-say-${Date.now()}.mp3`)
-      fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()))
-      await ps(`Add-Type -AssemblyName PresentationCore
+async function playMp3File(file) {
+  await ps(`Add-Type -AssemblyName PresentationCore
 $p = New-Object System.Windows.Media.MediaPlayer; $p.Open([uri]${lit(file)}); $p.Volume = 1
 $n = 0; while (-not $p.NaturalDuration.HasTimeSpan -and $n -lt 50) { Start-Sleep -Milliseconds 100; $n++ }
-$p.Play(); Start-Sleep -Milliseconds ([int]$p.NaturalDuration.TimeSpan.TotalMilliseconds + 300); $p.Close()`, 120000)
-      fs.rmSync(file, { force: true })
-      return 'נאמר ברמקולים'
+$p.Play(); if ($p.NaturalDuration.HasTimeSpan) { Start-Sleep -Milliseconds ([int]$p.NaturalDuration.TimeSpan.TotalMilliseconds + 300) } else { Start-Sleep -Seconds 3 }; $p.Close()`, 120000)
+}
+
+// Plays an MP3 the cloud already synthesized (Edge-TTS by default). The PC does not call a speech API.
+export async function playAudio(audio) {
+  if (remoteActive()) return remoteCall('playAudio', [Buffer.isBuffer(audio) ? audio : Buffer.from(String(audio || ''), 'base64')])
+  const buf = Buffer.isBuffer(audio) ? audio : Buffer.from(String(audio || ''), 'base64')
+  if (buf.length < 64) throw new Error('אין שמע לנגן')
+  const file = path.join(os.tmpdir(), `helper-say-${Date.now()}.mp3`)
+  fs.writeFileSync(file, buf)
+  try {
+    await playMp3File(file)
+  } finally {
+    fs.rmSync(file, { force: true })
+  }
+  return 'נאמר ברמקולים'
+}
+
+// Says text on the PC speakers. In the cloud the audio is synthesized here, then only the bytes are played at home.
+export async function speakOnPc(text) {
+  const line = String(text || '').slice(0, 1000)
+  if (!line.trim()) return 'אין מה לומר'
+  if (remoteActive()) {
+    try {
+      const { speakMp3 } = await import('./media.js')
+      const mp3 = await speakMp3(line)
+      if (mp3?.length) {
+        try {
+          return await remoteCall('playAudio', [mp3])
+        } catch (e) {
+          if (!/לא מוכרת/.test(String(e.message || ''))) throw e
+        }
+      }
+    } catch (e) {
+      console.log(`[pc] ${e.message}`)
+    }
+    return remoteCall('speakOnPc', [line])
+  }
+  const { ttsProvider } = await import('./tts.js')
+  if (ttsProvider() === 'elevenlabs') {
+    const { apiKey, voiceId, ttsModel } = config.elevenlabs
+    if (apiKey && voiceId) {
+      try {
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_64`, {
+          method: 'POST',
+          headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: line, model_id: ttsModel }),
+          signal: AbortSignal.timeout(60000),
+        })
+        if (res.ok) {
+          const file = path.join(os.tmpdir(), `helper-say-${Date.now()}.mp3`)
+          fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()))
+          try {
+            await playMp3File(file)
+          } finally {
+            fs.rmSync(file, { force: true })
+          }
+          return 'נאמר ברמקולים'
+        }
+      } catch (e) {
+        console.log(`[pc] ${e.message}`)
+      }
+    }
+  } else {
+    try {
+      const { speakMp3 } = await import('./media.js')
+      const mp3 = await speakMp3(line)
+      if (mp3?.length) return playAudio(mp3)
+    } catch (e) {
+      console.log(`[pc] ${e.message}`)
     }
   }
-  await ps(`Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(${lit(text)})`, 120000)
+  await ps(`Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(${lit(line)})`, 120000)
   return 'נאמר ברמקולים (בקול של Windows)'
 }
 
@@ -480,6 +534,9 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   public static string Text(IntPtr h) { StringBuilder s = new StringBuilder(512); GetWindowText(h, s, 512); return s.ToString(); }
   public static string Cls(IntPtr h) { StringBuilder s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
   public static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
@@ -495,8 +552,9 @@ function WinInfo($h) {
 
 // The name and kind of a UI Automation element, or of the nearest named ancestor that is still a control (a window's
 // or pane's own title is not the control's label). Never a value.
+// WindowsBase holds System.Windows.Point (FromPoint); without it every inspectAt on real Windows loses its element.
 const UIA = `
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
 function ElemInfo($e) {
   $o = @{ label = ''; role = ''; password = $false; enabled = $true }
   if (-not $e) { return $o }
@@ -567,15 +625,24 @@ $o | ConvertTo-Json -Compress -Depth 4`
 }
 
 export function focusWindowScript(query) {
-  return `${INPUT}${WIN}
+  return `${INPUT}${WIN}${UIA}
 $q = ${lit(String(query || '').slice(0, 120))}
 $p = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and ($_.MainWindowTitle -like "*$q*" -or $_.ProcessName -like "*$q*") } | Select-Object -First 1
 if (-not $p) { @{ ok = $false; reason = 'none' } | ConvertTo-Json -Compress; return }
 $h = $p.MainWindowHandle
 if ([W]::IsIconic($h)) { [W]::ShowWindow($h, 9) | Out-Null }
-[U]::Tap(0x12)
-[W]::SetForegroundWindow($h) | Out-Null
+# Share input with the window that has the keyboard now, so Windows lets this script move the foreground. No key is
+# pressed: an Alt tap (the old way) opened the menu bar in Notepad and the first typed letter went to the menu.
+$me = [W]::GetCurrentThreadId(); $pid0 = [uint32]0
+$them = [W]::GetWindowThreadProcessId([W]::GetForegroundWindow(), [ref]$pid0)
+$joined = ($them -ne 0 -and $them -ne $me) -and [W]::AttachThreadInput($me, $them, $true)
+try { [W]::BringWindowToTop($h) | Out-Null; [W]::SetForegroundWindow($h) | Out-Null } finally { if ($joined) { [W]::AttachThreadInput($me, $them, $false) | Out-Null } }
 Start-Sleep -Milliseconds 250
+if ([W]::GetForegroundWindow() -ne $h) {
+  # Last resort: the Alt tap, then close the menu it may have opened, so typing goes to the document.
+  [U]::Tap(0x12); [W]::SetForegroundWindow($h) | Out-Null; Start-Sleep -Milliseconds 200
+  try { $f = [System.Windows.Automation.AutomationElement]::FocusedElement; if ($f -and @('ControlType.MenuItem', 'ControlType.MenuBar', 'ControlType.Menu') -contains $f.Current.ControlType.ProgrammaticName) { [U]::Tap(0x1B); Start-Sleep -Milliseconds 100 } } catch { }
+}
 $now = [W]::GetForegroundWindow()
 @{ ok = ($now -eq $h); window = (WinInfo $now) } | ConvertTo-Json -Compress -Depth 4`
 }
@@ -591,6 +658,7 @@ public static class K {
   [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public UNION u; }
   [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
   static INPUT Key(ushort vk, ushort scan, uint flags) { INPUT i = new INPUT(); i.type = 1; i.u.ki.wVk = vk; i.u.ki.wScan = scan; i.u.ki.dwFlags = flags; return i; }
+  public const int TYPE_GAP_MS = 12;
   public static int Type(string s) {
     int sent = 0;
     for (int at = 0; at < s.Length; at++) {
@@ -601,7 +669,10 @@ public static class K {
       else if (c == '\\t') { pair = new INPUT[] { Key(0x09, 0, 0), Key(0x09, 0, 2) }; }
       else { pair = new INPUT[] { Key(0, c, 4), Key(0, c, 6) }; }
       sent += (int)SendInput((uint)pair.Length, pair, Marshal.SizeOf(typeof(INPUT)));
-      if (at % 40 == 39) { Thread.Sleep(15); }
+      // A pause after every character (not only every 40th): when VK_PACKET messages pile up, some apps (Windows 11
+      // Notepad, seen on a real PC) read a later packet's character for earlier ones ("123 " arrived as "HHHH"). The
+      // two halves of a surrogate pair go out back to back.
+      if (!(Char.IsHighSurrogate(c) && at + 1 < s.Length)) { Thread.Sleep(TYPE_GAP_MS); }
     }
     return sent;
   }

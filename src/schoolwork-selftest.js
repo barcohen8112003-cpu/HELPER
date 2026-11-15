@@ -14,6 +14,22 @@ process.env.HELPER_ENV_FILE = path.join(tmp, '.env')
 process.env.HELPER_OFFLINE = '1'
 for (const k of ['SCHOOLWORK', 'SCHOOLWORK_GROUPS', 'SCHOOLWORK_DAILY_TIME', 'SCHOOLWORK_TZ', 'WHATSAPP_GROUPS', 'GROUPS_AUTO_ADD', 'WEBTOP_ALERTS']) delete process.env[k]
 
+// classroomRound's deadline reminders call new Date(), not the instant this file passes in.
+// Pin that clock to Tuesday 10 Nov 2026 12:00 in Israel (the same instant as T0 below). The
+// fixtures are due on later days, so an evening-before or due-morning reminder cannot fire
+// just because the suite happens to run on that evening. Explicit dates passed to Date still parse.
+const RealDate = Date
+const PINNED_NOW = RealDate.parse('2026-11-10T10:00:00Z')
+class PinnedDate extends RealDate {
+  constructor(...args) {
+    super(...(args.length ? args : [PINNED_NOW]))
+  }
+  static now() {
+    return PINNED_NOW
+  }
+}
+globalThis.Date = PinnedDate
+
 let ok = true
 const check = (name, cond, info = '') => {
   console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${info && !cond ? '  ' + String(info).slice(0, 600) : ''}`)

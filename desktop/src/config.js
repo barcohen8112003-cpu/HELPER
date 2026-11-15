@@ -50,4 +50,7 @@ module.exports = {
   get elevenLabsApiKey() { return get('ELEVENLABS_API_KEY') },
   get elevenLabsVoiceId() { return get('ELEVENLABS_VOICE_ID', 'JIxTgeeS5w0UQyBxEnrl') },
   get elevenLabsModel() { return get('ELEVENLABS_TTS_MODEL', 'eleven_multilingual_v2') },
+  get ttsProvider() { return (get('TTS_PROVIDER') || '').trim().toLowerCase() },
+  get edgeVoice() { return get('EDGE_TTS_VOICE', 'he-IL-HilaNeural') },
+  get edgeRate() { return get('EDGE_TTS_RATE', '+0%') },
 }

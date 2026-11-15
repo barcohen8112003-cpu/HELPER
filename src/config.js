@@ -150,7 +150,9 @@ const build = () => ({
     ttsModel: env('TTS_MODEL'),
     ttsVoice: env('TTS_VOICE', 'alloy'),
   },
-  // When a key is set, ElevenLabs handles both directions of voice and the settings above are ignored.
+  // Speech defaults to Edge-TTS (src/tts.js) even when this key is set. TTS_PROVIDER=elevenlabs
+  // selects it for speaking, and a failed Edge request falls back here only when the key and voice id are set.
+  // The key still turns on ElevenLabs transcription when STT_MODEL is empty, and image, video, and the old phone agent.
   elevenlabs: {
     apiKey: env('ELEVENLABS_API_KEY'),
     voiceId: env('ELEVENLABS_VOICE_ID'),

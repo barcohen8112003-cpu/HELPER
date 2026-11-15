@@ -1,11 +1,12 @@
-// HELPER's spoken answers: direct ElevenLabs high-quality Hebrew voice (Amit),
-// with persistent disk cache for 0ms replay and fast fallback to Windows' Hebrew voice (Microsoft Asaf).
+// Spoken answers. The cloud HELPER speaks with Edge-TTS. ElevenLabs is used here only when
+// TTS_PROVIDER=elevenlabs. Otherwise: the cloud voice, then a local edge-tts if it is installed,
+// then Windows' Hebrew voice.
 'use strict'
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
-const { execFile } = require('child_process')
+const { execFile, execFileSync } = require('child_process')
 const config = require('./config')
 const brain = require('./brain')
 
@@ -95,30 +96,77 @@ function local(text) {
   })
 }
 
+function wantsEleven() {
+  return ['eleven', 'elevenlabs', '11labs'].includes(config.ttsProvider)
+}
+
+function hasEdge() {
+  if (hasEdge.yes !== undefined) return hasEdge.yes
+  const cmd = process.platform === 'win32' ? 'where.exe' : 'which'
+  try {
+    execFileSync(cmd, ['edge-tts'], { stdio: 'ignore', timeout: 3000 })
+    hasEdge.yes = true
+  } catch {
+    hasEdge.yes = false
+  }
+  return hasEdge.yes
+}
+
+// Local edge-tts, only when the cloud is unreachable. Hebrew uses EDGE_TTS_VOICE; other letters use an English neural voice.
+function localEdge(text) {
+  if (!hasEdge()) return Promise.resolve(null)
+  const voice = /[\u0590-\u05FF]/.test(text) ? (config.edgeVoice || 'he-IL-HilaNeural') : 'en-US-AriaNeural'
+  const rate = config.edgeRate || '+0%'
+  const hash = crypto.createHash('md5').update(`edge:${voice}:${rate}:${text}`).digest('hex')
+  const file = path.join(cacheDir, `${hash}.mp3`)
+  if (fs.existsSync(file)) {
+    try {
+      const cached = fs.readFileSync(file)
+      if (cached.length > 500) return Promise.resolve(cached)
+    } catch {}
+  }
+  return new Promise((resolve) => {
+    execFile('edge-tts', ['--voice', voice, '--rate', rate, '--text', text, '--write-media', file],
+      { timeout: 20000, windowsHide: true }, (err) => {
+        if (err) return resolve(null)
+        try {
+          const buf = fs.readFileSync(file)
+          resolve(buf.length > 500 ? buf : null)
+        } catch { resolve(null) }
+      })
+  })
+}
+
 /**
  * The answer as audio: {b64, mime}.
- * Uses ElevenLabs with instant cache, falls back to Windows SAPI if offline or timed out.
+ * Cloud Edge-TTS first. ElevenLabs only when TTS_PROVIDER=elevenlabs. Windows SAPI is the last resort.
  */
 async function of(text, ready = null) {
   const say = speakable(text)
   if (!say) return null
   if (ready) return { b64: ready, mime: 'audio/mpeg' }
 
-  // 1. Direct ElevenLabs with cache:
-  try {
-    const mp3 = await elevenLabs(say)
-    if (mp3) return { b64: mp3.toString('base64'), mime: 'audio/mpeg' }
-  } catch {}
+  if (wantsEleven()) {
+    try {
+      const mp3 = await elevenLabs(say)
+      if (mp3) return { b64: mp3.toString('base64'), mime: 'audio/mpeg' }
+    } catch {}
+  }
 
-  // 2. Cloud bridge if connected:
   try {
-    const mp3 = await Promise.race([brain.voiceOf(say), new Promise((r) => setTimeout(() => r(null), 2000))])
+    const mp3 = await Promise.race([brain.voiceOf(say), new Promise((r) => setTimeout(() => r(null), 8000))])
     if (mp3 && mp3.length > 500) return { b64: mp3.toString('base64'), mime: 'audio/mpeg' }
   } catch {}
 
-  // 3. Fallback to Windows SAPI (Asaf):
+  if (!wantsEleven()) {
+    try {
+      const mp3 = await localEdge(say)
+      if (mp3) return { b64: mp3.toString('base64'), mime: 'audio/mpeg' }
+    } catch {}
+  }
+
   const wav = await local(say)
   return wav ? { b64: wav.toString('base64'), mime: 'audio/wav' } : null
 }
 
-module.exports = { of, speakable, local, elevenLabs }
+module.exports = { of, speakable, local, elevenLabs, localEdge }

@@ -298,6 +298,18 @@ const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'ask_helper',
+      description: 'Hands a request to HELPER on the cloud, which has all of HELPER\'s tools: the house (lights, TV, air conditioner, blinds via Google Home), WhatsApp, mail, calendar, reminders, Webtop, flights, news, its memory of the user. Use it for anything that is not on this PC. Pass the request in the user\'s own words (Hebrew). Its answer is what to tell the user.',
+      parameters: {
+        type: 'object',
+        properties: { request: { type: 'string', description: 'The request, in the user\'s words' } },
+        required: ['request']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'latest_download_file',
       description: 'Finds or opens the most recently downloaded file in Downloads folder.',
       parameters: {
@@ -356,6 +368,8 @@ async function executeTool(name, args) {
       return await hands.run({ cmd: 'goto', args })
     case 'scroll_window':
       return await hands.run({ cmd: 'scroll', args })
+    case 'ask_helper':
+      return await hands.run({ cmd: 'helper', args: { question: args.request } })
     case 'latest_download_file':
       return await hands.run({ cmd: 'latest_download', args: { open: args.open } })
     default:
@@ -376,6 +390,7 @@ function systemPrompt(extra = {}) {
     'יש לך שליטה מלאה במחשב דרך הכלים (פתיחת אפליקציות, סידור חלונות, ווליום, יוטיוב, חיפוש, לוח העתקות, מידע מערכת, הרצת פקודות).',
     'בתוך חלון קיים: look_window כדי לראות מה יש בו, ואז press_control / fill_field לפי השמות. שאלה על מה שכתוב בחלון: read_window. אתר: goto_site בדפדפן הפתוח, טאב קיים: switch_tab.',
     'משימה מורכבת: תכנן את כל הצעדים ובצע אותם ברצף, ואז משפט קצר על מה שעשית.',
+    'כל מה שלא על המחשב הזה: ask_helper. הבית (אורות, טלוויזיה, מזגן, תריסים), וואטסאפ, מייל, יומן, תזכורות, וובטופ, טיסות, חדשות, ומה שהוא סיפר לך פעם. שם יש את כל הכלים של HELPER. אל תגיד שאין לך גישה לזה.',
     `זמן נוכחי: ${timeStr}.`,
     extra.foreground ? `חלון פעיל כרגע: ${extra.foreground}` : '',
     extra.windows ? `חלונות פתוחים:\n${extra.windows}` : '',

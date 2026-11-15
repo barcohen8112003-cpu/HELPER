@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
 import { AccessToken, RoomAgentDispatch, RoomConfiguration, TokenVerifier } from 'livekit-server-sdk'
+import { hebrewVoice, normalizeRate, ttsProvider, voiceFor } from './tts.js'
 
 const ON = new Set(['on', '1', 'true', 'yes'])
 const IDENTITIES = new Set(['phone', 'browser'])
@@ -79,7 +80,9 @@ export function liveVoiceFrom(env = process.env) {
     udpStart: Number(env.LIVEKIT_UDP_START) || 50000,
     udpEnd: Number(env.LIVEKIT_UDP_END) || 50019,
     tcpPort: Number(env.LIVEKIT_TCP_PORT) || 7881,
-    edgeVoice: trim(env.EDGE_TTS_VOICE) || 'he-IL-HilaNeural',
+    edgeVoice: hebrewVoice(env),
+    edgeRate: normalizeRate(env.EDGE_TTS_RATE),
+    ttsProvider: ttsProvider(env),
     elevenKey: trim(env.ELEVENLABS_API_KEY),
     elevenVoice: trim(env.ELEVENLABS_VOICE_ID),
     elevenModel: trim(env.ELEVENLABS_TTS_MODEL) || 'eleven_v3',
@@ -98,7 +101,9 @@ export function liveVoiceStatus(env = process.env) {
     tcp: cfg.tcpPort,
     nodeIp: cfg.nodeIp,
     eleven: Boolean(cfg.elevenKey && cfg.elevenVoice),
+    provider: cfg.ttsProvider,
     edgeVoice: cfg.edgeVoice,
+    edgeRate: cfg.edgeRate,
   }
 }
 
@@ -227,22 +232,25 @@ export async function elevenPcm(text, { apiKey, voiceId, model, fetchImpl = fetc
   return bytes
 }
 
-// ElevenLabs when it is configured, otherwise the free he-IL edge voice (spoken by the agent container).
+// Edge-TTS unless TTS_PROVIDER=elevenlabs. The voice worker speaks Edge itself (lower latency).
+// This returns ElevenLabs PCM only when that provider is selected and the call succeeds.
 export async function synthesize(text, env = process.env, deps = {}) {
   const line = spokenLine(text)
   const cfg = liveVoiceFrom(env)
   if (!line) return { engine: 'empty' }
-  if (cfg.elevenKey && cfg.elevenVoice) {
+  const choice = voiceFor(line, env)
+  const edge = { engine: 'edge', voice: choice.voice, rate: choice.rate, lang: choice.lang }
+  if (cfg.ttsProvider === 'elevenlabs' && cfg.elevenKey && cfg.elevenVoice) {
     try {
       const pcm = deps.eleven
         ? await deps.eleven(line, cfg)
         : await elevenPcm(line, { apiKey: cfg.elevenKey, voiceId: cfg.elevenVoice, model: cfg.elevenModel, fetchImpl: deps.fetchImpl })
       return { engine: 'eleven', pcm }
     } catch (e) {
-      return { engine: 'edge', voice: cfg.edgeVoice, fellBack: true, error: e.message }
+      return { ...edge, fellBack: true, error: e.message }
     }
   }
-  return { engine: 'edge', voice: cfg.edgeVoice }
+  return edge
 }
 
 export function wavFromPcm(pcm, sampleRate = 16000) {

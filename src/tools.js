@@ -32,11 +32,11 @@ import { runSpark, geminiEnabled } from './gemini.js'
 import { downloadSessionFile } from './session.js'
 import { phoneTools } from './phone-tools.js'
 import { googleTools } from './google-tools.js'
-import { officeEditTools } from './office-edit.js'
-import { gmailPlusTools } from './gmail-plus.js'
-import { calendarPlusTools } from './calendar-plus.js'
 import { githubWriteTools } from './github-write.js'
 import { vaultTools } from './vault-tools.js'
+import { calendarPlusTools } from './calendar-plus.js'
+import { gmailPlusTools } from './gmail-plus.js'
+import { officeEditTools } from './office-edit.js'
 import { pcTools, firstYouTubeVideo } from './pc-tools.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 import { claudeCodeEnabled, runClaudeCode, zipFiles, projectSlug } from './claude-code.js'
@@ -728,16 +728,16 @@ export { firstYouTubeVideo }
 const isOn = (t) => !t.enabled || t.enabled()
 
 tools.push(...googleTools)
-// Native edits to an existing Docs/Sheets/Slides file, each bound to the revision the user approved (src/office-edit.js).
-tools.push(...officeEditTools)
-// Gmail replies in the thread, attachments, drafts and labels, each through a bound approval (src/gmail-plus.js).
-tools.push(...gmailPlusTools)
-// Calendar find/update/delete, guests and free/busy, each change through a bound approval (src/calendar-plus.js).
-tools.push(...calendarPlusTools)
 // GitHub: open an issue, open a PR, comment. Only in repositories the owner listed, each through a bound approval.
 tools.push(...githubWriteTools)
 // Helper's own credential vault: off by default; secrets go in on a local page, never through the chat (src/vault.js).
 tools.push(...vaultTools)
+// Calendar find/update/delete, guests and free/busy, each change through a bound approval (src/calendar-plus.js).
+tools.push(...calendarPlusTools)
+// Gmail replies in the thread, attachments, drafts and labels, each through a bound approval (src/gmail-plus.js).
+tools.push(...gmailPlusTools)
+// Native edits to an existing Docs/Sheets/Slides file, each bound to the revision the user approved (src/office-edit.js).
+tools.push(...officeEditTools)
 // WhatsApp groups: "מה פספסתי?", calendar and tasks from them, what matters to him (src/groups.js).
 tools.push(...groupTools)
 // Homework and open assignments from Classroom, Webtop and the school groups together (src/schoolwork.js).
@@ -854,7 +854,7 @@ const BRIEF = {
   play_youtube: 'Search YouTube and start playing the first video right away on the user\'s screen, no approval needed. For "play X", "put on X on YouTube", "open YouTube, search X and play".',
   wake_pc: 'Turn on the user\'s PC remotely (Wake-on-LAN), no approval needed. It boots within about a minute.',
   open: 'Open a web address (https://...) or a named app on the user\'s screen, at once, no approval needed. Names: youtube, google, gmail, classroom, calendar, drive, whatsapp, spotify, calculator, settings. YouTube search: https://www.youtube.com/results?search_query=...',
-  run_command: 'Run a PowerShell command on the user\'s computer (60s limit).',
+  run_command: 'Run a PowerShell command on the user\'s computer (60s limit). admin=true runs it as Administrator, only when it needs admin rights; the user approves every admin command.',
   read_file: 'Read a text file from the user\'s computer.',
   write_file: 'Write a text file on the user\'s computer (overwrites).',
   pc_media: 'Control PC media and volume: play_pause, next, previous, mute, volume_up, volume_down, set_volume 0-100.',

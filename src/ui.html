@@ -258,10 +258,15 @@ function render(S) {
       ['LLM_BACKUP_MODEL', 'ספק גיבוי: מודל'],
       ['LLM_LIGHT', 'מצב קל', { options: [['false', 'כבוי'], ['true', 'פעיל (לחבילות חינמיות עם מכסה קטנה)']] }],
     ])),
-    connector('ElevenLabs', 'הודעות קוליות: מבין ועונה בקול. גם אפקטים ומוזיקה', S.settings.ELEVENLABS_API_KEY.set, form(S, [
+    connector('דיבור', 'ברירת מחדל: Microsoft Edge על השרת, בלי מפתח. עברית he-IL-HilaNeural או he-IL-AvriNeural. שפה אחרת נבחרת לבד.', S.voice.speak, form(S, [
+      ['TTS_PROVIDER', 'ספק', { options: [['', 'Edge-TTS (ברירת מחדל)'], ['edge', 'Edge-TTS'], ['elevenlabs', 'ElevenLabs'], ['openai', 'ספק תואם OpenAI']], hint: 'ריק = Edge, גם אם יש מפתח של ElevenLabs. אם Edge נכשל והמפתח מוגדר, נופלים אליו, ואחרת התשובה נשארת טקסט.' }],
+      ['EDGE_TTS_VOICE', 'קול עברי', { placeholder: 'he-IL-HilaNeural', hint: 'he-IL-HilaNeural או he-IL-AvriNeural. השיחה החיה קוראת את זה בהפעלה מחדש של הסוכן.' }],
+      ['EDGE_TTS_RATE', 'קצב', { placeholder: '+0%', hint: '+0% , +10% או -10%' }],
+    ])),
+    connector('ElevenLabs', 'אופציונלי. תמלול אם אין STT_MODEL, תמונות וסרטונים, וקול רק כש-TTS_PROVIDER=elevenlabs', S.settings.ELEVENLABS_API_KEY.set, form(S, [
       ['ELEVENLABS_API_KEY', 'מפתח API', { secret: true }],
       ['ELEVENLABS_VOICE_ID', 'מזהה הקול'],
-      ['ELEVENLABS_TTS_MODEL', 'מודל דיבור', { hint: 'חייב לתמוך בעברית: eleven_v3 או eleven_v4' }],
+      ['ELEVENLABS_TTS_MODEL', 'מודל דיבור', { hint: 'חייב לתמוך בעברית: eleven_v3 או eleven_v4. לא בשימוש לדיבור אלא אם TTS_PROVIDER=elevenlabs' }],
     ], { clear: 'ELEVENLABS_API_KEY' })),
     connector('GitHub', 'קריאה בלבד: ריפוזיטוריז, issues וקוד', S.settings.GITHUB_TOKEN.set, form(S, [
       ['GITHUB_TOKEN', 'Personal access token', { secret: true, hint: 'מומלץ fine-grained עם הרשאות קריאה בלבד' }],
