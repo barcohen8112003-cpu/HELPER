@@ -188,19 +188,27 @@ function bubbleState(state) {
 function answer(text, extra = {}) {
   mode = 'idle'
   bubbleState(Object.assign({ mode: 'answer', text }, extra))
+  avatarSync()
   const ms = Math.min(20000, 5000 + text.length * 70)
   hideTimer = setTimeout(() => { if (mode === 'idle' && !bubbleHovered) bubbleState({ mode: 'hidden' }) }, ms)
 }
 let bubbleHovered = false
 
 // ---- the avatar ---------------------------------------------------------------------------------------
-// A small character in a corner of the screen (ui/avatar.html). Off until turned on in the tray. It dances while
-// music HELPER started is playing, reacts to a message or a task, and jumps on an urgent alert. Events from the
-// cloud carry a type only (src/avatar-feed.js); the window gets a state name only, never any text.
+// A small figure in a corner of the screen (ui/avatar.html). Off until turned on in the tray. It mirrors what HELPER
+// on this PC is doing right now (listening, thinking, speaking, running tools), dances while music HELPER started
+// is playing, reacts to a message or a task from the cloud, and jumps on an urgent alert. A click asks HELPER (the
+// bubble's own typing box), a right-click opens its menu. Events from the cloud carry a type only
+// (src/avatar-feed.js); the window gets a state name and a design name only, never any text.
 
 const AVATAR_W = 140, AVATAR_H = 170
 let avatarWin = null, avatarState = null, avatarFeed = null, avatarFeedKey = '', avatarTimer = null, avatarDrag = null
 let avatarStatus = 'stopped'
+let avatarSpeaking = false, avatarSpeakTimer = null   // HELPER's voice is playing in the bubble
+let avatarSteps = 0                                   // tool steps (hands) running on this PC right now
+let avatarSyncTimer = null
+const AVATAR_DESIGNS = ['orb', 'chip', 'figure']
+const avatarDesign = () => (AVATAR_DESIGNS.includes(store.settings().avatarDesign) ? store.settings().avatarDesign : 'orb')
 
 /** Where the avatar goes: where it was dragged to, if that is still on a screen; else the main screen's bottom corner. */
 function avatarHome() {
@@ -217,7 +225,7 @@ function avatarHome() {
 function sendAvatar(s) {
   const w = avatarWin
   if (!w || w.isDestroyed()) return
-  const msg = { state: s.state, variant: s.variant || '' }
+  const msg = { state: s.state, variant: s.variant || '', design: avatarDesign() }
   if (w.webContents.isLoading()) w.webContents.once('did-finish-load', () => { if (!w.isDestroyed()) w.webContents.send('avatar', msg) })
   else w.webContents.send('avatar', msg)
 }
@@ -261,6 +269,49 @@ function avatarMusic(on) {
   avatarTick()
 }
 
+/** The avatar mirrors the app's own state (mode, voice, hands). Cheap: it only tells the window when it changes. */
+function avatarSync() {
+  if (!avatarState) return
+  const st = require('./src/avatar-state')
+  avatarState.activity(st.activityFor({ mode, speaking: avatarSpeaking, working: avatarSteps > 0 }))
+  avatarTick()
+}
+
+function setAvatarSpeaking(on) {
+  avatarSpeaking = Boolean(on)
+  clearTimeout(avatarSpeakTimer)
+  // A missed "ended" never leaves it speaking: a minute at most.
+  if (avatarSpeaking) avatarSpeakTimer = setTimeout(() => { avatarSpeaking = false; avatarSync() }, 60000)
+  avatarSync()
+}
+
+/** Click on the avatar: ask HELPER, the same way as a short press of PD (the bubble's typing box). */
+function avatarClick() {
+  if (mode === 'idle') return startTyping()
+  if (mode === 'typing') { endTyping(); mode = 'idle'; bubbleState({ mode: 'hidden' }) }
+}
+
+/** Right-click on the avatar: talk, type, look, hide, and the rest of HELPER's menu. */
+function avatarMenu() {
+  if (!avatarWin || avatarWin.isDestroyed()) return
+  const d = avatarDesign()
+  Menu.buildFromTemplate([
+    { label: 'לדבר עם HELPER', click: () => { if (mode === 'idle') startListening() } },
+    { label: 'להקליד ל-HELPER', click: () => { if (mode === 'idle') startTyping() } },
+    { type: 'separator' },
+    { label: 'עיצוב', submenu: avatarDesignMenu(d) },
+    { label: 'להחזיר לפינה', click: () => { store.saveSettings({ avatarPos: null }); const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } },
+    { label: 'להסתיר את האווטאר', click: () => { store.saveSettings({ avatarEnabled: false }); applyAvatar(); refreshTray() } },
+    { type: 'separator' },
+    { label: 'כל ההגדרות של HELPER…', click: () => { if (tray) tray.popUpContextMenu(trayMenu()) } },
+  ]).popup({ window: avatarWin })
+}
+
+function avatarDesignMenu(current) {
+  const names = { orb: 'כדור (Orb)', chip: 'שבב (Chip)', figure: 'דמות (Figure)' }
+  return AVATAR_DESIGNS.map((id) => ({ label: names[id], type: 'radio', checked: current === id, click: () => { store.saveSettings({ avatarDesign: id }); if (avatarState) sendAvatar(avatarState.current()); refreshTray() } }))
+}
+
 function endAvatarDrag() {
   if (!avatarDrag) return
   clearInterval(avatarDrag.timer)
@@ -299,6 +350,8 @@ function applyAvatar() {
   const s = store.settings()
   if (!s.avatarEnabled) {
     clearTimeout(avatarTimer)
+    clearInterval(avatarSyncTimer)
+    avatarSyncTimer = null
     endAvatarDrag()
     if (avatarWin && !avatarWin.isDestroyed()) avatarWin.destroy()
     avatarWin = null
@@ -306,6 +359,9 @@ function applyAvatar() {
   } else {
     if (!avatarState) avatarState = require('./src/avatar-state').createAvatarState({ onChange: sendAvatar })
     makeAvatar()
+    // The app's mode changes in many places; a look five times a second follows all of them for next to nothing.
+    if (!avatarSyncTimer) avatarSyncTimer = setInterval(avatarSync, 200)
+    avatarSync()
   }
   const want = s.avatarEnabled && s.avatarEvents
   const key = want ? `${s.avatarPanelUrl}\n${s.avatarCredential}` : ''
@@ -621,7 +677,6 @@ async function handleAsk(raw, { voice = false } = {}) {
   mark = null
   clearMarks()
 
-  avatarEvent({ type: 'task-start' })
   handsServer.startRecording()
   const steps = []
   let lookedAtScreen = false
@@ -907,6 +962,7 @@ function trayMenu() {
       { label: 'להציג את האווטאר', type: 'checkbox', checked: s.avatarEnabled, click: (i) => { store.saveSettings({ avatarEnabled: i.checked }); applyAvatar(); refreshTray() } },
       { label: 'אירועים מ-HELPER בענן (סוג בלבד, בלי תוכן)', type: 'checkbox', checked: s.avatarEvents, enabled: Boolean(s.avatarPanelUrl && s.avatarCredential), click: (i) => { store.saveSettings({ avatarEvents: i.checked }); applyAvatar(); refreshTray() } },
       { label: 'אירועים: ' + (s.avatarEnabled && s.avatarEvents ? AVATAR_STATUS[avatarStatus] || avatarStatus : 'כבוי'), enabled: false },
+      { label: 'עיצוב', submenu: avatarDesignMenu(avatarDesign()) },
       { label: 'להחזיר לפינה', enabled: s.avatarEnabled, click: () => { store.saveSettings({ avatarPos: null }); if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } } },
     ] },
     { type: 'separator' },
@@ -1029,15 +1085,27 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('dismiss', () => { endTyping(); mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('mark', (e, rect) => onMark(rect, e.sender))
-  ipcMain.on('voice-state', (e, s) => log('voice', String(s).slice(0, 80)))
+  ipcMain.on('voice-state', (e, s) => {
+    log('voice', String(s).slice(0, 80))
+    setAvatarSpeaking(/^playing/.test(String(s)))
+  })
   ipcMain.on('mics', (e, labels) => { if (Array.isArray(labels)) { knownMics = labels.map(String).filter(Boolean); refreshTray() } })
   ipcMain.on('mark-cancel', (e) => { const o = BrowserWindow.fromWebContents(e.sender); giveKeyboardBack(); if (o) { o.setIgnoreMouseEvents(true); o.setFocusable(false) } mode = 'idle'; bubbleState({ mode: 'hidden' }) })
   ipcMain.on('pill-audio', (e, data) => onAudio(data))
   // The avatar: over it the window catches the mouse (to drag it); anywhere else clicks go through.
   ipcMain.on('avatar-hover', (e, on) => { if (avatarWin && !avatarWin.isDestroyed() && !avatarDrag) avatarWin.setIgnoreMouseEvents(!on, { forward: true }) })
   ipcMain.on('avatar-drag', (e, phase) => { if (phase === 'start') startAvatarDrag(); else endAvatarDrag() })
-  // Music HELPER started or stopped on this PC (play, media keys): the avatar dances while it plays.
-  hands.onStep((step) => { if (!avatarState) return; const m = require('./src/avatar-state').musicFromStep(step); if (m !== null) avatarMusic(m) })
+  ipcMain.on('avatar-click', () => avatarClick())
+  ipcMain.on('avatar-menu', () => avatarMenu())
+  // HELPER's hands on this PC: working while steps run; music HELPER started or stopped (play, media keys) makes
+  // the avatar dance. Counted always (cheap), shown only while the avatar is on.
+  hands.onStep((ev) => {
+    if (ev.phase === 'start') avatarSteps++
+    else avatarSteps = Math.max(0, avatarSteps - 1)
+    if (!avatarState) return
+    if (ev.phase === 'end' && ev.ok) { const m = require('./src/avatar-state').musicFromStep(ev); if (m !== null) avatarMusic(m) }
+    avatarSync()
+  })
   screen.on('display-removed', () => { if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } })
 
   const icon = nativeImage.createFromPath(path.join(ROOT, 'ui', 'icon.png'))

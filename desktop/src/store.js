@@ -20,6 +20,7 @@ const DEFAULTS = {
   // The live avatar on the screen (ui/avatar.html). Off until the owner turns it on in the tray.
   avatarEnabled: false,
   avatarPos: null,             // {x, y} where it was dragged to; null: the bottom corner of the main screen
+  avatarDesign: 'orb',         // the look: orb | chip | figure (tray: "אווטאר על המסך" → "עיצוב")
   // Events from HELPER on the cloud (a message went out, a task, an urgent alert): types only, never content.
   // Off until turned on, and it needs the panel address and the avatar's own credential (avatar-link.ps1).
   avatarEvents: false,

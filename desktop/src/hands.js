@@ -697,16 +697,27 @@ const actions = {
 /** Steps whose effect is visible and harmless to repeat: only these become learned shortcuts. */
 const REPLAYABLE = new Set(['open', 'focus', 'close', 'place', 'desktop', 'volume', 'media', 'web', 'search', 'play', 'key', 'wait', 'clipboard', 'system', 'workspace', 'browser_tab', 'press', 'tab', 'goto', 'scroll'])
 
-/** Told about each step that ran (the avatar dances when a step started music). Its failure never fails a step. */
+/**
+ * Told when each step starts and ends ({ phase: 'start' | 'end', cmd, args, ok }): the avatar shows HELPER working
+ * while steps run, and dances when a step started music. The observer's failure never fails a step.
+ */
 let stepObserver = null
 function onStep(fn) { stepObserver = typeof fn === 'function' ? fn : null }
+const tell = (ev) => { try { if (stepObserver) stepObserver(ev) } catch { } }
 
 async function run(step) {
   const fn = actions[step.cmd]
   if (!fn) throw new Error('פעולה לא מוכרת: ' + step.cmd)
-  const out = await fn(step.args || {})
-  try { if (stepObserver) stepObserver({ cmd: step.cmd, args: step.args || {} }) } catch { }
-  return out
+  const args = step.args || {}
+  tell({ phase: 'start', cmd: step.cmd, args })
+  let ok = false
+  try {
+    const out = await fn(args)
+    ok = true
+    return out
+  } finally {
+    tell({ phase: 'end', cmd: step.cmd, args, ok })
+  }
 }
 
 /** Runs steps in order; returns one line per step ('' for a silent one). A step that fails stops the rest. */

@@ -1,11 +1,14 @@
 // The avatar's mood: a small state machine with four states, and what moves it between them.
 //
-//   idle   the rest of the time: a gentle breathing bob
+//   idle   the rest of the time: a gentle breathing motion
 //   dance  while music plays (music HELPER started on this PC: play / media keys)
-//   react  a few seconds: a message for the owner went out (wave), a task started (busy) or ended (done)
-//   alert  a few seconds: an urgent notice. Jumps, harder to miss, and stops on its own
+//   react  with a variant. Short bursts from events: a message for the owner went out (wave), a task started (work)
+//          or ended (done). And, for as long as it lasts, what HELPER on this PC is doing right now (the app's own
+//          state, see activityFor): listening (listen), thinking (think), speaking (speak), running tools (work)
+//   alert  a few seconds: an urgent notice. Unmistakable, and stops on its own
 //
-// Priority: alert > react > dance > idle. A react never cuts an alert short; an alert replaces a react.
+// Priority: alert > event burst > live activity > dance > idle. A burst never cuts an alert short; an alert replaces
+// a burst; when a burst ends the avatar goes back to what HELPER is doing (or dancing, or idle).
 // It knows event types only. Whatever else an event object carries (it should carry nothing) is never read, so no
 // message text, sender or group name can reach the window through here.
 'use strict'
@@ -13,6 +16,10 @@
 const STATES = Object.freeze(['idle', 'dance', 'react', 'alert'])
 const EVENT_TYPES = Object.freeze(['message', 'task-start', 'task-end', 'alert'])
 const VARIANT = Object.freeze({ message: 'wave', 'task-start': 'work', 'task-end': 'done' })
+const ACTIVITIES = Object.freeze(['listen', 'think', 'speak', 'work'])
+const VARIANTS = Object.freeze(['wave', 'work', 'done', 'listen', 'think', 'speak'])
+// The app's own modes (main.js `mode`) that mean the user is talking or typing to HELPER.
+const LISTEN_MODES = Object.freeze(['listening', 'dictating', 'typing', 'pointing'])
 
 const REACT_MS = 3500
 const ALERT_MS = 4500
@@ -44,15 +51,35 @@ function musicFromStep(step) {
   return null
 }
 
+/**
+ * What HELPER on this PC is doing, from the app's own state: { mode, speaking, working }.
+ *   mode      main.js mode: idle | listening | dictating | thinking | typing | pointing
+ *   speaking  HELPER's voice is playing in the bubble
+ *   working   tool steps are running on this PC right now (hands), from an instant command or the brain
+ * Returns listen | speak | work | think, or null for nothing (idle). Talking to HELPER wins, then its voice, then
+ * its hands, then thinking.
+ */
+function activityFor(app) {
+  const a = app && typeof app === 'object' ? app : {}
+  const mode = typeof a.mode === 'string' ? a.mode : 'idle'
+  if (LISTEN_MODES.includes(mode)) return 'listen'
+  if (a.speaking === true) return 'speak'
+  if (a.working === true) return 'work'
+  if (mode === 'thinking') return 'think'
+  return null
+}
+
 function createAvatarState({ now = () => Date.now(), onChange = () => {} } = {}) {
   let burst = null            // { state, variant, until }
   let musicUntil = 0
+  let live = null             // listen | think | speak | work | null
   let last = null
 
   function compute() {
     const t = now()
     if (burst && t < burst.until) return { state: burst.state, variant: burst.variant }
     burst = null
+    if (live) return { state: 'react', variant: live }
     if (musicUntil && t < musicUntil) return { state: 'dance', variant: '' }
     musicUntil = 0
     return { state: 'idle', variant: '' }
@@ -87,6 +114,12 @@ function createAvatarState({ now = () => Date.now(), onChange = () => {} } = {})
     return tick()
   }
 
+  /** What HELPER on this PC is doing now (activityFor's answer); anything else means nothing. */
+  function activity(name) {
+    live = ACTIVITIES.includes(name) ? name : null
+    return tick()
+  }
+
   /** Milliseconds until the state can change by itself (a burst or the music running out), or null. */
   function nextChangeIn() {
     const t = now()
@@ -94,7 +127,7 @@ function createAvatarState({ now = () => Date.now(), onChange = () => {} } = {})
     return ends.length ? Math.min(...ends) - t : null
   }
 
-  return { event, music, tick, nextChangeIn, current: () => compute() }
+  return { event, music, activity, tick, nextChangeIn, current: () => compute() }
 }
 
-module.exports = { createAvatarState, actionFor, musicFromStep, STATES, EVENT_TYPES, REACT_MS, ALERT_MS, MUSIC_MAX_MS }
+module.exports = { createAvatarState, actionFor, activityFor, musicFromStep, STATES, VARIANTS, ACTIVITIES, EVENT_TYPES, REACT_MS, ALERT_MS, MUSIC_MAX_MS }

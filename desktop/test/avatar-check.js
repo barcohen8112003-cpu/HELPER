@@ -7,7 +7,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-const { createAvatarState, actionFor, musicFromStep, STATES, EVENT_TYPES, REACT_MS, ALERT_MS, MUSIC_MAX_MS } = require('../src/avatar-state')
+const { createAvatarState, actionFor, activityFor, musicFromStep, STATES, VARIANTS, EVENT_TYPES, REACT_MS, ALERT_MS, MUSIC_MAX_MS } = require('../src/avatar-state')
 const { createAvatarFeed, cleanUrl, validCredential, MIN_WAIT, MAX_WAIT, SLOW_WAIT, POLL_GAP } = require('../src/avatar-feed')
 const avatarView = require('../ui/avatar.js')
 
@@ -131,13 +131,14 @@ check('view: each state is a class and a fixed label', () => {
   assert.ok(avatarView.view({ state: 'idle', paused: true }).className.includes('paused'))
 })
 check('view: unknown states and variants fall back; content never appears', () => {
-  const msgs = [{ state: SECRET }, { state: 'react', variant: SECRET }, { state: 'alert', text: SECRET, sender: SENDER }, { state: '<img src=x onerror=1>' }, null, 'alert', { state: 'idle', label: SECRET }]
+  const msgs = [{ state: SECRET }, { state: 'react', variant: SECRET }, { state: 'alert', text: SECRET, sender: SENDER }, { state: '<img src=x onerror=1>' }, null, 'alert', { state: 'idle', label: SECRET }, { state: 'react', variant: 'think', design: SECRET }, { state: 'dance', design: '"><script>' }]
   for (const m of msgs) {
     const v = avatarView.view(m)
     const all = JSON.stringify(v)
     assert.ok(!all.includes('SYNTH') && !all.includes('<img'), all)
-    assert.ok(/^avatar s-(idle|dance|react|alert)( v-(wave|work|done))?( paused)?$/.test(v.className), v.className)
-    assert.ok(Object.values(avatarView.LABELS).includes(v.label))
+    assert.ok(/^avatar s-(idle|dance|react|alert)( v-(wave|work|done|listen|think|speak))?( paused)?$/.test(v.className), v.className)
+    assert.ok(avatarView.DESIGNS.includes(v.design), v.design)
+    assert.ok(Object.values(avatarView.LABELS).includes(v.label) || Object.values(avatarView.VARIANT_LABELS).includes(v.label))
   }
 })
 check('view: avatar.js never writes text or HTML it was sent', () => {
@@ -155,6 +156,126 @@ check('view: avatar.html is self-contained: strict CSP, no outside fonts, images
   assert.ok(/\.paused, \.paused \* \{ animation-play-state: paused/.test(html))
 })
 
+// ---- the three designs -----------------------------------------------------------------------------------
+
+const DESIGNS = ['orb', 'chip', 'figure']
+const ALL_LOOKS = [['idle', ''], ['dance', ''], ['alert', ''], ...VARIANTS.map((v) => ['react', v])]
+
+check('designs: three, chosen by one attribute, default orb; the window and the app agree on the names', () => {
+  assert.deepStrictEqual(avatarView.DESIGNS, DESIGNS)
+  assert.deepStrictEqual(avatarView.VARIANTS, VARIANTS)
+  assert.strictEqual(avatarView.view({}).design, 'orb')
+  for (const d of DESIGNS) assert.strictEqual(avatarView.view({ design: d }).design, d)
+  assert.strictEqual(avatarView.view({ design: 'robot' }).design, 'orb')
+  const html = fs.readFileSync(path.join(__dirname, '..', 'ui', 'avatar.html'), 'utf8')
+  assert.ok(/<body data-design="orb">/.test(html))
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8')
+  assert.ok(/const AVATAR_DESIGNS = \['orb', 'chip', 'figure'\]/.test(main))
+})
+check('designs: every design has its own rule for every state and variant', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'ui', 'avatar.html'), 'utf8')
+  for (const d of DESIGNS) {
+    for (const [st, v] of ALL_LOOKS) {
+      const sel = v ? `[data-design="${d}"] .v-${v}` : `[data-design="${d}"] .s-${st}`
+      assert.ok(html.includes(sel), sel)
+    }
+  }
+})
+check('designs: no faces, no pictures, the alert is red in all of them', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'ui', 'avatar.html'), 'utf8')
+  assert.ok(!/class="(eye|mouth)/.test(html) && !/\.eye|\.mouth/.test(html))
+  assert.ok(/\.s-alert \{ --accent: #FF5A5F/.test(html))
+})
+
+let pw = null
+try { pw = require('playwright') } catch { }
+check('designs: each design renders every state in a real browser (skipped without Playwright)', async () => {
+  if (!pw) { console.log('SKIP designs render: no Playwright here'); return }
+  const browser = await pw.chromium.launch()
+  try {
+    const page = await browser.newPage({ viewport: { width: 140, height: 170 } })
+    await page.goto('file://' + path.join(__dirname, '..', 'ui', 'avatar.html').replace(/\\/g, '/'))
+    for (const d of DESIGNS) {
+      const seen = new Set()
+      for (const [st, v] of ALL_LOOKS) {
+        const r = await page.evaluate(([d, cls]) => {
+          document.body.setAttribute('data-design', d)
+          const el = document.getElementById('avatar')
+          el.className = cls
+          const core = el.querySelector('.core').getBoundingClientRect()
+          const cs = getComputedStyle(el)
+          return { w: core.width, h: core.height, accent: cs.getPropertyValue('--accent').trim(), anim: cs.animationName, ring: getComputedStyle(el.querySelector('.ring')).animationName, text: document.body.innerText.trim() }
+        }, [d, 'avatar s-' + st + (v ? ' v-' + v : '')])
+        assert.ok(r.w > 20 && r.h > 20, `${d} ${st}/${v}: the shape is there`)
+        assert.ok(r.text === '' || r.text === 'H', `${d}: no text but the chip's H (${r.text})`)
+        seen.add(`${r.accent}|${r.anim}|${r.ring}`)
+      }
+      assert.ok(seen.size >= 7, `${d}: the states look different (${seen.size} distinct)`)
+    }
+  } finally { await browser.close() }
+})
+
+// ---- the app's own state mirrored ----------------------------------------------------------------------
+
+check('local state: the app\'s modes map to the avatar', () => {
+  const table = [
+    [{ mode: 'idle' }, null],
+    [{ mode: 'listening' }, 'listen'],
+    [{ mode: 'dictating' }, 'listen'],
+    [{ mode: 'typing' }, 'listen'],
+    [{ mode: 'pointing' }, 'listen'],
+    [{ mode: 'thinking' }, 'think'],
+    [{ mode: 'thinking', working: true }, 'work'],
+    [{ mode: 'idle', working: true }, 'work'],
+    [{ mode: 'idle', speaking: true }, 'speak'],
+    [{ mode: 'thinking', speaking: true, working: true }, 'speak'],
+    [{ mode: 'listening', speaking: true }, 'listen'],
+    [{ mode: 'nonsense' }, null],
+    [null, null],
+    [{ mode: 'idle', speaking: 'yes', working: 1 }, null],
+  ]
+  for (const [app, want] of table) assert.strictEqual(activityFor(app), want, JSON.stringify(app))
+})
+check('local state: shown as react variants, back to idle (or dancing) when HELPER is done', () => {
+  const { m } = machine()
+  assert.deepStrictEqual(m.activity('listen'), { state: 'react', variant: 'listen' })
+  assert.deepStrictEqual(m.activity('think'), { state: 'react', variant: 'think' })
+  assert.deepStrictEqual(m.activity('work'), { state: 'react', variant: 'work' })
+  assert.deepStrictEqual(m.activity('speak'), { state: 'react', variant: 'speak' })
+  assert.deepStrictEqual(m.activity(null), { state: 'idle', variant: '' })
+  m.music(true)
+  assert.strictEqual(m.activity('think').variant, 'think', 'talking to HELPER wins over the dance')
+  assert.strictEqual(m.activity(null).state, 'dance')
+  assert.strictEqual(m.activity(SECRET).state, 'dance', 'an unknown activity is nothing')
+})
+check('local state: an event burst and an alert sit on top, then it goes back to what HELPER is doing', () => {
+  const { m, go } = machine()
+  m.activity('think')
+  assert.strictEqual(m.event({ type: 'message' }).variant, 'wave')
+  assert.strictEqual(go(REACT_MS + 1).variant, 'think')
+  assert.strictEqual(m.event({ type: 'alert' }).state, 'alert')
+  assert.strictEqual(m.activity('work').state, 'alert', 'the alert is not cut short')
+  assert.strictEqual(go(ALERT_MS + 1).variant, 'work')
+})
+check('main: mirrors mode, voice and hands; click talks through the bubble; right-click menu; design sent by name', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8')
+  assert.ok(/activityFor\(\{ mode, speaking: avatarSpeaking, working: avatarSteps > 0 \}\)/.test(main))
+  assert.ok(/setAvatarSpeaking\(\/\^playing\/\.test\(String\(s\)\)\)/.test(main), 'voice from the bubble')
+  assert.ok(/if \(ev\.phase === 'start'\) avatarSteps\+\+/.test(main), 'hands steps counted')
+  assert.ok(/function avatarClick\(\) \{\s*if \(mode === 'idle'\) return startTyping\(\)/.test(main), 'click = the bubble\'s own typing box')
+  assert.ok(/ipcMain\.on\('avatar-click'/.test(main) && /ipcMain\.on\('avatar-menu'/.test(main))
+  for (const item of ['לדבר עם HELPER', 'להקליד ל-HELPER', 'להסתיר את האווטאר', 'כל ההגדרות של HELPER…', 'עיצוב']) assert.ok(main.includes(item), item)
+  assert.ok(/const msg = \{ state: s\.state, variant: s\.variant \|\| '', design: avatarDesign\(\) \}/.test(main), 'the window gets names only')
+  const hands = fs.readFileSync(path.join(__dirname, '..', 'src', 'hands.js'), 'utf8')
+  assert.ok(/tell\(\{ phase: 'start', cmd: step\.cmd, args \}\)/.test(hands) && /finally \{\s*tell\(\{ phase: 'end', cmd: step\.cmd, args, ok \}\)/.test(hands), 'every step tells start and end, failed ones too')
+  const bubble = fs.readFileSync(path.join(__dirname, '..', 'ui', 'bubble.js'), 'utf8')
+  assert.ok(/addEventListener\('ended', \(\) => helper\.send\('voice-state', 'ended'\)\)/.test(bubble))
+})
+check('music: a step event from hands (phase, ok) still reads as music', () => {
+  assert.strictEqual(musicFromStep({ phase: 'end', ok: true, cmd: 'play', args: { query: 'x' } }), true)
+  assert.strictEqual(musicFromStep({ phase: 'end', ok: true, cmd: 'media', args: { op: 'pause' } }), false)
+})
+
 // ---- the setting --------------------------------------------------------------------------------
 
 check('setting: off by default, persists when turned on, and off again', () => {
@@ -167,12 +288,14 @@ check('setting: off by default, persists when turned on, and off again', () => {
   assert.strictEqual(s.avatarEvents, false)
   assert.strictEqual(s.avatarCredential, '')
   assert.strictEqual(s.avatarPos, null)
-  store.saveSettings({ avatarEnabled: true, avatarPos: { x: 10, y: 20 } })
+  assert.strictEqual(s.avatarDesign, 'orb')
+  store.saveSettings({ avatarEnabled: true, avatarPos: { x: 10, y: 20 }, avatarDesign: 'figure' })
   delete require.cache[require.resolve('../src/store')]
   const again = require('../src/store')
   again.init(dir)
   assert.strictEqual(again.settings().avatarEnabled, true)
   assert.deepStrictEqual(again.settings().avatarPos, { x: 10, y: 20 })
+  assert.strictEqual(again.settings().avatarDesign, 'figure')
   assert.strictEqual(again.settings().avatarEvents, false)
   again.saveSettings({ avatarEnabled: false })
   assert.strictEqual(again.settings().avatarEnabled, false)
@@ -198,7 +321,7 @@ check('main: the avatar starts only when turned on; off destroys it', () => {
 check('preload: the avatar channels are named, nothing more', () => {
   const pre = fs.readFileSync(path.join(__dirname, '..', 'ui', 'preload.js'), 'utf8')
   assert.ok(/const IN = new Set\(\[[^\]]*'avatar'[^\]]*\]\)/.test(pre))
-  assert.ok(/'avatar-hover', 'avatar-drag'\]\)/.test(pre))
+  assert.ok(/'avatar-hover', 'avatar-drag', 'avatar-click', 'avatar-menu'\]\)/.test(pre))
 })
 
 // ---- the cloud event client (a scripted fetch: no server) ----------------------------------------------
