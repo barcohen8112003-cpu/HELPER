@@ -83,5 +83,21 @@ const { googleHomeProfileDir, browserSite } = await import('./webtop-browser.js'
 ok(googleHomeProfileDir().endsWith(`${path.sep}google-home-profile`), 'Google Home uses its own profile directory')
 ok(browserSite('google-home') === 'google-home' && browserSite('nope') === 'webtop', 'the login view only selects Webtop or Google Home')
 
+
+const tiles = [
+  { name: 'Living Room', type: 'רמקול', status: 'כבוי' },
+  { name: 'Lounge', type: 'רמקול', status: 'כבוי' },
+  { name: 'Floor Lamp Lite', type: 'אורות', status: 'אופליין' },
+  { name: 'Led', type: 'אורות', status: 'כבוי' },
+  { name: 'Mine Light', type: 'אורות', status: 'כבוי' },
+]
+const names = (q, opts) => home.pickTargets(tiles, q, opts).map((t) => t.name)
+ok(names('מקרן בסלון').length === 0, 'the projector is not a Google Home tile, even with "סלון" in the query')
+ok(names('תדליק את המקרן').length === 0, 'a projector-only query matches nothing here')
+ok(JSON.stringify(names('לד')) === JSON.stringify(['Led']), 'לד is the LED tiles, not the speakers')
+ok(JSON.stringify(names('led')) === JSON.stringify(['Led']), 'led in English is the same')
+ok(names('סלון').every((n) => n !== 'Living Room' && n !== 'Lounge'), 'a living-room light query does not turn the speakers on')
+ok(names('כל האורות').every((n) => tiles.find((t) => t.name === n)?.type === 'אורות'), 'all lights are lights, not speakers')
+
 console.log(`${passed} בדיקות עברו, ${failed} נכשלו`)
 process.exit(failed ? 1 : 0)

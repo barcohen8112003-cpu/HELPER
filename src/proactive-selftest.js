@@ -106,9 +106,11 @@ const reset = () => {
 
   reset()
   config.proactive.followUpsPerDay = 1
-  P.addLoop('א', { when: new Date(t - 1000).toISOString(), now: t - 2000 })
-  P.addLoop('ב', { when: new Date(t - 1000).toISOString(), now: t - 2000 })
-  ok(P.takeDueLoop(t) && P.takeDueLoop(t + 2 * H) === null, 'FOLLOW_UPS_PER_DAY caps the day')
+  // Local noon, so "two hours later" is still the same day whenever the test runs.
+  const noon = new Date(t).setHours(12, 0, 0, 0)
+  P.addLoop('א', { when: new Date(noon - 1000).toISOString(), now: noon - 2000 })
+  P.addLoop('ב', { when: new Date(noon - 1000).toISOString(), now: noon - 2000 })
+  ok(P.takeDueLoop(noon) && P.takeDueLoop(noon + 2 * H) === null, 'FOLLOW_UPS_PER_DAY caps the day')
   config.proactive.followUpsPerDay = 0
   reset()
   P.addLoop('ג', { when: new Date(t - 1000).toISOString(), now: t - 2000 })

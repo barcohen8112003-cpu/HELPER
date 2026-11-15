@@ -45,14 +45,22 @@ const SCREENS = {
     { i: 2, role: 'Button', text: 'הזמן נסיעה', clickable: true, x: 540, y: 2100, b: [100, 2050, 980, 2150] },
     { i: 3, role: 'TextView', text: 'נסיעות קודמות', clickable: true, x: 540, y: 300, b: [0, 260, 1080, 340] },
   ] },
-  login: { pkg: 'com.example.bank', nodes: [
+  login: { pkg: 'com.example.login', nodes: [
     { i: 1, role: 'EditText', hint: 'סיסמה', editable: true, password: true, focused: true, x: 540, y: 900, b: [0, 850, 1080, 950] },
+  ] },
+  bank: { pkg: 'com.paypal.android.p2pmobile', nodes: [
+    { i: 1, role: 'TextView', text: 'יתרה', x: 400, y: 400, b: [0, 360, 800, 440] },
+    { i: 2, role: 'EditText', hint: 'סיסמה', editable: true, password: true, focused: true, x: 540, y: 900, b: [0, 850, 1080, 950] },
+  ] },
+  settings: { pkg: 'com.android.settings', nodes: [
+    { i: 1, role: 'Button', text: 'אפשר', clickable: true, x: 800, y: 400, b: [700, 360, 980, 480] },
+    { i: 2, role: 'TextView', text: 'Wi-Fi', clickable: true, x: 200, y: 400, b: [0, 360, 400, 480] },
   ] },
   map: { pkg: 'com.waze', nodes: [] },
 }
 let phone
 function connectPhone(screen = 'whatsapp', { stopOnObserve = 0 } = {}) {
-  const log = { acts: [], observes: 0, captures: 0, status: [], finish: [] }
+  const log = { acts: [], observes: 0, captures: 0, status: [], finish: [], imageAsks: [], widths: [] }
   return new Promise((resolve) => {
     const ws = new WebSocket(url, { headers: { authorization: `Bearer ${TOKEN}` } })
     ws.on('open', () => {
@@ -67,8 +75,10 @@ function connectPhone(screen = 'whatsapp', { stopOnObserve = 0 } = {}) {
       const reply = (result) => ws.send(JSON.stringify({ id: m.id, ok: true, result }))
       if (m.op === 'observe') {
         log.observes++
+        log.imageAsks.push(m.args?.image === true)
+        log.widths.push(m.args?.maxWidth ?? null)
         if (stopOnObserve && log.observes === stopOnObserve) ws.send(JSON.stringify({ type: 'stop' }))
-        return reply({ ...SCREENS[phone.screen], width: 1080, height: 2400, ...(m.args.image ? { image: 'aW1n' } : {}) })
+        return reply({ ...SCREENS[phone.screen], width: 1080, height: 2400, ...(m.args?.image ? { image: 'aW1n' } : {}) })
       }
       if (m.op === 'capture') return (log.captures++, reply({ image: 'aW1n' }))
       if (m.op === 'act') {
@@ -231,6 +241,131 @@ config.phone.host = '100.110.143.89'
   const text = app.formatNodes(SCREENS.whatsapp.nodes)
   ok(text.includes('[3] ImageButton desc:"שלח" {tap} @1000,2200'), 'a node line has its number, label, flags and centre')
   ok(app.nodeFor(SCREENS.gett.nodes, { x: 540, y: 2100 })?.i === 2, 'a point maps to the element under it')
+}
+
+// 11. The vision agent is off unless the flag says so, and payment apps are recognised without a model.
+{
+  ok(!app.phoneVisionOn() && config.phone.vision === 'off', 'PHONE_VISION_AGENT defaults to off')
+  ok(app.phoneVisionModel() === 'google/gemini-2.5-flash', 'the default vision model is the cheap one')
+  ok(app.phoneAgentMaxSteps() === 40 && app.phoneAgentTimeoutMs() === 480000, 'the tree loop keeps 40 steps and an 8 minute limit')
+  ok(!app.isPaymentApp('com.waze') && !app.isPaymentApp('com.whatsapp') && !app.isPaymentApp('com.android.bluetooth') && !app.isPaymentApp('com.google.android.calendar') && !app.isPaymentApp('בית'), 'ordinary apps are not payment apps')
+  ok(app.isPaymentApp('com.paypal.android.p2pmobile') && app.isPaymentApp('ביט') && app.isPaymentApp('com.example.bank') && app.isPaymentApp('com.google.android.apps.walletnfcrel') && app.isPaymentApp('com.discount'), 'banks and wallets are payment apps')
+  ok(app.isSettingsChange({ type: 'device', setting: 'volume', value: '10' }) && app.isSettingsChange({ type: 'intent', kind: 'settings' }) && !app.isSettingsChange({ type: 'intent', kind: 'alarm' }), 'volume and the settings panel are setting changes; an alarm is not')
+  ok(phone.log.imageAsks.length > 0 && phone.log.imageAsks.every((v) => v === false), 'with the flag off, a readable screen is not photographed every step')
+}
+
+// 12. A bank that is already on screen is not read or touched without an explicit yes.
+{
+  phone.screen = 'bank'
+  phone.log.acts.length = 0
+  const asked = []
+  let thoughts = 0
+  const out = await runOnPhone('מה היתרה', '', { confirm: async (t, media) => (asked.push({ t, media }), false) }, { think: async () => (thoughts++, { content: JSON.stringify({ action: { type: 'tap', index: 1 } }) }) })
+  ok(out.startsWith('DENIED') && thoughts === 0 && phone.log.acts.length === 0, 'a payment app is refused before the model acts')
+  ok(asked.length === 1 && /בנק או תשלום/.test(asked[0].t) && asked[0].media?.buffer?.length, 'the question names the app and carries a screenshot')
+  await settle()
+  ok(phone.log.finish.at(-1)?.includes('לא אושר'), 'the bubble says it stopped')
+}
+
+// 13. After that yes, a harmless tap runs, and a password still is not typed.
+{
+  phone.screen = 'bank'
+  phone.log.acts.length = 0
+  const think = script({ action: { type: 'tap', index: 1 } }, { action: { type: 'type', text: 'hunter2', index: 2 } })
+  const out = await runOnPhone('תיכנס לפייפאל', '', { confirm: async () => true }, { think })
+  ok(phone.log.acts.some((a) => a.type === 'tap' && a.index === 1), 'an approved payment app can be tapped')
+  ok(!phone.log.acts.some((a) => a.type === 'type') && out.startsWith('NEED_USER'), 'a password in that app is still not typed')
+}
+
+// 14. Opening ביט from another app asks, and a no opens nothing.
+{
+  phone.screen = 'whatsapp'
+  phone.log.acts.length = 0
+  const asked = []
+  const out = await runOnPhone('תפתח ביט', '', { confirm: async (t) => (asked.push(t), false) }, { think: script({ action: { type: 'open_app', name: 'ביט' } }) })
+  ok(out.startsWith('DENIED') && !phone.log.acts.length && asked.some((t) => t.includes('ביט')), 'opening a payment app needs its own yes')
+}
+
+// 15. A setting is not changed until a gate of kind account is approved. Navigating the list is fine.
+{
+  phone.screen = 'settings'
+  phone.log.acts.length = 0
+  let asks = 0
+  const think = script(
+    { action: { type: 'device', setting: 'volume', value: '10' } },
+    { action: { type: 'tap', index: 1 } },
+    { action: { type: 'tap', index: 2 } },
+    { action: { type: 'gate', kind: 'account', site: 'טלפון', items: 'עוצמת שמע ל-10', then: { type: 'device', setting: 'volume', value: '10' } } },
+  )
+  const out = await runOnPhone('תנמיך את הווליום', '', { confirm: async () => (++asks, asks === 1) }, { think })
+  ok(phone.log.acts.filter((a) => a.type === 'device').length === 1, 'volume changes only after the gate')
+  ok(!phone.log.acts.some((a) => a.type === 'tap' && a.index === 1), 'Allow is not tapped without a gate')
+  ok(phone.log.acts.some((a) => a.type === 'tap' && a.index === 2), 'a settings row that does not change anything is tapped')
+  ok(out.startsWith('DONE') && asks === 1, 'one approval covers that one settings change')
+}
+
+// 16. Vision mode: every step is a small screenshot, progress goes out, and the run ends with a picture.
+{
+  config.phone.vision = 'on'
+  config.phone.visionWidth = 480
+  phone.screen = 'whatsapp'
+  phone.log.imageAsks.length = 0
+  phone.log.widths.length = 0
+  phone.log.acts.length = 0
+  const said = []
+  const media = []
+  let sawImage = false
+  let turns = 0
+  const think = async (messages) => {
+    const last = messages.at(-1)
+    const parts = Array.isArray(last.content) ? last.content : []
+    if (parts.some((p) => p.type === 'image_url')) sawImage = true
+    turns++
+    if (turns === 1) return { content: JSON.stringify({ thought: 't', step: 'פותח ווייז', action: { type: 'open_app', name: 'ווייז' } }) }
+    return { content: JSON.stringify({ thought: 't', action: { type: 'done', summary: 'ווייז נפתח' } }) }
+  }
+  const out = await runOnPhone('תפתח ווייז ותנווט הביתה', '', { say: (t) => said.push(t), sendMedia: (m) => media.push(m), confirm: async () => false }, { think })
+  ok(app.phoneAgentMaxSteps() === 16, 'vision mode caps a run at 16 steps unless configured')
+  ok(phone.log.imageAsks.length >= 2 && phone.log.imageAsks.every(Boolean), 'every vision step asks for a screenshot')
+  ok(phone.log.widths.every((w) => w === 480), 'those screenshots are requested downscaled')
+  ok(sawImage, 'the planner receives the picture')
+  ok(said.includes('פותח ווייז'), 'a short progress line is sent')
+  ok(phone.log.acts.some((a) => a.type === 'open_app' && a.name === 'ווייז'), 'Waze is opened without an extra approval')
+  ok(media.some((m) => m.buffer?.length && m.caption === 'ווייז נפתח') && out.startsWith('DONE'), 'the final screenshot goes out with the summary')
+  config.phone.vision = 'off'
+}
+
+// 17. The step cap and the timeout both stop a run that does not finish.
+{
+  config.phone.agentMaxSteps = 2
+  phone.screen = 'whatsapp'
+  phone.log.acts.length = 0
+  const capped = await runOnPhone('משהו ארוך', '', {}, { think: script({ action: { type: 'swipe', direction: 'up' } }, { action: { type: 'swipe', direction: 'up' } }, { action: { type: 'done', summary: 'לא' } }) })
+  ok(capped.startsWith('FAIL') && capped.includes('2') && phone.log.acts.length === 2, 'the step cap stops the run')
+  config.phone.agentMaxSteps = ''
+  config.phone.agentTimeoutSec = 0.05
+  const slow = async () => {
+    await new Promise((r) => setTimeout(r, 120))
+    return { content: JSON.stringify({ thought: 't', action: { type: 'swipe', direction: 'up' } }) }
+  }
+  const timed = await runOnPhone('עוד משהו', '', {}, { think: slow })
+  ok(timed.startsWith('FAIL') && timed.includes('זמן'), 'the timeout stops the run')
+  await settle()
+  ok(phone.log.finish.includes('נגמר הזמן'), 'and the bubble says the time ran out')
+  config.phone.agentTimeoutSec = '180'
+}
+
+// 18. "עצור" from the chat aborts the run the same way the bubble does.
+{
+  const ac = new AbortController()
+  let threw = false
+  const think = async () => (ac.abort(), { content: JSON.stringify({ action: { type: 'swipe', direction: 'up' } }) })
+  try {
+    await runOnPhone('תעצור', '', { signal: ac.signal }, { think })
+  } catch (e) {
+    threw = e.name === 'Aborted'
+  }
+  ok(threw, 'עצור aborts the phone run')
 }
 
 phone.ws.close()

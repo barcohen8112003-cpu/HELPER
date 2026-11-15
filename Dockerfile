@@ -25,13 +25,38 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       chromium fonts-noto-core ca-certificates tini xvfb xauth unzip curl \
       fluxbox wmctrl x11vnc novnc websockify \
+      ffmpeg python3 python3-venv \
  && curl -fsSL -o /tmp/platform-tools.zip https://dl.google.com/android/repository/platform-tools-latest-linux.zip \
  && unzip -q /tmp/platform-tools.zip -d /opt \
  && ln -sf /opt/platform-tools/adb /usr/local/bin/adb \
  && rm -rf /tmp/platform-tools.zip \
  && rm -rf /var/lib/apt/lists/*
 
-ENV ADB_PATH=/opt/platform-tools/adb
+# Obscura: anonymous search, page reads and price surveys. Not a Chromium profile and not a published port.
+# Pinned release (Apache-2.0). amd64 and arm64 only; the binary stays inside the image.
+ARG OBSCURA_VERSION=0.2.6
+RUN arch="$(dpkg --print-architecture)" \
+ && case "$arch" in \
+      amd64) file=obscura-x86_64-linux.tar.gz; sha=eed986e478c5ec5439f531f2d7fb6b0e36a356f1df7a6c44a8e8fd4f2486bd76 ;; \
+      arm64) file=obscura-aarch64-linux.tar.gz; sha=e12aff8bbe40326386a471060083e9cec5255b67048996b84f649efef10cac39 ;; \
+      *) echo "Obscura: unsupported architecture $arch" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/obscura.tar.gz "https://github.com/h4ckf0r0day/obscura/releases/download/v${OBSCURA_VERSION}/${file}" \
+ && echo "${sha}  /tmp/obscura.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/obscura.tar.gz -C /usr/local/bin \
+ && chmod 755 /usr/local/bin/obscura /usr/local/bin/obscura-worker \
+ && rm /tmp/obscura.tar.gz \
+ && /usr/local/bin/obscura --version
+
+ENV ADB_PATH=/opt/platform-tools/adb \
+    OBSCURA_BIN=/usr/local/bin/obscura
+
+# Edge-TTS is the default voice. No API key. The Node server shells out to this CLI; ffmpeg
+# turns it into the Ogg Opus WhatsApp voice notes. The live-voice image does the same for 16 kHz PCM.
+RUN python3 -m venv /opt/edge-tts \
+ && /opt/edge-tts/bin/pip install --no-cache-dir 'edge-tts==7.3.1' \
+ && ln -sfn /opt/edge-tts/bin/edge-tts /usr/local/bin/edge-tts \
+ && edge-tts --help >/dev/null
 
 # Claude Code: build jobs (sites, scripts) on the user's Claude plan, signed in with CLAUDE_CODE_OAUTH_TOKEN.
 RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force

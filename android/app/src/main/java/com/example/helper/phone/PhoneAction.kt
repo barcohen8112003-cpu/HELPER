@@ -104,6 +104,11 @@ object PhoneSafety {
 
     fun looksLikeCard(text: String) = CARD.containsMatchIn(text)
 
+    /** Width of the JPEG sent to the vision model. Missing means the approval-card size. */
+    fun shotWidth(requested: Int?) = (requested ?: 720).coerceIn(240, 720)
+
+    fun shotQuality(width: Int) = if (width <= 480) 50 else 60
+
     fun isSecretField(n: UiNode?) =
         n != null && (n.password || (n.editable && SECRET_HINT.containsMatchIn("${n.hint} ${n.id} ${n.desc}")))
 

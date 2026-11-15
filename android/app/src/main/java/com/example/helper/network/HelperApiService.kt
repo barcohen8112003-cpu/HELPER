@@ -15,6 +15,13 @@ data class HelperResponse(
     val audio: String?
 )
 
+data class LiveJoin(
+    val ok: Boolean,
+    val url: String?,
+    val token: String?,
+    val reason: String?
+)
+
 class HelperApiService(private val settingsRepository: SettingsRepository) {
 
     private val client = OkHttpClient.Builder()
@@ -99,6 +106,29 @@ class HelperApiService(private val settingsRepository: SettingsRepository) {
             HelperResponse(reply = reply, audio = audioData)
         } catch (e: Exception) {
             throw Exception("שגיאה בפיענוח התשובה: $responseBody")
+        }
+    }
+
+    /** A short-lived LiveKit token. The server refuses this unless LIVE_VOICE is on. */
+    suspend fun joinLive(): LiveJoin = withContext(Dispatchers.IO) {
+        var baseUrl = settingsRepository.getUrl()?.trim() ?: throw Exception("לא הוגדרה כתובת שרת")
+        val token = settingsRepository.getToken()?.trim() ?: throw Exception("לא הוגדר טוקן חיבור")
+        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) baseUrl = "http://$baseUrl"
+        val request = Request.Builder()
+            .url(baseUrl.removeSuffix("/") + "/bridge/live/join")
+            .post("{}".toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+        client.newCall(request).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (response.code == 403) throw Exception("קוד הגישה לא מתאים")
+            val json = JSONObject(raw.ifBlank { "{}" })
+            LiveJoin(
+                ok = json.optBoolean("ok"),
+                url = json.optString("url").ifBlank { null },
+                token = json.optString("token").ifBlank { null },
+                reason = json.optString("reason").ifBlank { json.optString("error").ifBlank { null } }
+            )
         }
     }
 

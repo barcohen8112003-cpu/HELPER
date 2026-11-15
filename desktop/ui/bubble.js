@@ -207,12 +207,16 @@ helper.on('record', async (r) => {
 // ---- HELPER voice playback -----------------------------------------------------------------------
 helper.on('play', (sound) => {
   const a = $('voice')
-  if (!sound) { a.pause(); a.removeAttribute('src'); return }
+  if (!sound) { a.pause(); a.removeAttribute('src'); helper.send('voice-state', 'ended'); return }
   a.src = 'data:' + (sound.mime || 'audio/mpeg') + ';base64,' + sound.b64
   a.play()
     .then(() => helper.send('voice-state', 'playing ' + (sound.mime || '')))
     .catch((e) => helper.send('voice-state', 'failed: ' + e.message))
 })
+
+// The voice ended or was cut: the app knows HELPER stopped speaking (the avatar mirrors it).
+$('voice').addEventListener('ended', () => helper.send('voice-state', 'ended'))
+$('voice').addEventListener('error', () => helper.send('voice-state', 'ended'))
 
 // ---- interactions --------------------------------------------------------------------------------
 ask.addEventListener('keydown', (e) => {

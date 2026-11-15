@@ -97,8 +97,8 @@ class HelperAccessibilityService : AccessibilityService() {
         val args = msg.get("args")?.takeIf { it.isJsonObject }?.asJsonObject ?: JsonObject()
         try {
             val result: Map<String, Any?> = when (op) {
-                "observe" -> observe(args.get("image")?.asBoolean == true)
-                "capture" -> mapOf("image" to screenshot())
+                "observe" -> observe(args.get("image")?.asBoolean == true, shotWidthOf(args))
+                "capture" -> mapOf("image" to screenshot(PhoneSafety.shotWidth(null)))
                 "act" -> act(PhoneAction.parse(args))
                 else -> throw IllegalArgumentException("לא מוכר: $op")
             }
@@ -127,7 +127,13 @@ class HelperAccessibilityService : AccessibilityService() {
         return list.ifEmpty { listOfNotNull(rootInActiveWindow) }
     }
 
-    private suspend fun observe(withImage: Boolean): Map<String, Any?> {
+    private fun shotWidthOf(args: JsonObject): Int {
+        val el = args.get("maxWidth") ?: return PhoneSafety.shotWidth(null)
+        if (!el.isJsonPrimitive || !el.asJsonPrimitive.isNumber) return PhoneSafety.shotWidth(null)
+        return PhoneSafety.shotWidth(el.asInt)
+    }
+
+    private suspend fun observe(withImage: Boolean, maxWidth: Int): Map<String, Any?> {
         val (w, h) = screenSize()
         val roots = roots()
         lastNodes = ScreenTree.flatten(roots.map { AccessNode(it) }, w, h)
@@ -136,7 +142,7 @@ class HelperAccessibilityService : AccessibilityService() {
             put("width", w)
             put("height", h)
             put("nodes", lastNodes.map { it.toMap() })
-            if (withImage) put("image", screenshot())
+            if (withImage) put("image", screenshot(maxWidth))
         }
     }
 
@@ -246,9 +252,10 @@ class HelperAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** JPEG, at most 720 px wide, base64. Empty on Android older than 11 or on a protected screen. */
-    private suspend fun screenshot(): String {
+    /** JPEG, downscaled for the vision model, base64. Empty on Android older than 11 or on a protected screen. */
+    private suspend fun screenshot(maxWidth: Int): String {
         if (Build.VERSION.SDK_INT < 30) return ""
+        val width = PhoneSafety.shotWidth(maxWidth)
         return suspendCancellableCoroutine { cont ->
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
                 override fun onSuccess(result: ScreenshotResult) {
@@ -257,10 +264,12 @@ class HelperAccessibilityService : AccessibilityService() {
                     if (hw == null) return cont.resume("")
                     val soft = hw.copy(Bitmap.Config.ARGB_8888, false)
                     hw.recycle()
-                    val scale = 720f / soft.width
-                    val small = if (scale < 1f) Bitmap.createScaledBitmap(soft, 720, (soft.height * scale).toInt(), true) else soft
+                    val scale = width.toFloat() / soft.width
+                    val targetW = if (scale < 1f) width else soft.width
+                    val targetH = if (scale < 1f) (soft.height * scale).toInt().coerceAtLeast(1) else soft.height
+                    val small = if (scale < 1f) Bitmap.createScaledBitmap(soft, targetW, targetH, true) else soft
                     val out = ByteArrayOutputStream()
-                    small.compress(Bitmap.CompressFormat.JPEG, 60, out)
+                    small.compress(Bitmap.CompressFormat.JPEG, PhoneSafety.shotQuality(width), out)
                     if (small !== soft) soft.recycle()
                     small.recycle()
                     cont.resume(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))

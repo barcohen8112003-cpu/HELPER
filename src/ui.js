@@ -6,6 +6,7 @@ import http from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import os from 'node:os'
 import QRCode from 'qrcode'
+import { WebSocketServer } from 'ws'
 import { config, saveSettings, mailEnabled, ROOT, DATA_DIR } from './config.js'
 import { state, save } from './store.js'
 import { setWebtopLoginUrl, webtopCloudBlockedNow, WEBTOP_BLOCKED_STATUS } from './session.js'
@@ -15,8 +16,9 @@ import { desktopShellHtml, isDesktopPath, proxyDesktopHttp, proxyDesktopUpgrade 
 import { phoneEnabled, phoneStatus, pairPhone, connectPhone, reconnectPhone, phoneScreenshot, phoneTap, phoneSwipe, phoneTypeText, phoneKey, parseEndpoint, phoneBox } from './phone.js'
 import { pairingInfo, requestPairing } from './whatsapp.js'
 import { googleAccounts, authUrl, connectWithCode, removeAccount, checkGoogleAccounts, googleAccountStatus } from './google.js'
+import { handleVaultHttp, setVaultInputBase } from './vault.js'
 import { calendarOn } from './calendar.js'
-import { canHear, canSpeak, elevenSpeakMp3, transcribeAudio } from './media.js'
+import { canHear, canSpeak, speakMp3, transcribeAudio } from './media.js'
 import { chatModel, llmHealth } from './llm.js'
 import { ago } from './status.js'
 import { handleDashboard } from './dashboard/api.js'
@@ -27,8 +29,25 @@ import { metricsSummary } from './metrics.js'
 import { handleTvUpgrade } from './tv-app.js'
 import { handleBirdWebhook } from './bird.js'
 import { fastCommand } from './fast-commands.js'
+import { panelSummary } from './panel.js'
+import {
+  bearer,
+  callerAllowed,
+  liveJoin,
+  liveKitBrowserFile,
+  liveVoiceFrom,
+  liveVoiceStatus,
+  proxyLiveKit,
+  secretOk,
+  elevenPcm,
+  synthesize,
+  takeSlot,
+  wavFromPcm,
+} from './live-voice.js'
+import { attachFaceTrack, faceSnapshot, handleFaceHttp, handleFaceUpgrade, presentSpeech } from './face.js'
 
 const PAGE = path.join(ROOT, 'src', 'ui.html')
+const LIVE_PAGE = path.join(ROOT, 'src', 'live.html')
 const WEBTOP_PAGE = path.join(ROOT, 'src', 'webtop.html')
 const PHONE_PAGE = path.join(ROOT, 'src', 'phone.html')
 const SENT_LOG = path.join(DATA_DIR, 'sent.log')
@@ -38,13 +57,14 @@ const MAX_BODY = 100000
 const MAX_SPEECH_BODY = 1_500_000
 
 // Values that are never sent back to the page. The page only learns whether each one is set.
-const SECRETS = ['LLM_API_KEY', 'LLM_BACKUP_API_KEY', 'ELEVENLABS_API_KEY', 'GITHUB_TOKEN', 'GOOGLE_CLIENT_SECRET', 'MAIL_PASS', 'TAVILY_API_KEY', 'TRAVELPAYOUTS_TOKEN', 'DUFFEL_TOKEN', 'SERPAPI_KEY', 'YOUTUBE_API_KEY', 'VOICE_API_KEY', 'GEMINI_API_KEY', 'BACKUP_PASSPHRASE', 'CLAUDE_CODE_OAUTH_TOKEN', 'BIRD_API_KEY', 'BIRD_WEBHOOK_SECRET']
+const SECRETS = ['LLM_API_KEY', 'LLM_BACKUP_API_KEY', 'LLM_PRIMARY_API_KEY', 'FISH_AUDIO_API_KEY', 'ELEVENLABS_API_KEY', 'GITHUB_TOKEN', 'GOOGLE_CLIENT_SECRET', 'MAIL_PASS', 'TAVILY_API_KEY', 'TRAVELPAYOUTS_TOKEN', 'DUFFEL_TOKEN', 'SERPAPI_KEY', 'YOUTUBE_API_KEY', 'VOICE_API_KEY', 'GEMINI_API_KEY', 'BACKUP_PASSPHRASE', 'CLAUDE_CODE_OAUTH_TOKEN', 'BIRD_API_KEY', 'BIRD_WEBHOOK_SECRET']
 // Price comparison (src/shopping.js), kept on its own line.
 SECRETS.push('SEARCHAPI_KEY')
 const PLAIN = [
-  'LLM_BASE_URL', 'LLM_MODEL', 'LLM_BACKUP_BASE_URL', 'LLM_BACKUP_MODEL', 'LLM_CHEAP_MODEL', 'LLM_STRONG_MODEL', 'LLM_FALLBACK_MODEL', 'LLM_LIGHT', 'IMAGE_MODEL',
-  'GEMINI_MODEL', 'BIRD_ENABLED', 'BIRD_WHATSAPP_FROM', 'BIRD_OWNER_NUMBER', 'BACKUP_GOOGLE_ACCOUNT', 'BOT_NAME', 'QUIET_HOURS', 'DAILY_BRIEF_TIME', 'NEWS_BRIEF_TIME', 'NEWS_FEEDS', 'TIMEZONE', 'COMPUTER_MODE',
-  'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
+  'LLM_BASE_URL', 'LLM_MODEL', 'LLM_BACKUP_BASE_URL', 'LLM_BACKUP_MODEL', 'LLM_PRIMARY_BASE_URL', 'LLM_PRIMARY_MODEL', 'LLM_PRIMARY_LIVE', 'LLM_CHEAP_MODEL', 'LLM_STRONG_MODEL', 'LLM_FALLBACK_MODEL', 'LLM_LIGHT', 'IMAGE_MODEL',
+  'GEMINI_MODEL', 'BIRD_ENABLED', 'BIRD_WHATSAPP_FROM', 'BIRD_OWNER_NUMBER', 'INSTINCT_NUMBER', 'SELF_LEARNING', 'BACKUP_GOOGLE_ACCOUNT', 'BOT_NAME', 'QUIET_HOURS', 'DAILY_BRIEF_TIME', 'NEWS_BRIEF_TIME', 'NEWS_FEEDS', 'TIMEZONE', 'COMPUTER_MODE',
+  'FACE_ENABLED', 'FACE_ENGINE', 'FACE_TV', 'FACE_WEBRTC', 'FACE_LIP_DELAY_MS',
+  'ELEVENLABS_VOICE_ID', 'ELEVENLABS_TTS_MODEL', 'TTS_PROVIDER', 'EDGE_TTS_VOICE', 'EDGE_TTS_RATE', 'GOOGLE_CLIENT_ID', 'GOOGLE_READONLY_ACCOUNTS',
   'MAIL_HOST', 'MAIL_USER', 'MAIL_POLL_MINUTES', 'CALENDAR_ICS_URL', 'WEEKLY_REVIEW_TIME', 'MESSAGE_BUDGET', 'LLM_PRICES', 'MONTHLY_COST_LIMIT',
 ]
 // Read once at startup, so a change only takes effect after a restart.
@@ -193,8 +213,15 @@ async function snapshot(connectedSince) {
     phone: { enabled: phoneEnabled(), host: phoneBox().host || config.phone.host, mode: config.phone.mode, loginPath: '/phone' },
     desktop: { enabled: config.desktop.enabled, path: '/desktop/' },
     errand: { enabled: errandCloudOn(), path: '/errand' },
+    liveVoice: liveVoiceStatus(),
+    face: faceSnapshot(),
+    // The remote panel: credentials (never their secrets or hashes), device switches, limits and today's use.
+    panel: panelSummary(panelRef),
   }
 }
+
+// Set by startUi when the remote panel is on (src/panel.js).
+let panelRef = null
 
 // Host and Origin allow-lists. UI_PUBLIC_HOST (for example "37.60.240.231:3210") is added only when set.
 // Loopback stays allowed either way. extraHosts is the machine's own LAN address, same as before.
@@ -214,9 +241,115 @@ export function maskSettingsUrl(url) {
   return String(url || '').replace(/([?&]t=)([^&\s#]+)/g, (_, key, token) => `${key}…${token.slice(-4)}`)
 }
 
+// The face track for the current live-call utterance. Replaced on the next reply. Empty while FACE_ENABLED is off.
+let dropLiveFace = () => {}
+function holdLiveFace(track) {
+  dropLiveFace()
+  dropLiveFace = typeof track?.subscribe === 'function' ? track.subscribe(() => {}) : () => {}
+}
+
 // { connectedSince(): number, restart(): void }
 // agent(text, { voice, source }) => Promise<string>: optional; enables the bridge for other local programs.
-export function startUi({ connectedSince, restart, agent }) {
+// Phone and browser join, and the voice worker's tool turn. The worker shares LIVEKIT_API_SECRET.
+// A wrong secret is the same answer as a missing one, so the path does not confirm that the feature exists.
+async function liveHttp(req, res, url, { bridgeToken, liveTurn, send }) {
+  const cfg = liveVoiceFrom()
+  if (url.pathname === '/bridge/live/join') {
+    const given = bearer(req.headers.authorization)
+    if (!secretOk(given, bridgeToken)) return send(res, 403, { ok: false, reason: 'bridge token missing or wrong' })
+    if (!takeSlot('live-join', 30)) return send(res, 429, { ok: false, reason: 'יותר מדי בקשות. נסה שוב בעוד דקה.' })
+    const proto = req.headers['x-forwarded-proto'] || 'http'
+    return send(res, 200, await liveJoin({ identity: 'phone', host: req.headers.host, proto }))
+  }
+  const given = bearer(req.headers.authorization)
+  if (!cfg.ready || !secretOk(given, cfg.apiSecret)) return send(res, 404, { error: 'not found' })
+  if (!takeSlot('live-worker', 60)) return send(res, 429, { error: 'too many requests' })
+  let body = {}
+  try {
+    const maxBody = url.pathname === '/internal/live/face' ? 8_000_000 : 20000
+    body = JSON.parse(await readBody(req, maxBody))
+  } catch (e) {
+    return send(res, 400, { error: e.message || 'bad body' })
+  }
+  const text = String(body.text || '').trim()
+  if (!text && url.pathname !== '/internal/live/face') return send(res, 400, { error: 'empty text' })
+  const showLiveFace = async (line, pcm) => {
+    const even = pcm.length - (pcm.length % 2)
+    const clip = pcm.subarray(0, Math.min(even, 1_800_000))
+    if (clip.length < 2) return
+    try {
+      const shown = await presentSpeech({ text: line, audio: wavFromPcm(clip), mime: 'audio/wav', source: 'live', synthesize: false })
+      if (shown?.mode !== 'off' && shown.sessionId) holdLiveFace(attachFaceTrack(shown.sessionId))
+    } catch (e) {
+      console.log(`[face] ${e.message}`)
+    }
+  }
+  // A phone call reached the room. Only the owner (and LIVE_VOICE_PHONE_ALLOW) gets HELPER; anyone else is hung up.
+  if (url.pathname === '/internal/live/caller') {
+    const owner = String(state.owner?.jid || '').split('@')[0]
+    return send(res, 200, { allowed: callerAllowed(text, owner) })
+  }
+  // The voice worker already spoke with Edge. This only moves the face, and only when FACE_ENABLED is on.
+  if (url.pathname === '/internal/live/face') {
+    const pcm = Buffer.from(String(body.pcm || ''), 'base64')
+    if (pcm.length < 2) return send(res, 400, { error: 'no audio' })
+    await showLiveFace(text, pcm)
+    return send(res, 200, { ok: true })
+  }
+  if (url.pathname === '/internal/live/tts') {
+    // The worker asks for this after Edge failed: ElevenLabs PCM only when that key is configured.
+    if (body.fallback === true) {
+      const cfg = liveVoiceFrom()
+      if (!cfg.elevenKey || !cfg.elevenVoice) return send(res, 200, { engine: 'text' })
+      try {
+        const pcm = await elevenPcm(text, { apiKey: cfg.elevenKey, voiceId: cfg.elevenVoice, model: cfg.elevenModel })
+        await showLiveFace(text, pcm)
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': pcm.length, 'Cache-Control': 'no-store' })
+        return res.end(pcm)
+      } catch (e) {
+        return send(res, 200, { engine: 'text', error: e.message || 'tts failed' })
+      }
+    }
+    const out = await synthesize(text)
+    if (out.engine === 'eleven' && out.pcm) {
+      await showLiveFace(text, out.pcm)
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': out.pcm.length, 'Cache-Control': 'no-store' })
+      return res.end(out.pcm)
+    }
+    return send(res, 200, { engine: out.engine, voice: out.voice || '', rate: out.rate || '', lang: out.lang || '', error: out.error || '' })
+  }
+  if (!liveTurn) return send(res, 503, { error: 'live turn is not wired' })
+  const ac = new AbortController()
+  let finished = false
+  req.on('close', () => { if (!finished) ac.abort() })
+  try {
+    const reply = await liveTurn(text.slice(0, 4000), { signal: ac.signal })
+    finished = true
+    if (ac.signal.aborted) return
+    return send(res, 200, { reply: String(reply || '') })
+  } catch (e) {
+    finished = true
+    if (ac.signal.aborted) return
+    return send(res, 500, { error: e.message || 'turn failed' })
+  }
+}
+
+function readBody(req, max) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks = []
+    req.on('data', (c) => {
+      size += c.length
+      if (size > max) reject(Object.assign(new Error('too large'), { status: 413 }))
+      else chunks.push(c)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+export function startUi({ connectedSince, restart, agent, liveTurn, panel = null }) {
+  panelRef = panel
   const token = (state.uiToken ||= randomBytes(24).toString('hex'))
   const bridgeToken = (state.bridgeToken ||= randomBytes(24).toString('hex'))
   save()
@@ -226,6 +359,8 @@ export function startUi({ connectedSince, restart, agent }) {
     return uiPolicy(port, process.env, networkIp ? [`${networkIp}:${port}`] : [])
   }
   const origin = `http://127.0.0.1:${port}`
+  // The credential vault's input page (src/vault.js) is served on loopback unless VAULT_INPUT_HOSTS names an https host.
+  setVaultInputBase(origin)
   const oauthStates = new Set()
   setWebtopLoginUrl(() => `${policy().publicBase}/webtop?t=${token}`)
   setGoogleHomeLoginUrl(() => `${policy().publicBase}/google-home?t=${token}`)
@@ -237,6 +372,13 @@ export function startUi({ connectedSince, restart, agent }) {
   }
   const note = (text) => `<body dir="rtl" style="font-family:system-ui;padding:48px;background:#faf8f5;color:#222"><h2>${text}</h2></body>`
   const signedIn = (req) => (req.headers.cookie || '').split(/;\s*/).some((c) => c.startsWith(COOKIE + '=') && same(c.slice(COOKIE.length + 1), token))
+  const faceWss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 })
+  const faceCtx = {
+    signedIn,
+    bearerOk: (r) => same((r.headers.authorization || '').replace(/^Bearer /, ''), bridgeToken),
+    deny: (res) => send(res, 403, note('כדי לראות את הפנים, פתח את הכתובת שמופיעה בחלון של העוזר.')),
+    upgrade: (rq, sk, hd, cb) => faceWss.handleUpgrade(rq, sk, hd, cb),
+  }
 
   async function readJson(req, max = MAX_BODY) {
     let raw = ''
@@ -274,6 +416,16 @@ export function startUi({ connectedSince, restart, agent }) {
       state[list] = state[list].filter((x) => x.id !== Number(body.id))
       save()
       return {}
+    }
+    // Remote panel credentials. Issued, changed and revoked only here, on the settings site, never from the panel.
+    // The new secret is returned once, in this response, and is not stored anywhere in readable form.
+    if (route.startsWith('panel/')) {
+      if (!panelRef) throw new Error('הפאנל המרוחק כבוי (PANEL_ENABLED=on בקובץ .env, ואז הפעלה מחדש)')
+      // kind: 'panel' (a browser), or 'consumer:desktop' (HELPER for Windows' avatar, which may only read the event feed).
+      if (route === 'panel/create') return panelRef.issue({ label: body.label, scopes: body.scopes, kind: body.kind === 'consumer:desktop' ? 'consumer:desktop' : 'panel' })
+      if (route === 'panel/revoke') return { ok: panelRef.revoke(body.id) }
+      if (route === 'panel/scopes') return { scopes: panelRef.setScopes(body.id, body.scopes) }
+      if (route === 'panel/settings') return { settings: panelRef.setSettings(body.settings || {}) }
     }
     if (route === 'backup/now') return { message: await runBackup() }
     // Pairing code and QR live only in this signed-in API. The route is reached after the settings token check.
@@ -370,22 +522,30 @@ export function startUi({ connectedSince, restart, agent }) {
           const reply = quick ? quick.reply : await agent(text, { voice: Boolean(body.voice), source })
           // Speech costs ElevenLabs credits, so a client that only shows text (the app's chat) asks for none: "audio": false.
           let audio = null
+          let face = null
           if (body.audio !== false) {
             try {
-              const audioBuffer = await elevenSpeakMp3(reply)
-              if (audioBuffer) audio = audioBuffer.toString('base64')
+              const audioBuffer = await speakMp3(reply)
+              if (audioBuffer) {
+                audio = audioBuffer.toString('base64')
+                face = await presentSpeech({ text: reply, audio: audioBuffer, mime: 'audio/mpeg', source, synthesize: false })
+              }
             } catch (e) {
-              console.error('[ui] ElevenLabs audio generation failed:', e.message)
+              console.error('[ui] speech failed:', e.message)
             }
           }
           status = 200
-          return send(res, 200, { reply, audio, heard })
+          const faceInfo = face && face.mode !== 'off' ? { mode: face.mode, path: '/face', ticket: face.ticket } : undefined
+          return send(res, 200, { reply, audio, heard, ...(faceInfo ? { face: faceInfo } : {}) })
         } catch (e) {
           status = e.status || 400
           throw e
         } finally {
           console.log(bridgeAskLog({ source, status, ms: Date.now() - started }))
         }
+      }
+      if (req.method === 'POST' && (url.pathname === '/bridge/live/join' || url.pathname === '/internal/live/turn' || url.pathname === '/internal/live/tts' || url.pathname === '/internal/live/caller')) {
+        return liveHttp(req, res, url, { bridgeToken, liveTurn, send })
       }
       if (req.method === 'POST' && url.pathname === '/bridge/tts') {
         state.bridgeSeenAt = Date.now()
@@ -395,7 +555,9 @@ export function startUi({ connectedSince, restart, agent }) {
         const text = String(body.text || '').trim().slice(0, 2000)
         if (!text) return send(res, 400, { error: 'empty text' })
         try {
-          const mp3 = await elevenSpeakMp3(text)
+          const mp3 = await speakMp3(text)
+          if (!mp3?.length) return send(res, 500, { error: 'לא הצלחתי להקריא' })
+          presentSpeech({ text, audio: mp3, mime: 'audio/mpeg', source: 'tts', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
           res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': mp3.length })
           return res.end(mp3)
         } catch (e) {
@@ -429,11 +591,16 @@ export function startUi({ connectedSince, restart, agent }) {
       // not sent on the 302 follow to dest, so the next GET looks signed out. Lax is sent on that GET.
       // Cross-site POSTs still omit the cookie, and the Origin allow-list rejects a foreign page anyway.
       const desktopEntry = isDesktopPath(url.pathname)
-      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || url.pathname === '/errand' || desktopEntry) && url.searchParams.has('t')) {
+      if ((url.pathname === '/' || url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/phone' || url.pathname === '/errand' || url.pathname === '/live' || url.pathname === '/face' || desktopEntry) && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), token)) return send(res, 403, note('הקישור לא תקף. העתק את הכתובת מחלון העוזר.'))
         const dest = desktopEntry ? '/desktop/' : (url.pathname === '/' ? '/' : url.pathname)
         return send(res, 302, '', { Location: dest, 'Set-Cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000` })
       }
+      // Face page, portrait and watch socket: settings cookie, bridge bearer, or a short-lived face ticket.
+      // A face ticket does not sign the visitor into the rest of the settings site.
+      if (await handleFaceHttp(req, res, faceCtx)) return
+      // The credential vault's one-time input pages check sign-in, host, Origin and CSRF themselves (src/vault.js).
+      if (url.pathname.startsWith('/vault/') && (await handleVaultHttp(req, res, url, { signedIn, origins: access.origins }))) return
       if (!signedIn(req)) return send(res, 403, note('כדי להיכנס, פתח את הכתובת שמופיעה בחלון של העוזר.'))
       if (desktopEntry) {
         if (!config.desktop.enabled) return send(res, 503, note('שולחן העבודה בענן כבוי.'))
@@ -445,6 +612,19 @@ export function startUi({ connectedSince, restart, agent }) {
       if (await handleDashboard(req, res, url, signedIn)) return
 
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, fs.readFileSync(PAGE, 'utf8'))
+      if (req.method === 'GET' && url.pathname === '/live') return send(res, 200, fs.readFileSync(LIVE_PAGE, 'utf8'))
+      if (req.method === 'GET' && url.pathname === '/live/client.js') {
+        const file = liveKitBrowserFile(ROOT)
+        if (!file) return send(res, 404, note('ספריית השיחה לא מותקנת'))
+        return send(res, 200, fs.readFileSync(file, 'utf8'), { 'Content-Type': 'text/javascript; charset=utf-8' })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/live/join') {
+        if (!takeSlot('live-join', 30)) return send(res, 429, { ok: false, reason: 'יותר מדי בקשות. נסה שוב בעוד דקה.' })
+        const proto = req.headers['x-forwarded-proto'] || 'http'
+        const joined = await liveJoin({ identity: 'browser', host: req.headers.host, proto })
+        if (joined.ok && faceSnapshot().enabled) joined.face = { path: '/face', kind: 'video' }
+        return send(res, 200, joined)
+      }
       if (req.method === 'GET' && (url.pathname === '/webtop' || url.pathname === '/google-home' || url.pathname === '/errand')) {
         if (url.pathname === '/errand') ensureCloudBrowser('errand').catch(() => {})
         return send(res, 200, fs.readFileSync(WEBTOP_PAGE, 'utf8'))
@@ -497,6 +677,10 @@ export function startUi({ connectedSince, restart, agent }) {
     if ((req.url || '').split('?')[0] === '/bridge/tv') {
       return handleTvUpgrade(req, socket, head, (r) => same((r.headers.authorization || '').replace(/^Bearer /, ''), bridgeToken))
     }
+    // LiveKit signaling, only while the feature is ready. The token inside the URL is a LiveKit JWT we minted.
+    if ((req.url || '').startsWith('/livekit/') && liveVoiceFrom().ready) {
+      return proxyLiveKit(req, socket, head, liveVoiceFrom().url)
+    }
     const host = req.headers.host || ''
     const access = policy()
     const fail = (status, text) => {
@@ -506,6 +690,7 @@ export function startUi({ connectedSince, restart, agent }) {
     if (!access.hosts.includes(host)) return fail(403, 'Forbidden')
     let pathname = '/'
     try { pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname } catch { /* keep / */ }
+    if (pathname === '/face/watch') return handleFaceUpgrade(req, socket, head, faceCtx)
     if (!isDesktopPath(pathname)) return fail(404, 'Not Found')
     if (!config.desktop.enabled || !signedIn(req)) return fail(403, 'Forbidden')
     proxyDesktopUpgrade(req, socket, head, config.desktop.upstream)

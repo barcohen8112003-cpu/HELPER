@@ -1,7 +1,10 @@
 @echo off
-rem Starts the bridge between this PC and HELPER in the cloud. A shortcut in the Windows Startup folder runs it at
-rem sign-in. The bridge only dials out; nothing on this PC opens a port. It reconnects by itself when the network
-rem drops, and this window starts it again if it ever exits. Close the window to stop it.
+rem Visible window for a manual run of the home PC bridge. The usual launch has no window:
+rem   powershell -ExecutionPolicy Bypass -File home-relay\install-bridge-service.ps1
+rem That task starts at sign-in, in this user's session, and the process reconnects by itself.
+rem If this window is open, the background task waits so two bridges are not connected at once.
+rem The bridge only dials out; nothing on this PC opens a port. This window starts the process
+rem again if it ever exits. Close the window to stop this copy only.
 chcp 65001 >nul
 cd /d "%~dp0.."
 title HELPER - bridge to the cloud

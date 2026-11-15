@@ -3,6 +3,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { config, DATA_DIR } from './config.js'
 import { isSessionUrl, readSessionPage } from './session.js'
+import { pageBlocked, readPublicPage, searchPublic } from './obscura.js'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 
@@ -75,10 +76,16 @@ async function fetchText(url) {
   return (res.headers.get('content-type') || '').includes('html') ? htmlToText(body) : body
 }
 
-// Plain fetch first; if that fails or comes back nearly empty, retry in a real browser.
+// A short download, or a short block page, is worth a real render. A long article that merely mentions a captcha is not.
+function weakPage(text) {
+  if (!text || text.length < THIN_PAGE) return true
+  return text.length < 8000 && pageBlocked(text)
+}
+
+// Plain fetch first. A thin, blocked or failed public page is read in Obscura, then in Chromium if that is down or
+// the site rejects it. A signed-in site never takes either anonymous path.
 export async function fetchPage(url, maxChars = 12000) {
   if (!/^https?:\/\//i.test(url)) throw new Error('רק כתובות http/https')
-  // The site that needs a login is read from the signed-in window, not downloaded anonymously.
   if (isSessionUrl(url)) return readSessionPage(url, maxChars)
   let text = ''
   let error
@@ -87,11 +94,15 @@ export async function fetchPage(url, maxChars = 12000) {
   } catch (e) {
     error = e
   }
-  if (text.length < THIN_PAGE && BROWSER) {
+  if (weakPage(text)) {
+    const via = await readPublicPage(url, { maxChars })
+    if (via && !pageBlocked(via) && via.length > text.length) text = via
+  }
+  if ((text.length < THIN_PAGE || (text.length < 8000 && pageBlocked(text))) && BROWSER) {
     const rendered = await render(url).then(htmlToText, () => '')
     if (rendered.length > text.length) text = rendered
   }
-  if (!text) throw error || new Error('הדף ריק')
+  if (!text || (pageBlocked(text) && text.length < THIN_PAGE)) throw error || new Error('הדף ריק')
   return text.slice(0, maxChars)
 }
 
@@ -125,5 +136,7 @@ async function searchDuckDuckGo(query) {
 }
 
 export async function webSearch(query) {
+  const found = await searchPublic(query)
+  if (found?.length) return found
   return config.tavilyKey ? searchTavily(query) : searchDuckDuckGo(query)
 }
