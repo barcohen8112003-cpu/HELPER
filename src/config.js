@@ -356,6 +356,8 @@ const build = () => ({
     // Empty: 180s for the vision loop, 8 minutes for the older tree loop. A set value applies to both.
     agentTimeoutSec: env('PHONE_AGENT_TIMEOUT_SEC'),
   },
+  // Discord, built in (src/discord.js): the bot's token, and optionally the owner's Discord user id.
+  discord: { token: env('DISCORD_TOKEN'), ownerId: env('DISCORD_OWNER_ID') },
   // Home PC bridge (src/pc-bridge.js). The cloud listens; the Windows PC dials out. Empty secret = computer tools stay local-only.
   pcBridge: {
     secret: env('PC_BRIDGE_SECRET'),

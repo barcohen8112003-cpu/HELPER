@@ -18,6 +18,7 @@ const defaults = {
   homework: { seen: null, nudged: [], open: [], lastPoll: 0 }, // seen/nudged: assignment ids; open: unsubmitted, cached for the brief
   discordOutbox: [], // { text, speak, at }: messages waiting for the Discord bot to collect and deliver
   bridgeSeenAt: 0, // when the Discord bot last called the bridge
+  discordOwnerId: '', // the built-in Discord bot's owner, set by the WhatsApp pairing code (src/discord.js)
   sentKeys: [], // event keys already announced, so nothing is announced twice
   inbox: [], // { id, text, at, answered, how, alerted }: his last chat messages and whether each got an answer (src/inbox.js)
   lessons: { fetchedAt: 0, week: [] }, // the Webtop timetable: [{ day, lesson, subject, teacher, room, cancelled }]

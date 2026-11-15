@@ -43,6 +43,7 @@ import { presentSpeech } from './face.js'
 import * as groups from './groups.js'
 import * as schoolwork from './schoolwork.js'
 import { groupAdders } from './group-tools.js'
+import { startDiscord } from './discord.js'
 
 let reconciled = false
 import { scraplingEnabled, scraplingStatus } from './scrapling.js'
@@ -731,6 +732,15 @@ const panel = panelCfg.enabled
     })
   : null
 if (panel) startPanelServer(panel, panelCfg)
+
+// The built-in Discord bot (src/discord.js). Off while DISCORD_TOKEN is empty. Its pairing code goes to WhatsApp.
+startDiscord({
+  ask: (text) => bridgeAsk(text, { voice: false, source: 'discord' }),
+  tellOwner: (text) => {
+    if (!state.owner) throw new Error('וואטסאפ עוד לא מקושר')
+    return wa.send(state.owner.jid, text)
+  },
+})
 
 const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk, liveTurn, panel })
 settingsPage = settingsUrl
