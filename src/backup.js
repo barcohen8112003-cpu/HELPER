@@ -18,7 +18,17 @@ const KEEP = 14
 const EVERY_MS = 24 * 3600 * 1000
 
 // Small files only: browser profiles, the VM and old local backups are large and can be rebuilt.
-const FILES = ['state.json', 'google.json', 'watch-state.json', 'voice-tools.json']
+// inflight-archive.jsonl: ids of messages that may not have been answered (src/inflight.js), metadata only. Once an
+// id leaves state.json it lives only there, so a backup without it could not restore that id. It is read after
+// state.json on purpose: inflight.js writes an id to the archive before it takes it out of state, so reading state
+// first can only see an id twice, never miss it. collect() is synchronous, so nothing moves between the two reads
+// inside this process anyway.
+// Limits: the archive is never trimmed (by design), so it is backed up whole and the backup grows with it. Each
+// backup is built in memory and sent in one Drive multipart upload; Google documents that upload type for files up
+// to about 5MB, so a bigger backup is logged (see runBackup) and, if Drive refuses it, fails loudly like any other
+// failed backup (the owner hears after two in a row). Nothing is ever dropped from the backup to make it fit.
+const FILES = ['state.json', 'inflight-archive.jsonl', 'google.json', 'watch-state.json', 'voice-tools.json']
+const LARGE_BYTES = 5 * 1024 * 1024
 const DIRS = ['auth', 'audit']
 
 export const backupEnabled = () => Boolean(config.backup.passphrase && backupAccount())
@@ -133,11 +143,13 @@ export async function runBackup() {
   if (!email) throw new Error('אין חשבון Google לגיבוי. צריך לחבר חשבון שלא מסומן "קריאה בלבד".')
   const files = collect()
   const data = encrypt(files, config.backup.passphrase, { bot: config.botName })
+  const archiveBytes = files['data/inflight-archive.jsonl'] ? Buffer.byteLength(files['data/inflight-archive.jsonl'], 'base64') : 0
+  if (data.length > LARGE_BYTES) console.log(`[backup] large backup: ${Math.round(data.length / 1024)}KB encrypted (recovery archive ${Math.round(archiveBytes / 1024)}KB); Drive may refuse it`)
   const parent = await folderId(email)
   const name = `helper-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.hbk`
   await upload(email, parent, name, data)
   await prune(email, parent).catch((e) => console.log(`[backup] ניקוי גיבויים ישנים: ${e.message}`))
-  state.backup = { lastOk: Date.now(), lastError: '', fails: 0, size: data.length, account: email }
+  state.backup = { lastOk: Date.now(), lastError: '', fails: 0, size: data.length, archiveBytes, account: email }
   save()
   return `גיבוי נשמר ב-Drive של ${email} (${Math.round(data.length / 1024)}KB, ${Object.keys(files).length} קבצים)`
 }

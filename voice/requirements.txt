@@ -1,4 +1,4 @@
 # Pinned to the Agents release this worker was written against.
-livekit-agents[groq,silero]==1.8.10
+livekit-agents[groq,silero,elevenlabs]==1.8.10
 aiohttp>=3.10,<4
 edge-tts==7.3.1

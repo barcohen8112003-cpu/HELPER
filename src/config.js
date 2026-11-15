@@ -85,6 +85,9 @@ const build = () => ({
     fallbackModels: env('LLM_FALLBACK_MODEL').split(',').map((s) => s.trim()).filter(Boolean),
     // A second provider, used only when every model of the first is out of quota or failing.
     backup: { baseUrl: env('LLM_BACKUP_BASE_URL').replace(/\/+$/, ''), apiKey: env('LLM_BACKUP_API_KEY'), model: env('LLM_BACKUP_MODEL') },
+    // A preferred provider for conversation turns only (e.g. Coarena Opus). Any failure there falls back to LLM_MODEL and the rest.
+    // LLM_PRIMARY_LIVE=false keeps live phone calls on LLM_MODEL for speed.
+    primary: { baseUrl: env('LLM_PRIMARY_BASE_URL').replace(/\/+$/, ''), apiKey: env('LLM_PRIMARY_API_KEY'), model: env('LLM_PRIMARY_MODEL'), live: env('LLM_PRIMARY_LIVE') !== 'false' },
     // Light mode: for providers with a small tokens-per-minute budget (free tiers). Short persona, short history, short tool results.
     light: env('LLM_LIGHT') === 'true',
   },
@@ -140,6 +143,8 @@ const build = () => ({
   youtubeKey: env('YOUTUBE_API_KEY'),
   // Each message gets only the tools and instructions of the areas it is about (src/domains.js). off = every tool, always.
   routing: env('TOOL_ROUTING', 'on') !== 'off',
+  // Off until the existing voice has passed a listening check. WhatsApp only.
+  whatsappSpokenReplies: env('WHATSAPP_SPOKEN_REPLIES') === 'on',
   // Speech can live on a different provider than the chat model; it defaults to the same one.
   voice: {
     baseUrl: (env('VOICE_BASE_URL') || env('LLM_BASE_URL', 'https://api.openai.com/v1')).replace(/\/+$/, ''),
@@ -148,7 +153,9 @@ const build = () => ({
     ttsModel: env('TTS_MODEL'),
     ttsVoice: env('TTS_VOICE', 'alloy'),
   },
-  // When a key is set, ElevenLabs handles both directions of voice and the settings above are ignored.
+  // Speech defaults to Edge-TTS (src/tts.js) even when this key is set. TTS_PROVIDER=elevenlabs
+  // selects it for speaking, and a failed Edge request falls back here only when the key and voice id are set.
+  // The key still turns on ElevenLabs transcription when STT_MODEL is empty, and image, video, and the old phone agent.
   elevenlabs: {
     apiKey: env('ELEVENLABS_API_KEY'),
     voiceId: env('ELEVENLABS_VOICE_ID'),
@@ -194,6 +201,8 @@ const build = () => ({
     // WhatsApp notices for new grades, timetable changes, exams and school events (src/webtop-watch.js).
     alerts: env('WEBTOP_ALERTS', 'true') !== 'false',
     alertsMinutes: Math.max(15, Number(env('WEBTOP_ALERTS_MINUTES', '60')) || 60),
+    // The page whose own requests include the homework board (dashboard/GetHomeWork). Read only with SCHOOLWORK=on.
+    homeworkPath: env('WEBTOP_HOMEWORK_PATH', '/dashboard'),
   },
   // fetch_page through Scrapling (Python, py/scrapling_worker.py): public HTTPS pages only, with DNS and redirect
   // checks. Off unless SCRAPLING_ENABLED=true. SCRAPLING_PYTHON is the interpreter inside its own venv.

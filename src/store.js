@@ -39,6 +39,8 @@ const defaults = {
   fileOutbox: [], // { path, name, mime, caption, at }: files waiting for WhatsApp to be connected
   location: null, // { lat, lng, address, city, live, at }: the last location the user shared in WhatsApp
   phoneAppNotes: {}, // { [package]: [note] }: where things live in each phone app, learned by run_on_phone
+  ownPending: [], // { id, kind, failed, title?, at, sent? }: tasks that ended while he was being answered and wait to join the history. Status only, never a result or an error text (src/agent.js)
+  // turnOpen: { mark, at } is set only while a turn of his is being answered: where it began in history, for a restart
   nextId: 1,
 }
 

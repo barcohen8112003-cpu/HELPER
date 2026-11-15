@@ -1,0 +1,14 @@
+# Optional override: the panel's port on the server's loopback only, for Caddy on the same machine.
+# NOT applied by the default `docker compose up`. Use only after approval:
+#   docker compose -f docker-compose.yml -f deploy/panel/docker-compose.panel.yml up -d --build
+services:
+  helper:
+    environment:
+      PANEL_ENABLED: "on"
+      # Inside the container it must listen on all of the container's interfaces; the mapping below keeps it
+      # on the host's 127.0.0.1, so it is not reachable from the internet without Caddy.
+      PANEL_LISTEN: "0.0.0.0"
+      PANEL_PORT: "3214"
+      PANEL_TRUST_PROXY: "1"
+    ports:
+      - "127.0.0.1:3214:3214"

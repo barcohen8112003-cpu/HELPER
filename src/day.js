@@ -5,6 +5,7 @@ import { calendarOn, listEvents } from './calendar.js'
 import { googleEnabled, googleAccounts, tasksList } from './google.js'
 import { timetableText } from './lessons.js'
 import { briefLines } from './groups.js'
+import { enabled as schoolworkOn, briefHomework } from './schoolwork.js'
 
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const time = (d) => new Date(d).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
@@ -32,5 +33,7 @@ export async function getDay(now = new Date()) {
       return []
     }
   })()
-  return { events, reminders, homework: state.homework.open, tasks, lessons, groups }
+  // With SCHOOLWORK=on: open work from every school source (src/schoolwork.js); otherwise Classroom's list, as before.
+  const homework = schoolworkOn() ? briefHomework(now.getTime()) : state.homework.open
+  return { events, reminders, homework, tasks, lessons, groups }
 }

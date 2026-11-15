@@ -95,17 +95,29 @@ ok(spokenLine('ראו https://example.com *מודגש*').includes('קישור') 
 ok(LIVE_NOTE.includes('וואטסאפ') && LIVE_NOTE.includes('מוחקת'), 'the live turn still names the approval gates')
 
 const pcm = await synthesize('שלום', readyEnv, {
-  eleven: async (line) => Buffer.from(line, 'utf8'),
+  eleven: async () => {
+    throw new Error('should not be called')
+  },
 })
-ok(pcm.engine === 'edge', 'without an ElevenLabs voice the free Hebrew voice is chosen')
-const withVoice = { ...readyEnv, ELEVENLABS_API_KEY: 'xi', ELEVENLABS_VOICE_ID: 'voice' }
+ok(pcm.engine === 'edge' && pcm.voice === 'he-IL-HilaNeural' && pcm.lang === 'he' && pcm.rate === '+0%', 'the default voice is the free Hebrew Edge voice')
+const ignoredKey = await synthesize('שלום', { ...readyEnv, ELEVENLABS_API_KEY: 'xi', ELEVENLABS_VOICE_ID: 'voice' }, {
+  eleven: async () => {
+    throw new Error('should not be called')
+  },
+})
+ok(ignoredKey.engine === 'edge' && !ignoredKey.fellBack, 'an ElevenLabs key does not select ElevenLabs unless TTS_PROVIDER asks')
+const english = await synthesize('Hello there', readyEnv, {})
+ok(english.engine === 'edge' && english.voice === 'en-US-AriaNeural' && english.lang === 'en', 'an English line picks an English neural voice')
+const avri = await synthesize('שלום', { ...readyEnv, EDGE_TTS_VOICE: 'he-IL-AvriNeural', EDGE_TTS_RATE: '+10%' }, {})
+ok(avri.voice === 'he-IL-AvriNeural' && avri.rate === '+10%', 'EDGE_TTS_VOICE and EDGE_TTS_RATE are honored')
+const withVoice = { ...readyEnv, TTS_PROVIDER: 'elevenlabs', ELEVENLABS_API_KEY: 'xi', ELEVENLABS_VOICE_ID: 'voice' }
 const eleven = await synthesize('שלום עולם', withVoice, {
   eleven: async (line, opts) => {
     ok(opts.elevenVoice === 'voice' && line === 'שלום עולם', 'eleven gets the spoken line and the saved voice')
     return Buffer.from([1, 2, 3, 4])
   },
 })
-ok(eleven.engine === 'eleven' && eleven.pcm.length === 4, 'eleven audio is returned')
+ok(eleven.engine === 'eleven' && eleven.pcm.length === 4, 'eleven audio is returned when TTS_PROVIDER=elevenlabs')
 const fell = await synthesize('שלום', withVoice, {
   eleven: async () => {
     throw new Error('quota')

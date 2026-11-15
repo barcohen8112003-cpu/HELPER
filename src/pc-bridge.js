@@ -2,6 +2,8 @@
 // (WebSocket) and runs the existing pc.js / errand-browser.js functions there.
 // Nothing at home accepts a connection. Payloads are encrypted, signed, and replay-checked,
 // the same idea as home-relay/wake-relay.mjs.
+// On the PC the usual launch is the hidden logon task (home-relay/install-bridge-service.ps1).
+// It runs this same client in the signed-in user's session. The process reconnects on its own.
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
@@ -18,13 +20,18 @@ const TIMEOUT_MS = {
   webcamSnap: 30000,
   screenRecord: 120000,
   speakOnPc: 130000,
+  playAudio: 130000,
   wingetSearch: 100000,
   wingetInstall: 620000,
   findFiles: 100000,
   browserScreenshot: 45000,
   browserAct: 30000,
   browserProbe: 30000,
+  inspectAt: 25000,
+  focusInfo: 25000,
+  focusWindow: 25000,
   runCommand: 70000,
+  runAdminCommand: 95000,
   readSessionPage: 90000,
   downloadSessionFile: 120000,
   readTimetable: 90000,
@@ -32,16 +39,19 @@ const TIMEOUT_MS = {
   sessionKeepAlive: 90000,
   getHomeDevices: 30000,
   controlHomeDevice: 45000,
+  controlHomeDeviceResult: 45000,
   googleHomeKeepAlive: 60000,
 }
 
 const PC_NAMES = [
   'media', 'screenshot', 'findApps', 'launchApp', 'playSpotify', 'closeApp', 'status', 'lock',
   'sleepMonitors', 'wakeMonitors', 'unlock', 'typeText', 'pressKey', 'setClipboard', 'getClipboard',
-  'popup', 'startTimer', 'speakOnPc', 'power', 'findFiles', 'organizeDownloads', 'wingetSearch',
+  'popup', 'startTimer', 'speakOnPc', 'playAudio', 'power', 'findFiles', 'organizeDownloads', 'wingetSearch',
   'wingetInstall', 'act', 'webcamSnap', 'screenRecord', 'topProcesses', 'killProcess',
   'getBrowserTabs', 'closeBrowserTab', 'openBrowserTab', 'activateBrowserTab',
-  'openOnScreen', 'runCommand', 'readTextFile', 'writeTextFile', 'readUserFile',
+  'openOnScreen', 'runCommand', 'runAdminCommand', 'readTextFile', 'writeTextFile', 'readUserFile',
+  // The desktop agent's checks (src/desktop-body.js): names of controls and windows, never field values.
+  'inspectAt', 'focusInfo', 'focusWindow',
 ]
 
 let server = null
@@ -235,7 +245,8 @@ function dropHome(ws) {
 }
 
 export function remoteCall(name, args = [], opts = {}) {
-  if (!bridgeConnected()) return Promise.reject(offlineError())
+  // notSent: refused before anything left for the PC, so nothing can have run there. Device actions rely on it.
+  if (!bridgeConnected()) return Promise.reject(Object.assign(offlineError(), { notSent: true }))
   const id = randomBytes(8).toString('hex')
   const timeoutMs = opts.timeoutMs || TIMEOUT_MS[name] || 60000
   const frame = seal(secret(), { t: 'call', id, name, args: pack(args, false) })
@@ -254,7 +265,7 @@ export function remoteCall(name, args = [], opts = {}) {
     } catch {
       clearTimeout(timer)
       pending.delete(id)
-      reject(offlineError())
+      reject(Object.assign(offlineError(), { notSent: true }))
     }
   })
 }
@@ -433,22 +444,33 @@ export function connectHome({ url, secret: s, handlers }) {
         }
         settled = true
         let stopPump = () => {}
+        let stopBeat = () => {}
         let stopped = false
+        const stopAll = () => {
+          if (stopped) return
+          stopped = true
+          try { stopPump() } catch { /* already stopped */ }
+          try { stopBeat() } catch { /* already stopped */ }
+        }
+        // Only the home process. A missed pong means the server vanished without a close
+        // (a docker kill). Terminate so runBridgeLoop dials again. Tests that call
+        // connectHome directly are not the executor, so they are left alone.
         if (process.env.PC_BRIDGE_EXECUTOR === '1') {
+          stopBeat = watchBridgeSocket(ws)
           import('./face-pc.js').then((m) => {
             if (stopped || ws.readyState !== WebSocket.OPEN) return
             stopPump = m.startFacePump(ws, s) || (() => {})
           }).catch((e) => console.log(`[face] ${e.message}`))
         }
+        ws.on('close', stopAll)
         resolve({
           ws,
           sendEvent(data) {
             if (ws.readyState === WebSocket.OPEN) ws.send(seal(s, { t: 'event', name: 'face', data }))
           },
           close: () => {
-            stopped = true
-            try { stopPump() } catch { /* already stopped */ }
-            ws.close()
+            stopAll()
+            try { ws.close() } catch { /* already closed */ }
           },
           get connected() {
             return ws.readyState === WebSocket.OPEN
@@ -469,6 +491,8 @@ export async function homeHandlers() {
   for (const name of PC_NAMES) {
     if (typeof pc[name] === 'function') handlers[name] = (...args) => pc[name](...args)
   }
+  const admin = await import('./pc-admin.js')
+  handlers.runAdminCommand = (command) => admin.runAdminCommand(command)
   handlers.browserScreenshot = () => errand.browserScreenshot()
   handlers.browserAct = (action) => errand.browserAct(action)
   handlers.browserProbe = (action) => errand.browserProbe(action)
@@ -477,11 +501,12 @@ export async function homeHandlers() {
   handlers.readSessionPage = (url, maxChars) => session.readSessionPage(url, maxChars)
   handlers.downloadSessionFile = (url, name) => session.downloadSessionFile(url, name)
   handlers.readTimetable = () => session.readTimetable()
-  handlers.readWebtopUpdates = () => session.readWebtopUpdates()
+  handlers.readWebtopUpdates = (opts) => session.readWebtopUpdates({ homework: Boolean(opts?.homework) })
   handlers.sessionKeepAlive = () => session.sessionKeepAlive()
   const home = await import('./google-home.js')
   handlers.getHomeDevices = () => home.getHomeDevices()
   handlers.controlHomeDevice = (query, action) => home.controlHomeDevice(query, action)
+  handlers.controlHomeDeviceResult = (query, action, opts) => home.controlHomeDeviceResult(query, action, { fast: Boolean(opts?.fast), strict: true })
   handlers.googleHomeKeepAlive = () => home.googleHomeKeepAlive()
   // Face render on this PC. Not a model tool: only the cloud calls these, and only when FACE_ENABLED is on.
   const facePc = await import('./face-pc.js')
@@ -518,26 +543,120 @@ export function bridgeConfig(env = process.env, moduleUrl = import.meta.url, pat
   }
 }
 
-// Outbound only. Reconnects with the same backoff as the wake relay.
+// Same shape as the wake relay: 2s, 4s, 8s, 16s, 32s, then a minute, and it stays there.
+// A live session resets the wait, so a short docker restart is retried quickly, and a long
+// outage is not hammered. The loop does not stop.
+export const BRIDGE_BACKOFF_START_MS = 2000
+export const BRIDGE_BACKOFF_MAX_MS = 60000
+// One missed pong at this interval closes a half-open socket. Long enough that a busy
+// desktop (a long winget install, a screenshot) is not treated as a dead server.
+export const BRIDGE_PING_MS = 45000
+
+export function nextBridgeDelay(wait, max = BRIDGE_BACKOFF_MAX_MS) {
+  const n = Number(wait)
+  const base = Number.isFinite(n) && n > 0 ? n : BRIDGE_BACKOFF_START_MS
+  return Math.min(max, base * 2)
+}
+
+// The secret never belongs in a log line. Short strings are left alone so a test stub
+// cannot wipe ordinary words.
+export function scrubSecret(text, secret) {
+  const raw = String(text ?? '').replace(/\s+/g, ' ').trim()
+  const s = String(secret ?? '')
+  if (s.length < 8) return raw
+  return raw.split(s).join('[secret]')
+}
+
+// `maxCycles` is for tests. The home process leaves it infinite.
+// `connect` resolves with `{ closed }` once the socket is up. `closed` settles when it drops.
+export async function runBridgeLoop({
+  connect,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  onRetry = () => {},
+  onWait = () => {},
+  startMs = BRIDGE_BACKOFF_START_MS,
+  maxMs = BRIDGE_BACKOFF_MAX_MS,
+  maxCycles = Infinity,
+} = {}) {
+  if (typeof connect !== 'function') throw new Error('connect is required')
+  const delays = []
+  let wait = startMs
+  let cycles = 0
+  let connected = false
+  for (;;) {
+    let failure = null
+    connected = false
+    try {
+      const link = await connect()
+      connected = true
+      wait = startMs
+      if (link && link.closed) await link.closed
+    } catch (e) {
+      failure = e instanceof Error ? e : new Error(String(e))
+    }
+    cycles += 1
+    if (cycles >= maxCycles) return { delays, wait, cycles, connected }
+    if (failure) onRetry(failure, wait)
+    else onWait(wait)
+    delays.push(wait)
+    await sleep(wait)
+    wait = nextBridgeDelay(wait, maxMs)
+  }
+}
+
+// Closes the socket when a ping is not answered, so the retry loop can dial again.
+// Returns a stop function. The timer does not keep the process alive by itself.
+export function watchBridgeSocket(ws, { pingMs = BRIDGE_PING_MS, onDead } = {}) {
+  if (!ws || typeof ws.ping !== 'function') return () => {}
+  let alive = true
+  let stopped = false
+  const stop = () => {
+    if (stopped) return
+    stopped = true
+    clearInterval(timer)
+    if (typeof ws.off === 'function') {
+      try { ws.off('pong', mark) } catch { /* already gone */ }
+    }
+  }
+  const mark = () => { alive = true }
+  const timer = setInterval(() => {
+    if (stopped || ws.readyState !== WebSocket.OPEN) return
+    if (!alive) {
+      stop()
+      try { onDead?.() } catch { /* the close is what matters */ }
+      try { ws.terminate() } catch { /* already closed */ }
+      return
+    }
+    alive = false
+    try { ws.ping() } catch { alive = true }
+  }, pingMs)
+  if (typeof timer.unref === 'function') timer.unref()
+  if (typeof ws.on === 'function') ws.on('pong', mark)
+  if (typeof ws.once === 'function') ws.once('close', stop)
+  else if (typeof ws.on === 'function') ws.on('close', stop)
+  return stop
+}
+
+// Outbound only. Reconnects until the server is back. Does not return.
 export async function runHomeBridge() {
   const cfg = bridgeConfig()
   if (!cfg.url || !cfg.secret) throw new Error('חסרים url ו-secret (pc-bridge.config.json או PC_BRIDGE_URL ו-PC_BRIDGE_SECRET)')
   if (cfg.url.includes('YOUR_SERVER') || cfg.secret.includes('paste-the-same')) throw new Error('צריך למלא את כתובת הענן ואת אותו סוד כמו PC_BRIDGE_SECRET')
   const handlers = await homeHandlers()
-  const log = (line) => console.log(`${new Date().toLocaleString('sv-SE')} ${line}`)
-  let wait = 2000
-  for (;;) {
-    try {
+  const log = (line) => console.log(`${new Date().toLocaleString('sv-SE')} ${scrubSecret(line, cfg.secret)}`)
+  await runBridgeLoop({
+    connect: async () => {
       log(`מתחבר אל ${cfg.url}`)
       const link = await connectHome({ url: cfg.url, secret: cfg.secret, handlers })
       log('מחובר. פעולות המחשב ירוצו כאן.')
-      wait = 2000
-      await new Promise((resolve) => link.ws.once('close', resolve))
-      log('החיבור נסגר')
-    } catch (e) {
-      log(`החיבור נכשל (${e.message}), נסיון חוזר בעוד ${wait / 1000} שניות`)
-    }
-    await new Promise((r) => setTimeout(r, wait))
-    wait = Math.min(60000, wait * 2)
-  }
+      return {
+        closed: new Promise((resolve) => link.ws.once('close', () => {
+          log('החיבור נסגר')
+          resolve()
+        })),
+      }
+    },
+    onRetry: (e, waitMs) => log(`החיבור נכשל (${e.message}), נסיון חוזר בעוד ${waitMs / 1000} שניות`),
+    onWait: (waitMs) => log(`נסיון חוזר בעוד ${waitMs / 1000} שניות`),
+  })
 }

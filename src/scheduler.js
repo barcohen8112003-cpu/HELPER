@@ -16,6 +16,7 @@ import { learnerBackend, research } from './learner.js'
 import { weeklyDue, weekAhead, deadlineReminders, isoDay } from './study.js'
 import { phoneEnabled, phoneKeepAlive } from './phone.js'
 import { mayReachOut, markReachedOut, takeDueLoop, followUpPrompt, checkInContext } from './proactive.js'
+import * as schoolwork from './schoolwork.js'
 
 const NEWS_WINDOW = 4 * 60
 const FIRST_CHECK_IN = 3 * 60000
@@ -298,15 +299,27 @@ async function homework(notify) {
   hw.lastPoll = Date.now()
   const accounts = googleAccounts()
   const results = await Promise.allSettled(accounts.map((a) => classroomWork(a, 30)))
+  await classroomRound(notify, accounts, results)
+}
+
+// What one Classroom read does: health, the new-assignment notice, deadline nudges, and the open list for the brief.
+// With SCHOOLWORK=on the homework list (src/schoolwork.js) owns the new-assignment notice, so it is said once
+// for every school source together, not once here and again there.
+export async function classroomRound(notify, accounts, results, nowMs = Date.now()) {
+  const hw = state.homework
   for (const [i, r] of results.entries()) await track(notify, `classroom ${accounts[i]}`, `Classroom של ${accounts[i]}`, r.status === 'rejected' ? r.reason : null)
   // Nothing readable (no Classroom on these accounts, or access not granted): keep the last known state.
-  if (!results.some((r) => r.status === 'fulfilled')) return save()
+  if (!results.some((r) => r.status === 'fulfilled')) {
+    await schoolwork.fromClassroom(accounts, results, notify, nowMs).catch((e) => console.log(`[schoolwork] ${e.message}`))
+    return save()
+  }
   const work = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+  await schoolwork.fromClassroom(accounts, results, notify, nowMs).catch((e) => console.log(`[schoolwork] ${e.message}`))
 
   const fresh = hw.seen ? work.filter((w) => !hw.seen.includes(w.id)) : []
   hw.seen = [...new Set([...(hw.seen || []), ...work.map((w) => w.id)])].slice(-500)
   hw.open = work.filter((w) => !w.submitted && w.due).map((w) => ({ course: w.course, title: w.title, due: dueText(w.due) }))
-  if (fresh.length) await notify(`📚 *מטלה חדשה:*\n${fresh.map((w) => `• ${w.title} (${w.course})${w.due ? ` - להגשה ב${dueText(w.due)}` : ''}`).join('\n')}`, false, `homework-new:${fresh.map((w) => w.id).join(',')}`)
+  if (fresh.length && !schoolwork.enabled()) await notify(`📚 *מטלה חדשה:*\n${fresh.map((w) => `• ${w.title} (${w.course})${w.due ? ` - להגשה ב${dueText(w.due)}` : ''}`).join('\n')}`, false, `homework-new:${fresh.map((w) => w.id).join(',')}`)
 
   // The day before, and again on the morning it is due. Only while Classroom shows it as not submitted.
   for (const { w, kind } of deadlineReminders(work, hw.nudged)) {
@@ -455,6 +468,9 @@ async function news(notify) {
   }
 }
 
+// One round, in order. The homework summary comes after Webtop and Classroom, so a read due this round is already in.
+const JOBS = [reminders, tasks, watchers, webtop, webtopUpdates, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, schoolwork.schoolworkJob, weekly, (n) => costTick(n), news, followUps, checkIn, study]
+
 // runTask(instruction) => Promise<string>: runs the agent on a scheduled instruction, returns what to send ('' for nothing).
 export function startScheduler(notify, runTask = async () => '', monitoring = { handleEvent: async () => ({}), tick: async () => {} }) {
   let busy = false
@@ -469,7 +485,7 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
       listenToGmail()
       // costTick's second argument is a Date. The loop passes runTask as that argument, which threw
       // 'now.getFullYear is not a function' and skipped the monthly cost summary.
-      for (const job of [reminders, tasks, watchers, webtop, webtopUpdates, googleHome, phoneLink, lessonReminders, mail, calendar, googleCalendar, homework, weekly, (n) => costTick(n), news, followUps, checkIn, study]) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
+      for (const job of JOBS) await job(notify, runTask, monitoring).catch((e) => console.log(`[scheduler] ${e.message}`))
       // Retries, deadline escalation and the morning brief of quiet monitoring.
       await monitoring.tick().catch((e) => console.log(`[watch] ${e.message}`))
     } finally {
@@ -508,4 +524,4 @@ export function startScheduler(notify, runTask = async () => '', monitoring = { 
 }
 
 // Exposed for the self-tests only.
-export const _test = { followUps, checkIn }
+export const _test = { followUps, checkIn, JOBS, homework, webtopUpdates }

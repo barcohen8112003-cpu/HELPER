@@ -16,6 +16,33 @@ const DEFAULTS = {
   dictationKey: 'rightctrl',   // hold to dictate
   pointKey: 'ctrl+alt+p',
   startAtLogin: true,
+  bridgeAtStart: true,         // open the bridge to this PC (Claude Code's Remote Control) when HELPER starts
+  // The live avatar on the screen (ui/avatar.html). Off until the owner turns it on in the tray.
+  avatarEnabled: false,
+  avatarPos: null,             // {x, y} where it was dragged to; null: the bottom corner of the main screen
+  avatarDesign: 'orb',         // the look: orb | chip | figure (tray: "אווטאר על המסך" → "עיצוב")
+  // Events from HELPER on the cloud (a message went out, a task, an urgent alert): types only, never content.
+  // Off until turned on, and it needs the panel address and the avatar's own credential (avatar-link.ps1).
+  avatarEvents: false,
+  avatarPanelUrl: '',          // e.g. https://naor-helper.duckdns.org
+  avatarCredential: '',        // hpn_… made on the settings site ("credential לאווטאר במחשב")
+  // Dance to music from any app on this PC (Windows' "now playing" list), and move with its loudness and beat
+  // (Windows' own peak meter). Both off until turned on in the tray. Nothing is recorded or sent: see audio-watch.js.
+  avatarSystemMusic: false,
+  avatarBeat: false,
+  avatarMusicIgnore: [],       // app ids not to dance for, e.g. ["teams", "vlc"] (a part of the id is enough)
+  // Spoken WhatsApp messages (src/wa-announce.js): who and what, from WhatsApp Desktop's own Windows notification,
+  // said by the voice on this PC. Off until the owner turns it on (tray: "הקראת הודעות וואטסאפ"). Nothing goes to the
+  // cloud, and the text is never logged or kept.
+  waAnnounce: false,
+  waMode: 'allowlist',         // allowlist: only the chats below; all: every chat but waBlock (groups only with waGroups)
+  waChats: [],                 // [{name, kind: 'direct'|'group'}], the name as WhatsApp shows it ("תקריא לי הודעות מדנה")
+  waBlock: [],                 // names never said in "all" mode
+  waGroups: false,             // "all" mode: groups too
+  waQuiet: { on: true, from: '22:00', to: '07:00' },
+  waVoice: 'windows',          // windows: Windows' Hebrew voice, on this PC only; edge: edge-tts (Microsoft's online service)
+  waMaxChars: 160,
+  waPerMinute: 4,
 }
 
 function init(dataDir) {
