@@ -2,7 +2,7 @@
 // field; Ctrl+Alt+P to point at something on the screen and then ask about it. Instant commands run with no AI;
 // the rest goes to Claude Code on this PC with HELPER's hands, or to HELPER on the cloud.
 'use strict'
-const { app, BrowserWindow, Tray, Menu, nativeImage, screen, desktopCapturer, ipcMain, session, shell, Notification, globalShortcut } = require('electron')
+const { app, BrowserWindow, Tray, Menu, nativeImage, screen, desktopCapturer, ipcMain, session, shell, Notification, globalShortcut, powerMonitor } = require('electron')
 const path = require('path')
 const fs = require('fs')
 
@@ -378,6 +378,133 @@ function applyAvatar() {
   if (!avatarFeed) avatarStatus = 'stopped'
 }
 
+// ---- spoken WhatsApp messages ------------------------------------------------------------------------
+// WhatsApp Desktop's own Windows notification (who and what) said aloud by the voice on this PC. Off until turned on
+// (tray: "הקראת הודעות וואטסאפ"). The cloud is not part of it: the events feed carries types only, and this needs
+// content, so the pickup (src/wa-listen.js) and the voice (src/private-voice.js) both stay here, and it works with
+// HELPER's server down. The text is never logged, shown, kept or sent: app.log gets codes only ("wa: tts-failed").
+
+let waListen = null, waAnn = null
+let waAccess = 'off'               // off | starting | Allowed | Denied | Unspecified | Error
+let waLocked = false
+let waPauseUntil = 0
+let waLast = ''                    // the last decision's code, for the tray ("spoken", "quiet", "not-listed"…)
+const WA_PAUSE_MS = 30 * 60 * 1000
+
+const WA_ACCESS = {
+  off: 'כבוי', starting: 'מתחיל…', Allowed: 'פעיל', Denied: 'אין הרשאה לקרוא התראות (הגדרות Windows → פרטיות → התראות)',
+  Unspecified: 'מחכה לאישור של Windows', Error: 'Windows לא מאפשר לקרוא התראות במחשב הזה',
+}
+
+function waLockedNow() {
+  try { return waLocked || powerMonitor.getSystemIdleState(1) === 'locked' } catch { return waLocked }
+}
+
+function waFront() {
+  try {
+    const fg = win32.foreground()
+    return Boolean(fg && (/^WhatsApp/i.test(fg.app || '') || /^WhatsApp$/i.test(String(fg.title || '').trim())))
+  } catch { return false }
+}
+
+async function waSpeak(line) {
+  const sound = await require('./src/private-voice').privateOf(line, { voice: store.settings().waVoice === 'edge' ? 'edge' : 'windows' })
+  if (!sound) { log('wa: tts-failed'); return false }
+  if (mode !== 'idle') return false   // the owner started talking meanwhile: his ask comes first
+  bubble.webContents.send('play', sound)
+  setAvatarSpeaking(true)             // busy from now, before the bubble says "playing" (the next one waits)
+  avatarEvent({ type: 'message' })    // a wave, no content
+  return true
+}
+
+/** Brings listening in line with the setting: on (start the worker) or off (stop it, forget everything). */
+function applyWa() {
+  const s = store.settings()
+  if (!s.waAnnounce) {
+    if (waListen) waListen.stop()
+    waListen = null
+    waAnn = null
+    waAccess = 'off'
+    return
+  }
+  if (waListen) return
+  const wa = require('./src/wa-announce')
+  waAnn = wa.createAnnouncer({
+    settings: () => store.settings(),
+    env: {
+      running: (t) => t.running !== false,
+      locked: waLockedNow,
+      foreground: waFront,
+      busy: () => mode !== 'idle' || avatarSpeaking,
+      paused: () => Date.now() < waPauseUntil,
+    },
+    speak: waSpeak,
+    // A chat that showed a disappearing-message marker leaves the list (its name is already in the settings).
+    onDisappearing: (chat) => {
+      const st = store.settings()
+      const next = wa.editChats(st.waChats, { op: 'remove', name: chat })
+      if (next.length !== (st.waChats || []).length) { store.saveSettings({ waChats: next }); log('wa: chat-removed disappearing'); refreshTray() }
+    },
+    onDecision: (r) => { waLast = r },
+  })
+  waAccess = 'starting'
+  waListen = require('./src/wa-listen').createListener({
+    log,
+    onAccess: (st) => { waAccess = st; log('wa: access ' + String(st).replace(/[^A-Za-z]/g, '')); refreshTray() },
+    onReady: () => { if (waAnn) waAnn.reset() },
+    onToast: (t) => { if (waAnn) waAnn.toast(t).catch(() => log('wa: announce-error')) },
+  })
+  waListen.start()
+}
+
+/** "תקריא לי הודעות מדנה" and the rest → the answer in the bubble. */
+function waCommandRun(cmd) {
+  const s = store.settings()
+  const wa = require('./src/wa-announce')
+  if (cmd.op === 'hush') {
+    bubble.webContents.send('play', null)
+    waPauseUntil = Date.now() + WA_PAUSE_MS
+    return 'שקט. לא אקריא הודעות בחצי השעה הקרובה'
+  }
+  if (cmd.op === 'off') { store.saveSettings({ waAnnounce: false }); applyWa(); refreshTray(); return 'הפסקתי להקריא הודעות וואטסאפ' }
+  if (cmd.op === 'on') {
+    store.saveSettings({ waAnnounce: true }); waPauseUntil = 0; applyWa(); refreshTray()
+    return (s.waMode || 'allowlist') === 'all' || (s.waChats || []).length ? 'אקריא הודעות וואטסאפ חדשות' : 'אקריא הודעות, אבל עוד אין אף אחד ברשימה. תגיד "תקריא לי הודעות מ…"'
+  }
+  const next = wa.editChats(s.waChats, cmd)
+  if (cmd.op === 'add') {
+    store.saveSettings({ waChats: next, waAnnounce: true }); waPauseUntil = 0; applyWa(); refreshTray()
+    return `סגור. אקריא הודעות ${cmd.kind === 'group' ? 'בקבוצה ' : 'מ'}${cmd.name} (רק טקסט, בלי הודעות נעלמות או חד-פעמיות)`
+  }
+  const had = next.length !== (s.waChats || []).length
+  store.saveSettings({ waChats: next }); refreshTray()
+  return had ? `לא אקריא יותר הודעות מ${cmd.name}` : `${cmd.name} לא היה ברשימה`
+}
+
+function waMenu() {
+  const s = store.settings()
+  const chats = Array.isArray(s.waChats) ? s.waChats : []
+  const quiet = s.waQuiet || {}
+  const save = (patch) => { store.saveSettings(patch); applyWa(); refreshTray() }
+  return [
+    { label: 'להקריא הודעות נכנסות', type: 'checkbox', checked: Boolean(s.waAnnounce), click: (i) => { if (i.checked) waPauseUntil = 0; save({ waAnnounce: i.checked }) } },
+    { label: 'מצב: ' + (s.waAnnounce ? (WA_ACCESS[waAccess] || waAccess) : 'כבוי'), enabled: false },
+    { type: 'separator' },
+    { label: 'רק מאנשים וקבוצות שבחרתי', type: 'radio', checked: (s.waMode || 'allowlist') !== 'all', click: () => save({ waMode: 'allowlist' }) },
+    { label: 'מכולם', type: 'radio', checked: s.waMode === 'all', click: () => save({ waMode: 'all' }) },
+    { label: 'גם קבוצות (במצב "מכולם")', type: 'checkbox', checked: Boolean(s.waGroups), enabled: s.waMode === 'all', click: (i) => save({ waGroups: i.checked }) },
+    { label: `שעות שקט ${quiet.from || '22:00'}–${quiet.to || '07:00'}`, type: 'checkbox', checked: quiet.on !== false, click: (i) => save({ waQuiet: Object.assign({ from: '22:00', to: '07:00' }, quiet, { on: i.checked }) }) },
+    { label: 'קול', submenu: [
+      { label: 'Windows (במחשב בלבד)', type: 'radio', checked: s.waVoice !== 'edge', click: () => save({ waVoice: 'windows' }) },
+      { label: 'Edge (הטקסט נשלח לשירות הדיבור של Microsoft)', type: 'radio', checked: s.waVoice === 'edge', click: () => save({ waVoice: 'edge' }) },
+    ] },
+    { label: Date.now() < waPauseUntil ? 'להמשיך עכשיו (בשקט עד ' + new Date(waPauseUntil).toTimeString().slice(0, 5) + ')' : 'שקט לחצי שעה', click: () => { waPauseUntil = Date.now() < waPauseUntil ? 0 : Date.now() + WA_PAUSE_MS; refreshTray() } },
+    { type: 'separator' },
+    { label: chats.length ? 'ברשימה (לחיצה מוציאה):' : 'הרשימה ריקה. להוסיף: "תקריא לי הודעות מ…"', enabled: false },
+    ...chats.slice(0, 30).map((c) => ({ label: (c.kind === 'group' ? 'קבוצה: ' : '') + c.name, click: () => save({ waChats: require('./src/wa-announce').editChats(store.settings().waChats, { op: 'remove', name: c.name }) }) })),
+  ]
+}
+
 // ---- talking --------------------------------------------------------------------------------------
 
 function startListening() {
@@ -624,6 +751,10 @@ async function handleAsk(raw, { voice = false } = {}) {
 
   bubbleState({ mode: 'thinking', heard: raw })
 
+  // 0a. Spoken WhatsApp messages: "תקריא לי הודעות מדנה", "תפסיק להקריא הודעות", "תשתוק". No AI, no cloud.
+  const waCmd = mark ? null : require('./src/wa-announce').waCommand(raw)
+  if (waCmd) return finish(seq, raw, waCommandRun(waCmd), 'instant', started, false, waCmd.op === 'hush' ? null : voice)
+
   // 0. The house and the whole system belong to HELPER on the cloud (Google Home, WhatsApp, its tools): no local
   // brain in between. A plain "תכבה את האורות" runs there with no model either.
   const toCloud = mark ? null : home.route(text)
@@ -764,7 +895,7 @@ let spokenAsk = -1
 
 async function finish(seq, heard, text, route, started, error = false, voice = false, audio = null, note = '') {
   if (seq !== askSeq) return
-  voice = voice || spokenAsk === seq
+  voice = voice === null ? false : voice || spokenAsk === seq
   store.log({ heard, route, ms: Date.now() - started, error, answer: String(text).slice(0, 200) })
   if (route === 'brain' || route === 'cloud') avatarEvent({ type: 'task-end' })
   answer(text, { heard, route, error, note })
@@ -999,6 +1130,7 @@ function trayMenu() {
       { label: 'עיצוב', submenu: avatarDesignMenu(avatarDesign()) },
       { label: 'להחזיר לפינה', enabled: s.avatarEnabled, click: () => { store.saveSettings({ avatarPos: null }); if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } } },
     ] },
+    { label: 'הקראת הודעות וואטסאפ', submenu: waMenu() },
     { type: 'separator' },
     { label: s.helperToken ? 'HELPER בענן: מחובר' : 'HELPER בענן: לא מחובר (connect.ps1)', enabled: false },
     { label: claude === 'signed-out' ? 'Claude Code: צריך ‎/login' : claude === 'missing' ? 'Claude Code: לא מותקן' : claude === 'ok' ? 'Claude Code: מחובר' : 'Claude Code: עוד לא נבדק', enabled: false },
@@ -1165,6 +1297,13 @@ app.whenReady().then(async () => {
   // The avatar, only when it was turned on (tray: "אווטאר על המסך"). Off by default.
   applyAvatar()
 
+  // Spoken WhatsApp messages, only when turned on. A locked PC says nothing, and nothing from before the unlock is
+  // said after it (no backlog).
+  powerMonitor.on('lock-screen', () => { waLocked = true; if (waAnn) waAnn.reset(); try { bubble.webContents.send('play', null) } catch { } })
+  powerMonitor.on('unlock-screen', () => { waLocked = false; if (waAnn) waAnn.reset() })
+  powerMonitor.on('resume', () => { if (waAnn) waAnn.reset() })
+  applyWa()
+
   log('started')
   if (!askFromArgs(process.argv)) {
     answer('HELPER מוכן! לחץ PageDown (PD) או Ctrl+Alt+Q כדי לדבר')
@@ -1217,4 +1356,5 @@ app.on('before-quit', () => {
   brain && brain.cancel()
   try { require('./src/bridge').stop() } catch { }
   try { avatarFeed && avatarFeed.stop() } catch { }
+  try { waListen && waListen.stop() } catch { }
 })
