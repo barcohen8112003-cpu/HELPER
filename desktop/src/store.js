@@ -26,6 +26,11 @@ const DEFAULTS = {
   avatarEvents: false,
   avatarPanelUrl: '',          // e.g. https://naor-helper.duckdns.org
   avatarCredential: '',        // hpn_… made on the settings site ("credential לאווטאר במחשב")
+  // Dance to music from any app on this PC (Windows' "now playing" list), and move with its loudness and beat
+  // (Windows' own peak meter). Both off until turned on in the tray. Nothing is recorded or sent: see audio-watch.js.
+  avatarSystemMusic: false,
+  avatarBeat: false,
+  avatarMusicIgnore: [],       // app ids not to dance for, e.g. ["teams", "vlc"] (a part of the id is enough)
 }
 
 function init(dataDir) {
