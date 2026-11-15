@@ -26,6 +26,14 @@ const DEFAULTS = {
   avatarEvents: false,
   avatarPanelUrl: '',          // e.g. https://naor-helper.duckdns.org
   avatarCredential: '',        // hpn_… made on the settings site ("credential לאווטאר במחשב")
+  // iBaila (Glowbeat) on this PC: its Govee lamps answer HELPER (src/ibaila-link.js). Off until turned on in the tray,
+  // and it needs the link code that ibaila-link.ps1 puts here and in iBaila's own folder. Only state names, event
+  // types and light actions cross, on 127.0.0.1; back come only yes/no answers (is music playing, is a room on).
+  ibailaEnabled: false,
+  ibailaToken: '',
+  ibailaUrl: 'http://127.0.0.1:47622',
+  ibailaLights: true,          // HELPER's states (listening, thinking, …) show on the lamps
+  ibailaDance: true,           // the avatar dances whenever iBaila hears music, from any app
 }
 
 function init(dataDir) {

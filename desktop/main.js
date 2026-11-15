@@ -339,6 +339,57 @@ function startAvatarDrag() {
   }
 }
 
+// ---- iBaila's Govee lamps ------------------------------------------------------------------------------
+// iBaila (Glowbeat) runs on this PC and drives the Govee lamps. When linked (ibaila-link.ps1) and turned on in the tray,
+// HELPER tells it what it is doing (a state name only: listen, think, speak, work, idle) and the cloud's event types,
+// iBaila tells HELPER only whether music is playing (from any app: the avatar dances to it), and light commands in
+// Hebrew (src/lights.js) become one action from a fixed list. Everything stays on 127.0.0.1 (src/ibaila-link.js).
+let ibaila = null, ibailaKey = '', ibailaStatus = 'stopped', ibailaTimer = null
+let ibailaLights = true, ibailaDance = true, ibailaMusic = false, ibailaMusicAt = 0
+
+function applyIbaila() {
+  const s = store.settings()
+  ibailaLights = s.ibailaLights !== false
+  ibailaDance = s.ibailaDance !== false
+  const want = s.ibailaEnabled === true
+  const key = want ? `${s.ibailaUrl}\n${s.ibailaToken}` : ''
+  if (ibaila && key !== ibailaKey) { ibaila.stop(); ibaila = null }
+  if (want && !ibaila) {
+    ibaila = require('./src/ibaila-link').createIbailaLink({
+      url: s.ibailaUrl, token: s.ibailaToken, log,
+      onMusic: (on) => ibailaMusicChanged(on),
+      onStatus: (st) => { ibailaStatus = st; refreshTray() },
+    })
+    ibaila.start()
+  }
+  ibailaKey = key
+  if (ibaila && !ibailaTimer) ibailaTimer = setInterval(ibailaSync, 200)
+  if (!ibaila) { clearInterval(ibailaTimer); ibailaTimer = null; ibailaStatus = 'stopped'; ibailaMusicChanged(false) }
+}
+
+/** Five times a second: HELPER's state for the lamps (the link sends it only when it changes, plus a heartbeat). */
+function ibailaSync() {
+  if (!ibaila) return
+  const a = ibailaLights ? require('./src/avatar-state').activityFor({ mode, speaking: avatarSpeaking, working: avatarSteps > 0 }) : null
+  ibaila.state(a || 'idle')
+  // The avatar's music runs out after 10 minutes on its own (made for music HELPER can't see the end of); while
+  // iBaila hears music, say so again every minute so the dance goes on as long as the song does.
+  if (ibailaMusic && ibailaDance && Date.now() - ibailaMusicAt > require('./src/ibaila-link').MUSIC_REFRESH) { ibailaMusicAt = Date.now(); avatarMusic(true) }
+}
+
+function ibailaMusicChanged(on) {
+  const was = ibailaMusic
+  ibailaMusic = Boolean(on)
+  if (!ibailaDance || was === ibailaMusic) return
+  ibailaMusicAt = Date.now()
+  avatarMusic(ibailaMusic)
+}
+
+/** The cloud's event types (the avatar's feed) light the lamps too: a type only. */
+function ibailaEvent(type) { if (ibaila && ibailaLights) ibaila.event(type) }
+
+const IBAILA_STATUS = { stopped: 'כבוי', connected: 'מחובר', 'not-running': 'iBaila לא פתוח', denied: 'קוד לא מתאים', off: 'כבוי ב-iBaila', 'not-set': 'צריך להריץ ibaila-link.ps1' }
+
 const AVATAR_STATUS = {
   connected: 'מחובר', starting: 'מתחבר…', stopped: 'כבוי', 'not-set': 'לא הוגדר (avatar-link.ps1)',
   unreachable: 'השרת לא זמין כרגע, מנסה שוב בשקט', denied: 'הקוד לא מורשה (להדליק "אירועי אווטאר" באתר ההגדרות)',
@@ -369,7 +420,7 @@ function applyAvatar() {
   if (want && !avatarFeed) {
     avatarFeed = require('./src/avatar-feed').createAvatarFeed({
       url: s.avatarPanelUrl, credential: s.avatarCredential, log,
-      onEvent: (ev) => avatarEvent({ type: ev.type }),
+      onEvent: (ev) => { avatarEvent({ type: ev.type }); ibailaEvent(ev.type) },
       onStatus: (st) => { avatarStatus = st; refreshTray() },
     })
     avatarFeed.start()
@@ -623,6 +674,15 @@ async function handleAsk(raw, { voice = false } = {}) {
   }
 
   bubbleState({ mode: 'thinking', heard: raw })
+
+  // 0a. iBaila's Govee lamps on this PC (only when linked and on): words alone, an action from a fixed list. A
+  // sentence that only names a room goes on to the house on the cloud when iBaila can't do it.
+  if (!mark && ibaila) {
+    const L = require('./src/lights')
+    const r = await L.handle(L.route(text), ibaila)
+    if (seq !== askSeq) return
+    if (r) return finish(seq, raw, r.reply, 'ibaila', started, r.error, voice)
+  }
 
   // 0. The house and the whole system belong to HELPER on the cloud (Google Home, WhatsApp, its tools): no local
   // brain in between. A plain "תכבה את האורות" runs there with no model either.
@@ -1000,6 +1060,12 @@ function trayMenu() {
       { label: 'להחזיר לפינה', enabled: s.avatarEnabled, click: () => { store.saveSettings({ avatarPos: null }); if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } } },
     ] },
     { type: 'separator' },
+    { label: 'אורות iBaila (Govee)', submenu: [
+      { label: 'המנורות עונות ל-HELPER', type: 'checkbox', checked: s.ibailaEnabled, enabled: Boolean(s.ibailaToken), click: (i) => { store.saveSettings({ ibailaEnabled: i.checked }); applyIbaila(); refreshTray() } },
+      { label: 'מה ש-HELPER עושה רואים על המנורות', type: 'checkbox', checked: s.ibailaLights !== false, click: (i) => { store.saveSettings({ ibailaLights: i.checked }); applyIbaila() } },
+      { label: 'האווטאר רוקד למוזיקה ש-iBaila שומע', type: 'checkbox', checked: s.ibailaDance !== false, click: (i) => { store.saveSettings({ ibailaDance: i.checked }); applyIbaila() } },
+      { label: 'חיבור: ' + (s.ibailaToken ? IBAILA_STATUS[ibailaStatus] || ibailaStatus : IBAILA_STATUS['not-set']), enabled: false },
+    ] },
     { label: s.helperToken ? 'HELPER בענן: מחובר' : 'HELPER בענן: לא מחובר (connect.ps1)', enabled: false },
     { label: claude === 'signed-out' ? 'Claude Code: צריך ‎/login' : claude === 'missing' ? 'Claude Code: לא מותקן' : claude === 'ok' ? 'Claude Code: מחובר' : 'Claude Code: עוד לא נבדק', enabled: false },
     { label: 'מה שמעתי לאחרונה', submenu: recentAsks() },
@@ -1164,6 +1230,8 @@ app.whenReady().then(async () => {
 
   // The avatar, only when it was turned on (tray: "אווטאר על המסך"). Off by default.
   applyAvatar()
+  // iBaila's lamps, only when linked and turned on (tray: "אורות iBaila"). Off by default.
+  applyIbaila()
 
   log('started')
   if (!askFromArgs(process.argv)) {
@@ -1217,4 +1285,5 @@ app.on('before-quit', () => {
   brain && brain.cancel()
   try { require('./src/bridge').stop() } catch { }
   try { avatarFeed && avatarFeed.stop() } catch { }
+  try { ibaila && ibaila.stop() } catch { }
 })

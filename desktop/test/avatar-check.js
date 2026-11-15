@@ -314,7 +314,7 @@ check('main: the avatar starts only when turned on; off destroys it', () => {
   const apply = main.slice(main.indexOf('function applyAvatar()'), main.indexOf('// ---- talking'))
   assert.ok(/if \(!s\.avatarEnabled\) \{[\s\S]*avatarWin\.destroy\(\)/.test(apply))
   assert.ok(/const want = s\.avatarEnabled && s\.avatarEvents/.test(apply))
-  assert.ok(/onEvent: \(ev\) => avatarEvent\(\{ type: ev\.type \}\)/.test(apply), 'only the type goes on')
+  assert.ok(/onEvent: \(ev\) => \{? ?avatarEvent\(\{ type: ev\.type \}\)(; ibailaEvent\(ev\.type\) \})?,/.test(apply), 'only the type goes on')
   assert.ok(/label: 'להציג את האווטאר', type: 'checkbox', checked: s\.avatarEnabled/.test(main), 'tray toggle')
   assert.ok(/hands\.onStep\(/.test(main), 'music signal from HELPER\'s own steps')
 })
