@@ -1,5 +1,6 @@
 node_modules
 data
 .env
-.git
+# .git is sent to the build so the notes stage can read the sha and recent subjects.
+# That stage does not copy .git into the final image.
 *.bat

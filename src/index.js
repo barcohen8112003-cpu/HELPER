@@ -3,22 +3,28 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomInt } from 'node:crypto'
 import { config, DATA_DIR } from './config.js'
+import { lockHeldByOther } from './instance-lock.js'
 import { state, save } from './store.js'
 import { startWhatsApp } from './whatsapp.js'
-import { runTurn, runTask, runBackground, resetHistory, compact, setSettingsUrl } from './agent.js'
+import { runTurn, runTask, runBackground, runIsolated, resetHistory, compact, setSettingsUrl, backgroundDone, recoverConversation, recoveryNotice } from './agent.js'
 import { startJob, stopJobs, jobsText, listJobs, interruptedJobs } from './jobs.js'
-import { startScheduler } from './scheduler.js'
+import { startScheduler, newsDigest, newsInBrief } from './scheduler.js'
+import * as inbox from './inbox.js'
+import * as inflight from './inflight.js'
 import { prepare, speak } from './media.js'
+import { prepareWhatsAppSpeech, deliverWhatsAppSpeech } from './whatsapp-speech.js'
 import { setLocation, isLiveUpdate } from './location.js'
 import { createOutbox } from './outbox.js'
 import { chatModel, Aborted } from './llm.js'
 import { parseCommand } from './commands.js'
-import { fastCommand } from './fast-commands.js'
+import { fastCommand, fastAction } from './fast-commands.js'
 import { loadUserTools } from './tool-builder.js'
 import { status } from './status.js'
 import { maskSettingsUrl, startUi } from './ui.js'
 import { wakeEnabled, wakePc } from './wake.js'
-import { startPcBridgeServer, bridgeLabel } from './pc-bridge.js'
+import { startPcBridgeServer, bridgeLabel, bridgeConnected } from './pc-bridge.js'
+import { googleHomeTransport } from './google-home.js'
+import { tvConnected } from './tv-app.js'
 import { closeCloudBrowsers, cloudGoogleHomeOn, cloudWebtopOn, ensureCloudBrowser, ensureCloudWebtop, errandCloudOn } from './webtop-browser.js'
 import { startCloudDesktop } from './cloud-desktop.js'
 import { startVoice } from './voice.js'
@@ -29,10 +35,27 @@ import { getDay } from './day.js'
 import { backupTick } from './backup.js'
 import { humanError } from './style.js'
 import { takeProactiveSlot } from './metrics.js'
+import { kindOf, noticeLevel, noticeSent, noticeEngaged, parseNoticeCommand, runNoticeCommand } from './notice-learning.js'
 import { parsePhoneMessage, handlePhoneCommand } from './phone.js'
+import { announceRelease } from './release-notes.js'
+import { parseLiveCall, liveCallReply, LIVE_NOTE } from './live-voice.js'
+import { presentSpeech } from './face.js'
+import * as groups from './groups.js'
+import * as schoolwork from './schoolwork.js'
+import { groupAdders } from './group-tools.js'
 
 let reconciled = false
+import { scraplingEnabled, scraplingStatus } from './scrapling.js'
+import { startObscura, stopObscura } from './obscura.js'
 import { exec } from 'node:child_process'
+import { recoverTeam, teamStatus } from './team/conductor.js'
+import { allTools } from './tools.js'
+import { record as recordAudit } from './audit.js'
+import { createPanel, panelConfig, startPanelServer } from './panel.js'
+import { createEventFeed, eventsConfig } from './panel-events.js'
+import { createExecutor } from './panel-execute.js'
+import { panelContext } from './panel-scopes.js'
+import { connectInstinct, isInstinctMessage, onInstinctMessage, stopInstinctChat, recoverInstinct, flushInstinctRecovery, instinctRecoveryPending, reconcileInstinctRecovery } from './instinct.js'
 
 if (!config.llm.apiKey || !config.llm.model) {
   console.log('חסר LLM_API_KEY או LLM_MODEL. העתק את .env.example ל-.env ומלא אותם.')
@@ -41,6 +64,17 @@ if (!config.llm.apiKey || !config.llm.model) {
 }
 // Open the bridge port before WhatsApp connects, so a platform health check is not waiting on the login.
 startPcBridgeServer()
+// The team (src/team/): a run cut off by the last stop is marked unclear, never run again on its own.
+if (recoverTeam()) console.log('[team] a team run was cut off by the last stop; marked unclear, not repeated')
+if (config.team.mode !== 'off') console.log(`[team] ${teamStatus()}`)
+// fetch_page through Scrapling: say once at start whether it can run, so a missing venv shows in the log.
+if (scraplingEnabled()) {
+  scraplingStatus().then((s) => console.log(s.ok ? `[scrapling] זמין: Scrapling ${s.scrapling}, Python ${s.python}` : `[scrapling] לא זמין (${s.kind}): ${s.error}. fetch_page משתמש בקורא הרגיל רק כשהוא לא מותקן`))
+}
+startObscura().then((s) => {
+  if (s.started) console.log(`[obscura] מאזין על 127.0.0.1:${s.port} (לא מפורסם). חיפוש, דפים וסקר מחירים עוברים אליו; חלונות Chromium לא משתנים`)
+  else if (s.reason && s.reason !== 'off' && s.reason !== 'offline') console.log(`[obscura] לא עלה (${s.reason}). חיפוש, דפים וסקר מחירים נשארים בדרך הרגילה`)
+})
 function startCloudBrowsers() {
   if (cloudWebtopOn()) ensureCloudWebtop().catch((e) => console.log(`[webtop] ${e.message}`))
   if (cloudGoogleHomeOn()) ensureCloudBrowser('google-home').catch((e) => console.log(`[google-home] ${e.message}`))
@@ -54,19 +88,17 @@ if (config.desktop.enabled) {
 }
 
 // One assistant per data folder: two would share the WhatsApp session and answer every message twice.
+// The lock lives on the persistent disk, so a reboot can leave a PID that now belongs to tini or a browser.
+// Only a live node process running src/index.js, other than us, counts. Anything else is deleted.
 const LOCK = path.join(DATA_DIR, 'helper.lock')
 const HEALTHY = path.join(DATA_DIR, 'healthy')
-const running = (pid) => {
-  try {
-    return process.kill(pid, 0)
-  } catch (e) {
-    return e.code === 'EPERM'
+if (fs.existsSync(LOCK)) {
+  const lockedBy = Number(fs.readFileSync(LOCK, 'utf8'))
+  if (lockHeldByOther(lockedBy)) {
+    console.log(`העוזר כבר רץ (תהליך ${lockedBy}). סגור את החלון השני לפני שמפעילים שוב.`)
+    process.exit(2)
   }
-}
-const lockedBy = Number(fs.existsSync(LOCK) && fs.readFileSync(LOCK, 'utf8'))
-if (lockedBy && lockedBy !== process.pid && running(lockedBy)) {
-  console.log(`העוזר כבר רץ (תהליך ${lockedBy}). סגור את החלון השני לפני שמפעילים שוב.`)
-  process.exit(2)
+  fs.rmSync(LOCK, { force: true })
 }
 fs.writeFileSync(LOCK, String(process.pid))
 fs.rmSync(HEALTHY, { force: true })
@@ -77,7 +109,10 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK'])
   process.on(signal, () => {
     if (stopping) return
     stopping = true
-    closeCloudBrowsers().finally(() => process.exit(0))
+    closeCloudBrowsers().finally(() => {
+      stopObscura()
+      process.exit(0)
+    })
   })
 // start.bat reads this file as "the last run was fine", and stops retrying only after a string of quick crashes.
 setTimeout(() => fs.writeFileSync(HEALTHY, ''), 5 * 60000).unref()
@@ -104,10 +139,12 @@ const HELP = `*פקודות*
 מה רץ - המשימות שרצות ברקע עכשיו. עצור את <שם> עוצר רק אחת
 שיחה חדשה (או /new) - מתחיל שיחה חדשה (זיכרון, תזכורות ומעקבים נשארים)
 /voice on - עונה בהודעה קולית על כל הודעה, /voice off חוזר לטקסט
+תתקשר אליי - קישור לשיחה חיה (כבוי עד LIVE_VOICE=on)
 /compact - מסכם את השיחה כדי לחסוך
 /model strong - עובר למודל החזק, /model default חוזר
 /unpair - מנתק את הצ'אט הזה
 /help - ההודעה הזאת
+מה אתה שולח לי - אילו הודעות יזומות נשלחות. "תפסיק לשלוח לי חדשות" משתיק, "תחזור לשלוח לי חדשות" מחזיר
 צמד טלפון <פורט> <קוד> - צימוד חד-פעמי לניפוי אלחוטי
 חבר טלפון <פורט> - חיבור לפורט של ניפוי אלחוטי. אחר כך העוזר עובר לפורט 5555 עד אתחול, גם בנתונים סלולריים
 
@@ -115,11 +152,20 @@ const HELP = `*פקודות*
 
 let pairCode = null
 let pendingConfirm = null
+let settingsPage = ''
 let queue = Promise.resolve()
 // The turn that is running for a WhatsApp message ({ ac: AbortController, done: Promise }), so "עצור" can end it.
 let activeTurn = null
 // Bumped by "עצור" and "שיחה חדשה": messages that were already waiting in the queue are dropped, not answered late.
 let stopEpoch = 0
+// The desktop avatar's feed (src/panel-events.js): set only with PANEL_ENABLED=on and PANEL_EVENTS=on, null otherwise.
+// avatarEvent takes a type name and nothing else, so no text, sender or title can reach the feed.
+let avatarFeed = null
+function avatarEvent(type) {
+  try {
+    avatarFeed?.publish(type)
+  } catch {}
+}
 
 function announcePairing() {
   pairCode = String(randomInt(100000, 1000000))
@@ -129,6 +175,19 @@ function announcePairing() {
 const isOwner = (m) =>
   state.owner && m.fromMe === state.owner.self && (m.jids.some((j) => state.owner.jids.includes(j)) || (state.owner.selfChat && m.selfChat))
 
+// Messages that were still in flight when the last run ended (src/inflight.js): before WhatsApp connects, so nothing
+// of this run is mixed in. Those with no inbox receipt move to recovery, and the owner hears once (tellRecovery,
+// below, once notify and everything it touches exist). Nothing is answered again. Unanswered inbox entries from the
+// last run are marked: an answer may have left before the stop, so the watchdog says "maybe", not "I did not answer".
+state.wa ||= { seen: [], lastAt: 0 }
+const strandedAtBoot = inflight.strand(state.wa, { inbox: state.inbox || [], all: true })
+for (const e of state.inbox || []) if (!e.answered) e.restarted = true
+save()
+// The same for an Instinct conversation the stop cut off (src/instinct.js): metadata only, nothing sent again. Its
+// notice is saved in the same write that ends the conversation, and handed to notify by tellRecovery.
+recoverInstinct()
+if (strandedAtBoot) console.log(`[inflight] ${strandedAtBoot} message(s) were mid-handling at the last stop; owner will be told, nothing replayed`)
+
 const wa = await startWhatsApp(async (m) => {
   if (!state.owner) {
     if (!pairCode || !m.text.includes(pairCode)) return
@@ -137,7 +196,13 @@ const wa = await startWhatsApp(async (m) => {
     save()
     console.log(`צומד לצ'אט ${m.jids[0]}`)
     await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו אפשר לכתוב לי כאן.\n\n${HELP}`)
+    tellRelease()
     return
+  }
+  // Instinct's answers in the owner's chat with Instinct (src/instinct.js). Data only: never a command or an approval.
+  if (isInstinctMessage(m)) {
+    const done = await onInstinctMessage(m).catch((e) => `error: ${e.message}`)
+    return console.log(`[instinct] ${done}`)
   }
   if (!isOwner(m)) return
   const text = m.text.trim()
@@ -152,6 +217,11 @@ const wa = await startWhatsApp(async (m) => {
     }
     return
   }
+  // A message of his counts toward notices he was sent. This does not touch follow-up pacing (src/proactive.js).
+  noticeEngaged()
+  // "תפסיק לשלוח לי חדשות" / "תחזור לשלוח..." / "מה אתה שולח לי": one reply, no model.
+  const noticeCmd = parseNoticeCommand(text)
+  if (noticeCmd) return wa.send(state.owner.jid, runNoticeCommand(noticeCmd))
   // A shared location is saved, no model involved. A bare 📍 gets a 📍 back; updates of a live location get nothing.
   // With a comment ("תזמין לכאן פיצה") the message goes on to the model, which now sees the new location.
   if (m.location) {
@@ -190,6 +260,8 @@ const wa = await startWhatsApp(async (m) => {
     stopEpoch++
     running?.ac.abort()
     const stoppedJobs = stopJobs()
+    // The conversation with Instinct (src/instinct.js) ends too.
+    if (stopInstinctChat()) stoppedJobs.push('השיחה עם Instinct')
     if (command === 'stop') return wa.send(state.owner.jid, running || stoppedJobs.length ? `עצרתי${stoppedJobs.length ? `, כולל ${stoppedJobs.map((t) => `"${t}"`).join(', ')} שרץ ברקע` : ''}.` : 'אין מה לעצור.')
     // The stopped turn rolls its own messages back; the history is cleared only after that, never under it.
     if (running) await Promise.race([running.done, new Promise((r) => setTimeout(r, 10000))])
@@ -208,6 +280,7 @@ const wa = await startWhatsApp(async (m) => {
   if (text === '/help') return wa.send(state.owner.jid, HELP)
   // A shortcut: no model, no queue, no cost. It answers while a long turn is still running.
   if (text === '/wake') return wa.send(state.owner.jid, wakeEnabled() ? `🖥️ ${await wakePc().catch((e) => `לא הצלחתי: ${e.message}`)}` : 'ההדלקה מרחוק לא מוגדרת. חסר WAKE_MAC בהגדרות.')
+  if (parseLiveCall(text)) return wa.send(state.owner.jid, liveCallReply(settingsPage))
   // Only a command typed by the owner here reaches the watch registry. Nothing read from mail or the web can.
   if (text === '/watch' || text.startsWith('/watch ')) return wa.send(state.owner.jid, await monitoring.command(text))
   if (text === '/status') return wa.send(state.owner.jid, status(wa.connectedSince()))
@@ -244,11 +317,21 @@ const wa = await startWhatsApp(async (m) => {
   const quick = await fastCommand(text)
   if (quick) return wa.send(state.owner.jid, quick.reply)
   const epoch = stopEpoch
+  // From here the message waits for the model. It is logged, and a watchdog speaks up if no answer leaves.
+  const msgId = m.key?.id
+  state.inbox = inbox.received(state.inbox || [], msgId, text || (m.location ? '📍' : '[קובץ]'))
+  // The durable receipt: saved before the message is handed to the queue, and only then out of the in-flight list.
+  save()
+  m.receipt?.()
+  const settle = (how) => {
+    state.inbox = inbox.answered(state.inbox || [], msgId, how)
+    save()
+  }
   queue = queue.then(async () => {
-    if (epoch !== stopEpoch) return // stopped, or a new conversation began, while this was waiting its turn
+    if (epoch !== stopEpoch) return settle('stopped') // stopped, or a new conversation began, while this was waiting its turn
     const ac = new AbortController()
     let finish
-    activeTurn = { ac, done: new Promise((r) => (finish = r)) }
+    activeTurn = { ac, done: new Promise((r) => (finish = r)), msgId }
     wa.typing(state.owner.jid)
     // A long turn (search, several pages) outlasts one typing indicator.
     const typing = setInterval(() => wa.typing(state.owner.jid), 8000)
@@ -261,21 +344,53 @@ const wa = await startWhatsApp(async (m) => {
       const input = await prepare({ text, media: await m.getMedia() })
       // Written while the assistant was off: the model should know it is answering late, since "now" may have moved on.
       if (m.lateSeconds > LATE_NOTE) input.text = `[ההודעה הזאת נכתבה לפני ${Math.round(m.lateSeconds / 60)} דקות, כשהיית כבוי. אתה עונה עליה באיחור - אמור זאת בקצרה, ובדוק אם היא עדיין רלוונטית.]\n${input.text}`
-      // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
-      const reply = await runTurn(input.text, { source: 'whatsapp', confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background, messageId: m.key?.id || m.id }, input.image)
-      // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
-      // The text follows only when it has links, or when speech failed.
       const wantsVoice = input.voice || state.voiceMode === 'always'
-      const spoken = reply && wantsVoice ? await speak(reply).catch((e) => (console.log(`[voice] ${e.message}`), null)) : null
-      if (spoken) await wa.sendVoice(state.owner.jid, spoken)
-      if (reply && (!spoken || /https?:\/\//.test(reply))) await wa.send(state.owner.jid, reply)
+      const spokenReply = Boolean(config.whatsappSpokenReplies && wantsVoice)
+      // Sending in the owner's name is offered only here, in his own WhatsApp chat, never to scheduled runs or the bridge.
+      // messageId is the agent-team dedup key. msgId is the existing team conductor key. Both stay.
+      let reply = await runTurn(input.text, { source: 'whatsapp', spokenReply, confirm, sendMedia, say, react, sendAs: wa.sendAs, findContact: wa.findContact, signal: ac.signal, background, msgId, messageId: m.key?.id || m.id }, input.image)
+      // Every message gets an answer. Nothing came back and no emoji was chosen as the answer: one short question.
+      if ((!reply?.trim() || /^SKIP\b/.test(reply.trim())) && !reacted) {
+        console.log('[agent] the model returned no answer; asking him instead of staying silent')
+        reply = inbox.NO_ANSWER
+      }
+      // A spoken message gets a spoken answer, and in "always" voice mode so does a typed one.
+      // The opt-in path keeps a full companion when speech cannot carry the whole answer.
+      const delivery = spokenReply ? prepareWhatsAppSpeech(reply) : null
+      const spoken = reply && wantsVoice ? await speak(delivery ? delivery.speech : reply, { prepared: Boolean(delivery) }).catch((e) => (console.log(`[voice] ${e.message}`), null)) : null
+      if (delivery) {
+        const sent = await deliverWhatsAppSpeech({
+          reply, delivery, audio: spoken,
+          sendText: (text) => wa.send(state.owner.jid, text),
+          sendVoice: (audio) => wa.sendVoice(state.owner.jid, audio),
+          onVoiceError: (e) => console.log(`[voice] ${e.message}`),
+        })
+        if (sent.voiceSent) presentSpeech({ text: delivery.speech, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+      } else {
+        // Flag-off legacy delivery is deliberately unchanged.
+        if (spoken) {
+          await wa.sendVoice(state.owner.jid, spoken)
+          presentSpeech({ text: reply, audio: spoken, mime: 'audio/ogg', source: 'whatsapp', synthesize: false }).catch((e) => console.log(`[face] ${e.message}`))
+        }
+        if (reply && (!spoken || /https?:\/\//.test(reply))) await wa.send(state.owner.jid, reply)
+      }
       answered = true
+      settle(reacted && !reply ? 'reaction' : 'reply')
     } catch (e) {
       // Stopping is the user's own doing: no warning, the "עצרתי" has already been sent.
-      if (e instanceof Aborted || ac.signal.aborted) console.log('[agent] הופסק על ידי המשתמש')
-      else {
+      if (e instanceof Aborted || ac.signal.aborted) {
+        console.log('[agent] הופסק על ידי המשתמש')
+        settle('stopped')
+      } else if (config.whatsappSpokenReplies && e.deliveryUncertain === true) {
+        // The work may already be complete. Only answer delivery is unconfirmed.
+        // Do not invite repeating the task or automatically resend its original answer.
+        console.log('[voice] answer text delivery unconfirmed')
+        const noticeId = await wa.send(state.owner.jid, 'לא הצלחתי לאשר שהתשובה הגיעה אליך במלואה. זה לא אומר שהפעולות שביקשת לא בוצעו. לא אבצע אותן שוב אוטומטית.').catch(() => null)
+        if (typeof noticeId === 'string' && noticeId.trim()) settle('error')
+      } else {
         console.log(`[agent] ${e.message}`)
-        await wa.send(state.owner.jid, humanError(e)).catch(() => {})
+        const told = await wa.send(state.owner.jid, humanError(e)).then(() => true, () => false)
+        if (told) settle('error')
       }
     } finally {
       clearInterval(typing)
@@ -286,7 +401,9 @@ const wa = await startWhatsApp(async (m) => {
     if (activeTurn?.ac === ac) activeTurn = null
     finish()
   })
-}, pairWithSelf)
+}, pairWithSelf, { on: groups.groupsOn, knows: groups.knowsGroup, setGroupName: groups.setGroupName, capture: (m) => groups.capture(m), bindSync: groups.bindGroupSync, isSchoolwork: groups.isSchoolworkGroup }, (m) => Boolean(state.owner) && (isInstinctMessage(m) || isOwner(m)))
+if (wa.fetchGroupHistory) schoolwork.setLookbackFetch((jid, opts) => wa.fetchGroupHistory(jid, opts))
+connectInstinct({ send: (jid, text) => wa.sendAs(jid, text), notify: (text) => (state.owner ? wa.send(state.owner.jid, text) : null) })
 
 // Default pairing: the moment the QR is scanned, the assistant lives in the account's "message yourself" chat.
 // Skipped after /unpair, where the user picks a chat with the pairing code instead.
@@ -301,11 +418,17 @@ async function pairWithSelf(me) {
     reconciled = true
     monitoring.reconcile().catch((e) => console.log(`[watch] ${e.message}`))
   }
-  if (state.owner || state.manualPair) return
-  state.owner = { jid: me.jid, jids: [me.jid, me.lid].filter(Boolean), self: true, selfChat: true }
-  save()
-  console.log('מחובר לצ\'אט שלך עם עצמך. כתוב שם כדי לדבר עם העוזר.')
-  await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו כותבים לי כאן, בצ'אט שלך עם עצמך.\n\n${EXAMPLES}\n\n${HELP}`)
+  if (!state.owner && !state.manualPair) {
+    state.owner = { jid: me.jid, jids: [me.jid, me.lid].filter(Boolean), self: true, selfChat: true }
+    save()
+    console.log('מחובר לצ\'אט שלך עם עצמך. כתוב שם כדי לדבר עם העוזר.')
+    await wa.send(state.owner.jid, `היי, אני ${config.botName} 👋 מעכשיו כותבים לי כאן, בצ'אט שלך עם עצמך.\n\n${EXAMPLES}\n\n${HELP}`)
+  }
+  if (state.owner) tellRelease()
+}
+
+function tellRelease() {
+  announceRelease({ send: (text) => wa.send(state.owner.jid, text) }).catch((e) => console.log(`[release] ${e.message}`))
 }
 
 const sendMedia = (media) => wa.sendMedia(state.owner.jid, media)
@@ -315,23 +438,44 @@ const say = (text) => wa.send(state.owner.jid, text)
 // for arrive as one bubble.
 // One approval is open at a time: with background tasks two could ask at once, and one "כן" must answer one question.
 let confirmChain = Promise.resolve()
+// Set when a live call hangs up in the middle of an approval, so that approval is a "no"
+// and the next WhatsApp approval is not swallowed.
+let declineNext = false
 function confirm(question, media) {
+  if (declineNext) {
+    declineNext = false
+    return Promise.resolve(false)
+  }
   const asked = confirmChain.then(() => askOnce(question, media))
   confirmChain = asked.catch(() => {})
   return asked
+}
+function declinePendingConfirm() {
+  if (pendingConfirm) {
+    const resolve = pendingConfirm
+    pendingConfirm = null
+    resolve(false)
+    return
+  }
+  declineNext = true
 }
 
 // Starts a background task (start_background_task). Its result, or why it failed, arrives as its own message.
 // `run(signal, setStep)` replaces the agent for work done by something else (Claude Code).
 function background(title, instruction, run) {
-  return startJob(
+  const done = backgroundDone({ external: Boolean(run), send: (text) => wa.send(state.owner.jid, text) })
+  const job = startJob(
     title,
     run || ((signal, setStep) => runBackground(title, instruction, { source: 'job', confirm: (q, media) => confirm(`(${title}) ${q}`, media), sendMedia, say, signal, patient: true, setStep })),
-    async (name, result, error) => {
-      if (result) return wa.send(state.owner.jid, `*${name}*\n${result}`)
-      if (error) return wa.send(state.owner.jid, `המשימה "${name}" לא הסתיימה: ${humanError(error)}`)
+    // runBackground adds its own result to the conversation; a task run by something else, or one that failed,
+    // leaves its status there (never the result or the error text), so "סיימת?" has something to refer to.
+    (...args) => {
+      avatarEvent('task-end')
+      return done(...args)
     }
   )
+  avatarEvent('task-start')
+  return job
 }
 
 function askOnce(question, media) {
@@ -357,6 +501,11 @@ setInterval(() => backupTick((text) => notify(text)).catch((e) => console.log(`[
 setTimeout(() => backupTick((text) => notify(text)).catch(() => {}), 5 * 60000).unref()
 
 const cutShort = interruptedJobs()
+// What a restart cut in the conversation itself (src/agent.js): a turn of his, results that waited for it, and the
+// tasks above. The history gets their status; he gets one more line only for a result that may not have reached him.
+const cutTalk = recoverConversation(cutShort)
+if (cutTalk.cutTurn || cutTalk.unsure.length) console.log(`[agent] אחרי הפעלה מחדש: ${cutTalk.cutTurn ? 'תור אחד נקטע, ' : ''}${cutTalk.unsure.length} תוצאות שלא ידוע אם הגיעו`)
+if (cutTalk.unsure.length) outbox.notify(recoveryNotice(cutTalk), true).catch(() => {})
 if (cutShort.length) outbox.notify(`${cutShort.length > 1 ? 'המשימות' : 'המשימה'} ${cutShort.map((j) => `"${j.title}"`).join(', ')} ${cutShort.length > 1 ? 'נקטעו' : 'נקטעה'} כי הופעלתי מחדש. אם עדיין צריך, תבקש שוב.`, true).catch(() => {})
 
 // WhatsApp cannot report its own outage, so after WHATSAPP_DOWN_ALERT_MIN minutes without it the alert goes out
@@ -401,14 +550,47 @@ const scheduledTask = (instruction, { noAsk = false } = {}) => {
 // The tools HELPER wrote for itself and Naor approved come back with it, each checked again before it loads.
 if (config.learning) loadUserTools().then((n) => n && console.log(`[tools] נטענו ${n} כלים שהעוזר כתב לעצמו`)).catch((e) => console.log(`[tools] ${e.message}`))
 
-const monitoring = createMonitoring({ send: (text) => wa.send(state.owner.jid, text), getDay })
+const monitoring = createMonitoring({
+  send: (text) => wa.send(state.owner.jid, text),
+  onSent: (type) => avatarEvent(type === 'alert' ? 'alert' : 'message'),
+  getDay,
+  news: () => (newsInBrief() ? newsDigest() : ''),
+  // Spoken morning brief on the face page. presentSpeech does nothing while FACE_ENABLED is off.
+  onBrief: (text) => presentSpeech({ text, source: 'brief' }),
+})
 
 // Proactive notices from the rest of the assistant. During quiet hours a non-urgent one is not held to be sent
 // on its own at 08:00: it joins the night's batch and arrives inside the one morning brief.
 // Outside quiet hours, non-urgent notices are also capped per day (MESSAGE_BUDGET, default 6): past the cap they
 // join the next brief instead of buzzing his phone again.
-function notify(text, urgent = false, key) {
-  if (urgent || (!inQuietHours() && (key && state.sentKeys.includes(key) ? true : takeProactiveSlot()))) return outbox.notify(text, urgent, key)
+function notify(text, urgent = false, key, kindName) {
+  const kind = kindOf(key, kindName)
+  const level = noticeLevel(kind, urgent)
+  // Explicit mute, or (only with NOTICE_LEARNING=true) a kind he keeps ignoring: do not buzz him.
+  if (level === 'drop') {
+    if (key && !state.sentKeys.includes(key)) {
+      state.sentKeys = [...state.sentKeys, key].slice(-500)
+      save()
+    }
+    return Promise.resolve()
+  }
+  // Learned "quieter": same path as quiet hours, it waits for the next brief.
+  if (level === 'batch') {
+    if (key) {
+      if (state.sentKeys.includes(key)) return Promise.resolve()
+      state.sentKeys = [...state.sentKeys, key].slice(-500)
+      save()
+    }
+    monitoring.addNote(text)
+    return Promise.resolve()
+  }
+  // 'interrupt' is the previous rule: urgent always, otherwise quiet hours and the daily budget.
+  const already = Boolean(key && state.sentKeys.includes(key))
+  if (urgent || (!inQuietHours() && (already || takeProactiveSlot()))) {
+    if (!urgent && !already) noticeSent(kind)
+    avatarEvent(urgent ? 'alert' : 'message')
+    return outbox.notify(text, urgent, key)
+  }
   if (key) {
     if (state.sentKeys.includes(key)) return Promise.resolve()
     state.sentKeys = [...state.sentKeys, key].slice(-500)
@@ -418,8 +600,40 @@ function notify(text, urgent = false, key) {
   return Promise.resolve()
 }
 startScheduler(notify, scheduledTask, monitoring)
+
+// One notice per incident of messages that were mid-handling (src/inflight.js), and one for an Instinct conversation
+// the last stop cut off (src/instinct.js). Through notify, so quiet hours, the daily budget and the brief apply.
+// Called only from here on: notify reaches monitoring and the outbox, which do not exist earlier in this file.
+// A notice stays open until notify accepted it (src/recovery-notice.js); the watchdog below tries again each minute.
+function tellRecovery() {
+  if (inflight.reconcile(state.wa) | reconcileInstinctRecovery()) save()
+  inflight.flushRecovery(state.wa, notify, save)
+  flushInstinctRecovery(notify)
+}
+tellRecovery()
+// WhatsApp groups (src/groups.js): once a minute it checks whether a round of reading is due (every
+// GROUPS_EVERY_MINUTES). Only a test, cancellation or change for today or tomorrow is sent now, through notify, so
+// quiet hours and the daily budget apply; the rest waits for the morning brief and "מה פספסתי?".
+setInterval(() => groups.tick({ notify, adders: groupAdders(), onFresh: schoolwork.groupsHook(notify) }).catch((e) => console.log(`[groups] ${e.message}`)), 60000).unref()
 startVoice()
 setInterval(outbox.flush, 30000)
+// A message that waited UNANSWERED_ALERT_MIN minutes (default 5, 0 = off) with no answer gets one short note, never
+// silence: still in the queue behind a long task, or lost. The log has every message and how it was answered.
+const UNANSWERED_ALERT_MIN = process.env.UNANSWERED_ALERT_MIN === undefined || process.env.UNANSWERED_ALERT_MIN === '' ? 5 : Number(process.env.UNANSWERED_ALERT_MIN) || 0
+setInterval(() => {
+  // A message stuck in flight in this run (onMessage threw before its receipt) is not left unknown forever.
+  // Also drains incidents from an overflow, or a notice that was attempted but not accepted, with nothing new stranded.
+  if (inflight.strand(state.wa, { inbox: state.inbox || [] })) save()
+  // A handed notice counts only once the outbox recorded it as sent; one it pushed out unsent is opened again.
+  tellRecovery()
+  if (!state.owner || !state.inbox?.length || !wa.connectedSince()) return
+  // Waiting on his 👍 is waiting on him, not a stuck message.
+  if (pendingConfirm) return
+  const late = inbox.overdue(state.inbox, { minutes: UNANSWERED_ALERT_MIN, busy: Boolean(activeTurn), active: activeTurn?.msgId })
+  if (!late.length) return
+  save()
+  for (const l of late) wa.send(state.owner.jid, l.text).catch((e) => console.log(`[inbox] ${e.message}`))
+}, 60000).unref()
 
 if (!state.owner) {
   if (state.manualPair) announcePairing()
@@ -435,12 +649,92 @@ const BRIDGE_NOTE = {
   text: (source) => `[הודעה דרך ${source}. עיצוב רגיל של צ'אט, לא של וואטסאפ.]`,
 }
 const bridgeAsk = (text, { voice, source }) => {
-  const run = queue.then(() => runTurn(`${BRIDGE_NOTE[voice ? 'voice' : 'text'](source)}\n${text}`, { source: String(source || 'bridge').slice(0, 30), confirm, sendMedia, say }))
+  const run = queue.then(async () => {
+    // The same "עצור" that ends a WhatsApp turn ends a voice turn from the app, including a phone-agent run.
+    const ac = new AbortController()
+    let finish
+    const done = new Promise((r) => (finish = r))
+    activeTurn = { ac, done }
+    try {
+      return await runTurn(`${BRIDGE_NOTE[voice ? 'voice' : 'text'](source)}\n${text}`, { source: String(source || 'bridge').slice(0, 30), confirm, sendMedia, say, signal: ac.signal })
+    } catch (e) {
+      if (e instanceof Aborted || ac.signal.aborted) return 'עצרתי.'
+      throw e
+    } finally {
+      if (activeTurn?.ac === ac) activeTurn = null
+      finish()
+    }
+  })
   queue = run.catch(() => {}).then(() => compact().catch(() => {}))
   return run
 }
 
-const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk })
+// One spoken turn. A plain home command (lights, the projector, the PC) runs at once and skips the model
+// and the queue, the same as in WhatsApp. Anything else uses the same queue, tools and WhatsApp approval
+// as a chat message. Hanging up declines an open approval.
+async function liveTurn(text, { signal } = {}) {
+  const onAbort = () => declinePendingConfirm()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  try {
+    const quick = await fastCommand(text)
+    if (quick) return quick.reply
+    const run = queue.then(() => runTurn(`${LIVE_NOTE}\n${text}`, { source: 'live', confirm, sendMedia, say, signal }))
+    queue = run.catch(() => {}).then(() => compact().catch(() => {}))
+    return await run
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+    declineNext = false
+  }
+}
+
+// The remote panel (src/panel.js). Off unless PANEL_ENABLED=on. Its turns wait in the same queue as everything else,
+// over the credential's own conversation, with no memory, no WhatsApp history and only the tools its scopes open.
+// Anything that needs approval is asked in the WhatsApp chat, like every other approval; nothing typed in the
+// panel can answer it.
+let panelBusy = 0
+function panelTurn(text, { actor, scopes, history, onWaiting }) {
+  const run = queue.then(async () => {
+    panelBusy++
+    try {
+      const ctx = panelContext({ actor, scopes, all: allTools(), confirm, onWaiting, timeZone: process.env.TIMEZONE || 'Asia/Jerusalem' })
+      const messages = [...history, { role: 'user', content: text }]
+      const reply = await runIsolated(messages, ctx)
+      return { reply, denied: ctx.denied, history: messages }
+    } finally {
+      panelBusy--
+    }
+  })
+  queue = run.catch(() => {})
+  return run
+}
+const panelCfg = panelConfig()
+// The avatar feed rides on the panel: no panel, no feed. PANEL_EVENTS=on turns it on; it is off by default.
+if (panelCfg.enabled && eventsConfig().enabled) avatarFeed = createEventFeed()
+const panel = panelCfg.enabled
+  ? createPanel({
+      file: path.join(DATA_DIR, 'panel.json'),
+      run: panelTurn,
+      status: () => ({ queueBusy: Boolean(activeTurn) || panelBusy > 0, computerMode: config.computerMode, pcBridgeConnected: bridgeConnected(), pendingApprovals: pendingConfirm ? 1 : 0 }),
+      // Connection only. The lights are known only when they go through the home bridge; the cloud browser's
+      // Google Home session is not checked without trying, so it is 'unknown'.
+      devices: () => ({
+        lights: googleHomeTransport().primary === 'home' ? (bridgeConnected() ? 'connected' : 'disconnected') : 'unknown',
+        tv: tvConnected() ? 'connected' : 'disconnected',
+      }),
+      notify: (text) => notify(text, true),
+      fast: { action: fastAction },
+      execute: createExecutor(),
+      events: avatarFeed,
+      audit: recordAudit,
+      origin: panelCfg.origin,
+      port: panelCfg.port,
+      trustProxy: panelCfg.trustProxy,
+    })
+  : null
+if (panel) startPanelServer(panel, panelCfg)
+
+const settingsUrl = startUi({ connectedSince: () => wa.connectedSince(), restart: () => process.exit(3), agent: bridgeAsk, liveTurn, panel })
+settingsPage = settingsUrl
 setSettingsUrl(settingsUrl)
 console.log(`\nאתר ההגדרות (חיבור חשבונות, העדפות, מה פעיל):\n${maskSettingsUrl(settingsUrl)}\n`)
 // On a fresh install the page opens by itself, since connecting accounts is the next thing to do.

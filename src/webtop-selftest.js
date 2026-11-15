@@ -320,6 +320,36 @@ const { isSecretSessionLog } = await import('./secret-logs.js')
 ok(isSecretSessionLog('Closing session:') && isSecretSessionLog('Closing open session in favor of incoming prekey bundle') && isSecretSessionLog('Removing old closed session:'), 'libsignal session lines are recognized')
 ok(!isSecretSessionLog('[lessons] read failed') && !isSecretSessionLog('העוזר רץ'), 'ordinary logs are not session dumps')
 const captured = []
+// The cloud browser could not reach Webtop at all (WEBTOP_PROXY / Tailscale exit node down). Seen on the VPS
+// as Chromium's "This site can't be reached ... ERR_SOCKS_CONNECTION_FAILED" page at chrome-error://chromewebdata/.
+const socksPage = { href: 'chrome-error://chromewebdata/', login: false, text: "This site can’t be reached\nThe webpage at https://school.example/Student_Card/6 might be temporarily down\nERR_SOCKS_CONNECTION_FAILED" }
+ok(session.webtopNetError(socksPage) === 'ERR_SOCKS_CONNECTION_FAILED', 'Chromium\'s proxy error page is recognized with its net error code')
+ok(session.webtopNetError({ href: 'chrome-error://chromewebdata/', text: '' }) === 'ERR_UNKNOWN', 'any chrome-error page is unreachable even without text')
+ok(session.webtopNetError({ href: 'https://school.example/home', text: timetable }) === '', 'a real Webtop page is not a network error')
+ok(session.webtopNetError({ href: 'https://school.example/home', text: 'הודעה: ERR_SOMETHING בטופס ' + 'x'.repeat(700) }) === '', 'a long Webtop page that mentions ERR_ is not a network error')
+session.classifyWebtopSnapshot({ href: 'https://school.example/home', login: false, text: CLOUDFRONT })
+ok(session.classifyWebtopSnapshot(socksPage) === 'unreachable', 'an unreachable page is classified as unreachable, not login and not ok')
+ok(session.webtopCloudBlockedNow(), 'an unreachable page leaves the blocked flag as it was')
+session.classifyWebtopSnapshot({ href: 'https://school.example/home', login: false, text: timetable })
+const unreachable = Object.assign(new Error(session.WEBTOP_UNREACHABLE_STATUS + ' (ERR_SOCKS_CONNECTION_FAILED).'), { code: 'webtop-unreachable', net: 'ERR_SOCKS_CONNECTION_FAILED' })
+ok(session.isWebtopUnreachableError(unreachable) && !session.isWebtopLoginError(unreachable) && !session.isWebtopBlockedError(unreachable), 'the unreachable error is its own kind')
+ok(session.webtopKeepAliveFailure(unreachable) === 'track', 'an unreachable site is tracked, never a re-login notice')
+ok(session.keepAliveAfterCloudError(unreachable, true) === 'home', 'keepalive warms the home window when the cloud browser cannot reach the site')
+ok(session.keepAliveAfterCloudError(unreachable, false) === 'throw', 'without the bridge an unreachable site still throws')
+let unreachHome = 0
+const viaHome2 = await session.runSessionRead(
+  async () => { throw unreachable },
+  async () => { unreachHome++; return 'ציונים' },
+  { primary: 'cloud', fallback: 'home' },
+)
+ok(viaHome2 === 'ציונים' && unreachHome === 1, 'an unreachable cloud browser falls back to the home bridge')
+try {
+  await session.runSessionRead(async () => { throw unreachable }, async () => { throw new Error('הגשר לא ענה') }, { primary: 'cloud', fallback: 'home' })
+  ok(false, 'unreachable with a dead home window should throw')
+} catch (e) {
+  ok(session.isWebtopUnreachableError(e), 'when the home window also fails the unreachable error stands')
+}
+
 const hook = (stream) => {
   const orig = stream.write
   stream.write = (chunk, _enc, cb) => {

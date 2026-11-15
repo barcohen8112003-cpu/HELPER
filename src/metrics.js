@@ -105,6 +105,8 @@ export function costText(s, label) {
 // Once a month (from the 1st, 09:00) a line on last month; and once each when this month passes 80% and 100%
 // of MONTHLY_COST_LIMIT (dollars). Both stay silent when nothing was used.
 export async function costTick(notify, now = new Date()) {
+  // A non-Date here is the scheduler bug (runTask was passed as `now`). Ignore it and use the clock.
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) now = new Date()
   state.metrics ??= { turns: [], proactive: { day: '', count: 0 } }
   const c = (state.metrics.cost ??= { reported: '', alerts: {} })
   const prev = month(new Date(now.getFullYear(), now.getMonth() - 1, 15))

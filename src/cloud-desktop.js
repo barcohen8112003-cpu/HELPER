@@ -39,6 +39,59 @@ function displaySocket(display) {
   return `/tmp/.X11-unix/X${n}`
 }
 
+// An X lock is the server PID, space-padded, then a newline.
+export function pidFromXLock(text) {
+  const n = Number(String(text ?? '').trim())
+  return Number.isInteger(n) && n > 0 ? n : 0
+}
+
+export function isXvfbCmdline(cmdline) {
+  const raw = Buffer.isBuffer(cmdline) ? cmdline.toString('utf8') : String(cmdline ?? '')
+  return raw.split('\0').filter(Boolean).some((part) => /(^|[/\\])Xvfb$/.test(part))
+}
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return e.code === 'EPERM'
+  }
+}
+
+function readProcCmdline(pid) {
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`)
+  } catch {
+    return null
+  }
+}
+
+export function isXvfbProcess(pid) {
+  if (!processAlive(pid)) return false
+  const cmd = readProcCmdline(pid)
+  return cmd != null && isXvfbCmdline(cmd)
+}
+
+// True when no live Xvfb owns this display. A socket left behind after a restart makes the next
+// start skip Xvfb, and every browser on that display then fails. Stale lock and socket are removed.
+export function staleDisplayLock(display, { root = '/tmp', ownsDisplay = isXvfbProcess } = {}) {
+  const n = String(display || ':99').replace(/^:/, '').split('.')[0]
+  const lock = path.join(root, `.X${n}-lock`)
+  const sock = path.join(root, '.X11-unix', `X${n}`)
+  let pid = 0
+  try {
+    if (fs.existsSync(lock)) pid = pidFromXLock(fs.readFileSync(lock, 'utf8'))
+  } catch {
+    pid = 0
+  }
+  if (pid && ownsDisplay(pid)) return false
+  fs.rmSync(lock, { force: true })
+  fs.rmSync(sock, { force: true })
+  return true
+}
+
 export function xvfbArgs() {
   const display = config.desktop.display || ':99'
   const geometry = /^\d+x\d+$/.test(config.desktop.geometry) ? config.desktop.geometry : '1280x800'
@@ -134,12 +187,13 @@ export async function startCloudDesktop() {
   const { home } = writeDesktopFiles(HOME)
   const env = { ...process.env, DISPLAY: display, HOME: home, LANG: process.env.LANG || 'C.UTF-8' }
   const sock = displaySocket(display)
-  if (!fs.existsSync(sock)) {
+  // Skip Xvfb only when a live Xvfb owns the display. A stale lock plus socket is not a display.
+  if (staleDisplayLock(display)) {
     const xvfb = which(['Xvfb', '/usr/bin/Xvfb'])
     if (!xvfb) throw new Error('Xvfb לא מותקן, אי אפשר להרים שולחן עבודה.')
     spawnDesktop(xvfb, xvfbArgs(), env)
-    await waitForSocket(sock, 10000)
   }
+  await waitForSocket(sock, 10000)
   const fluxbox = which(['fluxbox'])
   if (fluxbox) spawnDesktop(fluxbox, [], env)
   else console.log('[desktop] fluxbox לא נמצא, החלונות בלי מנהל חלונות.')

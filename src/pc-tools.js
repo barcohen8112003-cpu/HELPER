@@ -1,9 +1,11 @@
 // The user's own computer: open, media, files, apps, screen, power. Locally these run in this process; in the cloud
 // they go through the home bridge (src/pc-bridge.js), and only while COMPUTER_MODE is on.
+import { firstYouTubeVideo } from './youtube.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { wakeEnabled, wakePc } from './wake.js'
 import * as pc from './pc.js'
+import { runAdminCommand } from './pc-admin.js'
 import { str, obj, computerEnabled, approved } from './tool-helpers.js'
 
 // What "open" may launch besides a web address: sites by name, and a few built-in Windows apps by their URI.
@@ -26,20 +28,8 @@ const APPS = {
   הגדרות: 'ms-settings:',
 }
 
-// The first ordinary video for a search, read from YouTube's own results page: { id, title } or null.
-// Only "videoRenderer" entries count, which leaves out ads, Shorts shelves, channels and playlists.
-export async function firstYouTubeVideo(query) {
-  const res = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=he`, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36', 'Accept-Language': 'he,en;q=0.8' },
-    signal: AbortSignal.timeout(15000),
-  })
-  if (!res.ok) return null
-  const html = await res.text()
-  const m = html.match(/"videoRenderer":\{"videoId":"([\w-]{11})"[\s\S]{0,1500}?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/)
-  if (m) return { id: m[1], title: JSON.parse(`"${m[2]}"`) }
-  const id = html.match(/"videoId":"([\w-]{11})"/)
-  return id ? { id: id[1], title: '' } : null
-}
+// Kept here for older imports; the search itself lives in src/youtube.js (Data API first, results page after).
+export { firstYouTubeVideo }
 
 export const pcTools = [
   {
@@ -81,9 +71,14 @@ export const pcTools = [
   {
     name: 'run_command',
     enabled: computerEnabled,
-    description: 'מריץ פקודת PowerShell על המחשב של המשתמש ומחזיר את הפלט. מוגבל ל-60 שניות.',
-    parameters: obj({ command: str('פקודת PowerShell') }),
-    async run({ command }, ctx) {
+    description: 'מריץ פקודת PowerShell על המחשב של המשתמש ומחזיר את הפלט. מוגבל ל-60 שניות. admin=true מריץ כמנהל (Administrator), לפעולות שצריכות הרשאות מנהל: התקנות לכל המשתמשים, שירותים, רישום, חומת אש, קבצי מערכת. ברירת המחדל: משתמש רגיל.',
+    parameters: obj({ command: str('פקודת PowerShell'), admin: { type: 'boolean', description: 'true = להריץ כמנהל (Administrator). רק כשהפקודה באמת צריכה הרשאות מנהל.' } }, ['command']),
+    async run({ command, admin }, ctx) {
+      if (admin === true) {
+        // As Administrator the user is asked in every mode, auto included: approved() would skip the question there.
+        if (!(await ctx.confirm(`להריץ כמנהל (Administrator) את הפקודה?\n\`\`\`${command}\`\`\``))) return 'המשתמש לא אישר את הפקודה'
+        return runAdminCommand(command)
+      }
       if (!(await approved(ctx, `להריץ את הפקודה?\n\`\`\`${command}\`\`\``))) return 'המשתמש לא אישר את הפקודה'
       return pc.runCommand(command)
     },

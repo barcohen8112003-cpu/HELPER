@@ -64,6 +64,7 @@
   <nav>
     <h1 id="name">Helper</h1>
     <a href="#connect">חיבורים</a>
+    <a href="#remote-panel">פאנל מרחוק</a>
     <a href="#active">מה פעיל</a>
     <a href="#memory">זיכרון</a>
     <a href="#prefs">העדפות</a>
@@ -75,6 +76,7 @@
     <div id="shortcuts" class="launch"></div>
     <section id="connect"><h2>חיבורים</h2><p class="sub">החשבונות והשירותים שהעוזר יכול להשתמש בהם</p><div class="rows" id="connectors"></div></section>
     <section id="app-connect"><h2>חיבור לאפליקציה</h2><p class="sub">סרוק את הקוד באפליקציית האנדרואיד כדי להתחבר</p><div class="rows" id="appQrRows"></div></section>
+    <section id="remote-panel"><h2>פאנל מרחוק</h2><p class="sub">גישה מכל דפדפן דרך HTTPS. קריאה בלבד, אלא אם הדלקת פעולה במפורש</p><div class="rows" id="panelRows"></div></section>
     <section id="active"><h2>מה פעיל</h2><p class="sub">מקורות, תזכורות, משימות ומעקבים</p><div class="rows" id="activeRows"></div></section>
     <section id="memory"><h2>זיכרון</h2><p class="sub">מה שהעוזר זוכר עליך. אפשר למחוק כל פריט בנפרד</p><div class="rows" id="memoryRows"></div></section>
     <section id="prefs"><h2>העדפות</h2><p class="sub">שם, שעות ותזמונים</p><div class="rows" id="prefRows"></div></section>
@@ -165,7 +167,7 @@ function render(S) {
   $('name').textContent = S.botName
   fill($('meta'),
     h('div', {}, h('span', { class: 'pill ' + (S.whatsapp.connected ? 'ok' : 'bad') }, S.whatsapp.connected ? 'וואטסאפ מחובר' : 'וואטסאפ מנותק')),
-    h('div', { style: 'margin-top:8px' }, S.whatsapp.connected ? 'ברצף ' + S.whatsapp.since : S.whatsapp.paired ? 'מנסה להתחבר' : 'צריך לסרוק QR בחלון העוזר'),
+    h('div', { style: 'margin-top:8px' }, S.whatsapp.connected ? 'ברצף ' + S.whatsapp.since : S.whatsapp.qr ? 'צריך לקשר, ראה למטה' : S.whatsapp.paired ? 'מנסה להתחבר' : 'מתחבר...'),
     h('div', { style: 'margin-top:8px;direction:ltr;text-align:right' }, S.model),
     S.waiting ? h('div', { style: 'margin-top:8px' }, S.waiting + ' הודעות ממתינות') : '')
 
@@ -209,16 +211,34 @@ function render(S) {
     h('p', { class: 'small' }, 'שליטה בטלפון דרך ADB ו-Tailscale. צימוד חד-פעמי, אחר כך חיבור לפורט של ניפוי אלחוטי. אחרי החיבור הראשון הטלפון עובר לפורט 5555 עד אתחול, גם בנתונים סלולריים. הסיסמה לא נשמרת. פעולות שמשנות את הטלפון מבקשות אישור בוואטסאפ.'),
     h('div', { style: 'margin:12px 0' }, h('a', { class: 'btn primary', href: '/phone' }, 'טלפון')))
   const shortcuts = [
+    h('a', { href: '/face' }, 'פנים'),
     W.cloud && h('a', { href: '/webtop' }, 'Webtop'),
     GH.cloud && h('a', { href: '/google-home' }, 'Google Home'),
     P.enabled && h('a', { href: '/phone' }, 'טלפון'),
+    h('a', { href: '/live' }, 'שיחה חיה'),
     S.errand?.enabled && h('a', { href: '/errand' }, '🛒 דפדפן קניות'),
   ].filter(Boolean)
   fill($('shortcuts'),
     D.enabled && h('a', { class: 'btn primary launch-desktop', href: '/desktop/' }, '🖥️ שליטה מרחוק במחשב בענן'),
     shortcuts.length && h('div', { class: 'launch-links' }, shortcuts))
 
+  const WA = S.whatsapp
+  const waNumber = h('input', { type: 'tel', placeholder: '0501234567', value: WA.number ? '0' + WA.number.replace(/^972/, '') : '', style: 'direction:ltr;max-width:200px' })
+  const waBody = h('div', {},
+    WA.code && h('div', { style: 'margin:12px 0' },
+      h('div', { class: 'small' }, 'בטלפון: וואטסאפ ← מכשירים מקושרים ← קישור מכשיר ← "קישור עם מספר טלפון במקום", והקלד:'),
+      h('div', { style: 'font-size:32px;font-weight:700;letter-spacing:4px;direction:ltr;text-align:center;margin:8px 0' }, WA.code.replace(/^(.{4})(.{4})$/, '$1-$2'))),
+    h('form', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0', onsubmit: (e) => { e.preventDefault(); act('whatsapp/pair', { number: waNumber.value }, 'הקוד מוכן') } },
+      waNumber, h('button', { class: 'primary', type: 'submit' }, WA.code ? 'קוד חדש' : 'קבל קוד צימוד')),
+    h('p', { class: 'small' }, 'הקוד מתחלף אחרי כמה דקות. אם וואטסאפ אומר שהקוד שגוי, לחץ "קוד חדש" והקלד מיד.'),
+    WA.qr && h('details', {}, h('summary', {}, 'או סריקת QR ממכשיר אחר'),
+      h('div', { style: 'text-align:center;margin:12px 0' }, h('img', { src: WA.qr, alt: 'QR', style: 'width:240px;height:240px;background:#fff;padding:8px;border-radius:8px' }))))
   fill($('connectors'),
+    !WA.connected && WA.qr && h('div', { class: 'row block' },
+      h('div', { style: 'display:flex;gap:16px;align-items:center' },
+        h('div', { class: 'grow' }, h('b', {}, 'וואטסאפ'), h('div', { class: 'small' }, 'מקשרים פעם אחת את המספר שהעוזר יעבוד ממנו')),
+        h('span', { class: 'pill bad' }, 'לא מקושר')),
+      waBody),
     connector('Webtop', 'ציונים, מערכת שעות, שיעורי בית והודעות. קריאה בלבד', Boolean(W.enabled), webtopBody,
       W.blocked && h('p', { class: 'small', style: 'margin:10px 0 0' }, W.blockedStatus || 'וובטופ חוסם את כתובת השרת, משתמשים במחשב הביתי')),
     connector('Google Home', 'אורות, רמקולים ושאר מכשירי הבית', GH.cloud, googleHomeBody),
@@ -236,12 +256,21 @@ function render(S) {
       ['LLM_BACKUP_BASE_URL', 'ספק גיבוי: כתובת', { hint: 'נכנס לפעולה רק כשהמכסה של הספק הראשי נגמרת. Gemini: https://generativelanguage.googleapis.com/v1beta/openai' }],
       ['LLM_BACKUP_API_KEY', 'ספק גיבוי: מפתח', { secret: true }],
       ['LLM_BACKUP_MODEL', 'ספק גיבוי: מודל'],
+      ['LLM_PRIMARY_BASE_URL', 'ספק מועדף לשיחה: כתובת', { hint: 'רק לתורות שיחה. כשל נופל ל-LLM_MODEL. לדוגמה Coarena Opus.' }],
+      ['LLM_PRIMARY_API_KEY', 'ספק מועדף לשיחה: מפתח', { secret: true }],
+      ['LLM_PRIMARY_MODEL', 'ספק מועדף לשיחה: מודל'],
+      ['LLM_PRIMARY_LIVE', 'ספק מועדף גם בשיחה חיה', { options: [['', 'כן'], ['false', 'לא (שיחה חיה נשארת על LLM_MODEL)']], hint: 'false = שיחות טלפון חיות על LLM_MODEL, לתשובה מהירה יותר.' }],
       ['LLM_LIGHT', 'מצב קל', { options: [['false', 'כבוי'], ['true', 'פעיל (לחבילות חינמיות עם מכסה קטנה)']] }],
     ])),
-    connector('ElevenLabs', 'הודעות קוליות: מבין ועונה בקול. גם אפקטים ומוזיקה', S.settings.ELEVENLABS_API_KEY.set, form(S, [
+    connector('דיבור', 'ברירת מחדל: Microsoft Edge על השרת, בלי מפתח. עברית he-IL-HilaNeural או he-IL-AvriNeural. שפה אחרת נבחרת לבד.', S.voice.speak, form(S, [
+      ['TTS_PROVIDER', 'ספק', { options: [['', 'Edge-TTS (ברירת מחדל)'], ['edge', 'Edge-TTS'], ['elevenlabs', 'ElevenLabs'], ['openai', 'ספק תואם OpenAI']], hint: 'ריק = Edge, גם אם יש מפתח של ElevenLabs. אם Edge נכשל והמפתח מוגדר, נופלים אליו, ואחרת התשובה נשארת טקסט.' }],
+      ['EDGE_TTS_VOICE', 'קול עברי', { placeholder: 'he-IL-HilaNeural', hint: 'he-IL-HilaNeural או he-IL-AvriNeural. השיחה החיה קוראת את זה בהפעלה מחדש של הסוכן.' }],
+      ['EDGE_TTS_RATE', 'קצב', { placeholder: '+0%', hint: '+0% , +10% או -10%' }],
+    ])),
+    connector('ElevenLabs', 'אופציונלי. תמלול אם אין STT_MODEL, תמונות וסרטונים, וקול רק כש-TTS_PROVIDER=elevenlabs', S.settings.ELEVENLABS_API_KEY.set, form(S, [
       ['ELEVENLABS_API_KEY', 'מפתח API', { secret: true }],
       ['ELEVENLABS_VOICE_ID', 'מזהה הקול'],
-      ['ELEVENLABS_TTS_MODEL', 'מודל דיבור', { hint: 'חייב לתמוך בעברית: eleven_v3 או eleven_v4' }],
+      ['ELEVENLABS_TTS_MODEL', 'מודל דיבור', { hint: 'חייב לתמוך בעברית: eleven_v3 או eleven_v4. לא בשימוש לדיבור אלא אם TTS_PROVIDER=elevenlabs' }],
     ], { clear: 'ELEVENLABS_API_KEY' })),
     connector('GitHub', 'קריאה בלבד: ריפוזיטוריז, issues וקוד', S.settings.GITHUB_TOKEN.set, form(S, [
       ['GITHUB_TOKEN', 'Personal access token', { secret: true, hint: 'מומלץ fine-grained עם הרשאות קריאה בלבד' }],
@@ -257,7 +286,13 @@ function render(S) {
       S.settings.BACKUP_PASSPHRASE.set && h('div', { style: 'margin:12px 0' }, h('button', { class: 'btn', onclick: () => post('backup/now', {}).then((r) => toast(r.message || r.error || 'נשמר')).catch((e) => toast(e.message)) }, 'גבה עכשיו')))),
     connector('Claude Code', '"תבקש מ-Claude לבנות לי אתר" בוואטסאפ, על חשבון המנוי שלך ב-Claude, בלי מפתח API. במחשב: npm i -g @anthropic-ai/claude-code, ואז claude setup-token, ואת הטוקן שמתקבל מדביקים כאן.', S.settings.CLAUDE_CODE_OAUTH_TOKEN.set, form(S, [['CLAUDE_CODE_OAUTH_TOKEN', 'טוקן', { secret: true, hint: 'מתחיל ב-sk-ant-oat. תקף לשנה.' }]], { clear: 'CLAUDE_CODE_OAUTH_TOKEN' })),
     connector('Gemini', '"תשאל את ג\'מיני" בוואטסאפ. מפתח חינמי מ-aistudio.google.com/apikey', S.settings.GEMINI_API_KEY.set, form(S, [['GEMINI_API_KEY', 'מפתח API', { secret: true }], ['GEMINI_MODEL', 'מודל', { hint: 'ריק = gemini-2.5-flash' }]], { clear: 'GEMINI_API_KEY' })),
-    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })))
+    connector('חיפוש Tavily', 'חיפוש טוב יותר מברירת המחדל', S.settings.TAVILY_API_KEY.set, form(S, [['TAVILY_API_KEY', 'מפתח API', { secret: true }]], { clear: 'TAVILY_API_KEY' })),
+    connector('השוואת מחירים', '"מה הכי זול" מ-Google Shopping תוך שניות, בלי לגלוש בזאפ. מפתח מ-searchapi.io (או SerpApi בכרטיס לינה).', S.settings.SEARCHAPI_KEY.set, form(S, [['SEARCHAPI_KEY', 'מפתח SearchApi', { secret: true, hint: 'searchapi.io, בלוח הבקרה תחת API Key' }]], { clear: 'SEARCHAPI_KEY' })),
+    connector('טיסות', '"תמצא לי טיסה זולה ביולי" עם מחירים אמיתיים. Travelpayouts (חינם, travelpayouts.com) מוצא את התאריכים הזולים בטווח; Duffel (duffel.com) נותן הצעות חיות עם שעות, עצירות וקונקשן.', S.settings.TRAVELPAYOUTS_TOKEN.set || S.settings.DUFFEL_TOKEN.set, form(S, [['TRAVELPAYOUTS_TOKEN', 'טוקן Travelpayouts', { secret: true, hint: 'בפרופיל באתר, תחת API token' }], ['DUFFEL_TOKEN', 'טוקן Duffel', { secret: true, hint: 'צריך duffel_live_. מפתח duffel_test_ מחזיר טיסות מומצאות, אז HELPER מתעלם ממנו' }]], { clear: 'TRAVELPAYOUTS_TOKEN' })),
+    connector('לינה', '"תמצא לי מלון באתונה לשלושה לילות" או "דירה כמו Airbnb ברומא" עם מחירים, דירוג ותמונות, בלי לגלוש באתרים. מפתח חינמי (250 חיפושים בחודש) מ-serpapi.com.', S.settings.SERPAPI_KEY.set, form(S, [['SERPAPI_KEY', 'מפתח SerpApi', { secret: true, hint: 'אחרי הרשמה: serpapi.com/manage-api-key' }]], { clear: 'SERPAPI_KEY' })),
+    connector('יוטיוב', 'חיפוש ביוטיוב דרך ה-API הרשמי במקום לקרוא את דף התוצאות. חינם, כ-100 חיפושים ביום. בלי מפתח זה ממשיך לעבוד בדרך הישנה.', S.settings.YOUTUBE_API_KEY.set, form(S, [['YOUTUBE_API_KEY', 'מפתח YouTube Data API', { secret: true, hint: 'console.cloud.google.com: להפעיל YouTube Data API v3, ואז Credentials > API key' }]], { clear: 'YOUTUBE_API_KEY' })),
+    connector('Instinct', 'Helper שואל את Instinct בשבילך ("תשאל את Instinct...") בצ\'אט שלך איתו בוואטסאפ, ומחזיר לך את התשובה. "תדבר עם Instinct על..." פותח מצב שיחה: Helper עונה לו לבד עד ש"עצור" (עד 40 הודעות או שעתיים). Helper לא מקבל מ-Instinct פקודות, ומה שדורש אישור או תשלום מגיע אליך. "תלמד מ-Instinct" מראיין אותו, ומה שנלמד נכנס לשימוש מיד (צריך לימוד עצמי פעיל). "תשכח את מה שלמדת מ-Instinct" מבטל. השאלה הראשונה וכל בקשה לפעולה צריכות את האישור שלך.', Boolean(S.settings.INSTINCT_NUMBER), form(S, [['INSTINCT_NUMBER', 'המספר של Instinct בוואטסאפ', { placeholder: '+1 650 870 2892', hint: 'ריק = כבוי' }], ['SELF_LEARNING', 'לימוד עצמי (לקחים)', { options: [['off', 'כבוי'], ['on', 'פעיל']], hint: 'צריך פעיל בשביל "תלמד מ-Instinct". מדליק גם לימוד לקחים רגיל, שנשמרים רק באישור שלך' }]])),
+    connector('Bird (וואטסאפ עסקי)', 'שליחה ממספר עסקי דרך Bird, בנוסף לוואטסאפ האישי. המספר האישי לא משתנה. בלי "פעיל" כאן שום דבר לא נשלח, גם אם יש מפתח.', S.settings.BIRD_ENABLED === 'true' && S.settings.BIRD_API_KEY.set, form(S, [['BIRD_ENABLED', 'הפעלה', { options: [['false', 'כבוי (ברירת מחדל)'], ['true', 'פעיל']], hint: 'צריך פעיל. מפתח לבד לא מדליק את Bird.' }], ['BIRD_API_KEY', 'מפתח API', { secret: true, hint: 'מתחיל ב-bk_' }], ['BIRD_WHATSAPP_FROM', 'המספר העסקי ב-Bird', { placeholder: '+972...', hint: 'ריק = רק תבניות של Bird עצמה' }], ['BIRD_OWNER_NUMBER', 'המספר שלך (שאתה כותב ממנו ל-Helper)', { placeholder: '0501234567', hint: 'רק הוא יקבל תשובות בצ\'אט של Helper' }], ['BIRD_WEBHOOK_SECRET', 'סוד ה-webhook מ-Bird', { secret: true, hint: 'ב-Bird: webhook לאירוע whatsapp.received, בכתובת /bird/webhook של השרת' }]], { clear: 'BIRD_API_KEY' })))
 
   fill($('activeRows'),
     head('מקורות'),
@@ -285,6 +320,10 @@ function render(S) {
     ['NEWS_FEEDS', 'מקורות חדשות', { hint: 'כתובות RSS מופרדות בפסיק. ריק = ynet, מעריב וישראל היום' }],
     ['TIMEZONE', 'אזור זמן', { placeholder: 'Asia/Jerusalem' }],
     ['COMPUTER_MODE', 'שליטה במחשב', { options: [['ask', 'מבקש אישור לכל פעולה'], ['off', 'כבוי'], ['auto', 'בלי אישור (מסוכן)']] }],
+    ['FACE_ENABLED', 'פנים מדברות', { options: [['off', 'כבוי (ברירת מחדל)'], ['on', 'פעיל']], hint: 'כבוי: כלום לא משתנה. פעיל: כשהעוזר מדבר, דף /face מציג פנים. המחשב הביתי אם הוא דלוק, ואם לא אז ציור בדפדפן.' }],
+    ['FACE_ENGINE', 'מנוע הפנים', { options: [['auto', 'אוטומטי: מחשב אם מחובר, אחרת דפדפן'], ['pc', 'מחשב ביתי, ואם הוא כבוי דפדפן'], ['browser', 'רק דפדפן']] }],
+    ['FACE_TV', 'פתיחה בטלוויזיה', { options: [['auto', 'סיכום הבוקר'], ['on', 'כל דיבור'], ['off', 'לא לפתוח לבד']], hint: 'צריך UI_PUBLIC_HOST. הדף נפתח עם כרטיס קצר לפנים בלבד, לא עם סיסמת האתר.' }],
+    ['FACE_WEBRTC', 'וידאו ישיר ברשת הביתית', { options: [['off', 'כבוי (התמונות עוברות דרך השרת)'], ['on', 'לנסות גם WebRTC ישיר']], hint: 'ברירת המחדל שולחת תמונות דרך הגשר שכבר פתוח, בלי פורט חדש.' }],
   ])))
 
   const M = S.metrics
@@ -325,9 +364,81 @@ function render(S) {
       h('span', { class: 'small' }, 'קוד גישה'),
       shown, reveal, copyBtn(S.bridgeToken)))
   }
+  renderPanel(S.panel || {}, copyBtn)
   fill($('appQrRows'), appRows.length ? h('div', { class: 'row block', style: 'text-align:center' }, appRows) : h('div', { class: 'row small' }, 'לא נמצאה כתובת רשת זמינה לחיבור.'))
 }
 
+// The remote panel: credentials, their device switches (all off until turned on here), limits and today's use.
+// A new credential's secret is shown once, right after it is made, and never again.
+function renderPanel(P, copyBtn) {
+  const rows = []
+  if (!P.enabled) {
+    rows.push(h('div', { class: 'row small' }, 'כבוי. כדי להפעיל: PANEL_ENABLED=on בקובץ .env והפעלה מחדש. הפאנל עונה רק דרך פורט משלו (PANEL_PORT), ולא חושף את אתר ההגדרות, /dash, /face או /bridge.'))
+    return fill($('panelRows'), rows)
+  }
+  rows.push(h('div', { class: 'row small' }, `כתובת: ${P.origin ? P.origin + '/panel' : 'לא הוגדרה PANEL_PUBLIC_ORIGIN (מקומי בלבד)'} · היום: ${P.usage?.count || 0} מתוך ${P.settings?.dailyCap} בקשות`))
+  rows.push(h('div', { class: 'row small' }, 'מצב "גשר הבית מחובר" בפאנל אומר רק שהחיבור למחשב בבית קיים, לא שפעולה על מכשיר תצליח.'))
+  const fresh = renderPanel.fresh
+  if (fresh) {
+    rows.push(h('div', { class: 'copy-line' }, h('span', { class: 'small' }, 'הקוד החדש (מוצג פעם אחת בלבד)'), h('code', { class: 'copy-value' }, fresh), copyBtn(fresh)))
+    renderPanel.fresh = ''
+  }
+  for (const c of (P.credentials || []).filter((x) => x.active)) {
+    const consumer = String(c.kind || 'panel').startsWith('consumer:')
+    const switches = (consumer ? [] : P.devices || []).map((d) => {
+      const scope = 'device:' + d.id
+      const box = h('input', { type: 'checkbox', checked: c.scopes.includes(scope), onchange: () => {
+        const next = box.checked ? [...c.scopes, scope] : c.scopes.filter((x) => x !== scope)
+        act('panel/scopes', { id: c.id, scopes: next }, box.checked ? `${d.label}: מותר מהפאנל` : `${d.label}: כבוי`)
+      } })
+      return h('label', { class: 'small', style: 'display:inline-flex;gap:6px;margin-inline-end:14px' }, box, d.label)
+    })
+    // The desktop avatar's feed: types only (message, task, alert), never content. Off until switched on here.
+    if (P.events && (consumer || c.kind === 'panel' || !c.kind)) {
+      const ev = h('input', { type: 'checkbox', checked: c.scopes.includes('events:avatar'), onchange: () => {
+        const next = ev.checked ? [...c.scopes, 'events:avatar'] : c.scopes.filter((x) => x !== 'events:avatar')
+        act('panel/scopes', { id: c.id, scopes: next }, ev.checked ? 'אירועי אווטאר: פועל' : 'אירועי אווטאר: כבוי')
+      } })
+      switches.push(h('label', { class: 'small', style: 'display:inline-flex;gap:6px;margin-inline-end:14px' }, ev, 'אירועי אווטאר (סוג בלבד, בלי תוכן)'))
+    }
+    rows.push(h('div', { class: 'row block' },
+      h('div', {}, h('b', {}, c.label), h('span', { class: 'small' }, ` · ${c.id} · נוצר ${new Date(c.createdAt).toLocaleDateString('he-IL')} · ${c.scopes.join(', ')}`)),
+      h('div', {}, switches),
+      h('button', { type: 'button', class: 'link', onclick: () => { if (confirm(`לבטל את "${c.label}"? כל החיבורים שלו ינותקו מיד.`)) act('panel/revoke', { id: c.id }, 'בוטל') } }, 'בטל')))
+  }
+  const name = h('input', { type: 'text', class: 'rtl', placeholder: 'שם (למשל: הלפטופ שלי)', autocomplete: 'off' })
+  rows.push(h('form', { class: 'fields', onsubmit: async (e) => {
+    e.preventDefault()
+    try {
+      const out = await post('panel/create', { label: name.value, scopes: [] })
+      renderPanel.fresh = out.secret
+      toast('נוצר. העתק את הקוד עכשיו')
+      await load()
+    } catch (err) { toast(err.message) }
+  } }, h('label', {}, 'credential חדש (קריאה בלבד)'), name, h('button', { class: 'primary' }, 'צור')))
+  if (P.events) {
+    rows.push(h('form', { class: 'fields', onsubmit: async (e) => {
+      e.preventDefault()
+      try {
+        const out = await post('panel/create', { label: 'אווטאר במחשב', scopes: [], kind: 'consumer:desktop' })
+        renderPanel.fresh = out.secret
+        toast('נוצר, עם אירועים כבויים. העתק את הקוד, הדבק אותו ב-avatar-link.ps1, ואז הדלק כאן את "אירועי אווטאר"')
+        await load()
+      } catch (err) { toast(err.message) }
+    } }, h('label', {}, 'credential לאווטאר במחשב (רק אירועים, בלי תוכן)'), h('button', { class: 'primary' }, 'צור')))
+  }
+  const S = P.settings || {}
+  const lim = {}
+  const field = (k, label) => [h('label', {}, label), (lim[k] = h('input', { type: 'number', min: '0', value: S[k] }))]
+  rows.push(h('form', { class: 'fields', onsubmit: (e) => {
+    e.preventDefault()
+    act('panel/settings', { settings: Object.fromEntries(Object.entries(lim).map(([k, el]) => [k, el.value])) })
+  } }, field('dailyCap', 'תקרה יומית לכל הפאנל (בקשות)'), field('askPerHour', 'בקשות לשעה לכל credential'), field('statusPerHour', 'בדיקות מצב לשעה'), field('loginPerMinute', 'ניסיונות כניסה לדקה לכל כתובת'), h('button', { class: 'primary' }, 'שמור מגבלות')))
+  fill($('panelRows'), rows)
+}
+
+// While WhatsApp waits for a link the QR and code change, so the page refreshes itself until it connects.
+setInterval(() => { if ($('meta').textContent.includes('צריך לקשר') && !document.activeElement?.matches('input')) load() }, 15000)
 async function load() {
   const res = await fetch('/api/state')
   if (!res.ok) return toast('אין גישה. פתח מחדש את הכתובת מחלון העוזר.')

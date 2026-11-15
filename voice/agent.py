@@ -1,0 +1,437 @@
+# HELPER live voice. LiveKit Agents owns the room, the turn detector and barge-in.
+# ElevenLabs Scribe hears Hebrew (Groq Whisper is fallback; Groq is currently blocked). Phone speech is Fish Audio when LIVE_TTS_PROVIDER=fish, else Edge-TTS unless TTS_PROVIDER=elevenlabs. WhatsApp voice notes still follow TTS_PROVIDER.
+# Every reply is a normal HELPER turn: same tools, same WhatsApp approval for send / pay / call / delete.
+# A phone call (LiveKit Cloud number) lands in the same agent. Only the owner's number gets HELPER.
+import asyncio
+import base64
+import os
+import random
+import re
+
+import aiohttp
+from livekit import agents, rtc
+from livekit.agents import Agent, AgentServer, AgentSession, JobProcess, function_tool, inference, llm, tts, utils
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.plugins import groq, silero
+
+from edge_pcm import choose_voice, iter_pcm, pcm_frames, tts_provider
+from fish_pcm import fish_configured, iter_fish_pcm, live_tts_provider
+
+HELPER = os.environ.get("HELPER_URL", "http://helper:3210").rstrip("/")
+SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
+# Empty = joins every new room (the docker server). A name = joins only when dispatched (Cloud phone numbers).
+AGENT_NAME = os.environ.get("LIVE_VOICE_AGENT_NAME", "").strip()
+
+
+def _seconds(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.environ.get(name, "") or default))
+    except ValueError:
+        return default
+
+
+# pipeline = Groq hears, HELPER's server thinks, a TTS speaks (old behavior).
+# realtime = a fast speech-to-speech model talks as HELPER and asks the server whenever there is real work.
+MODE = os.environ.get("LIVE_VOICE_MODE", "pipeline").strip().lower()
+REALTIME_MODEL = os.environ.get("LIVE_VOICE_REALTIME_MODEL", "").strip() or "openai/gpt-realtime-2.1-mini"
+REALTIME_VOICE = os.environ.get("LIVE_VOICE_REALTIME_VOICE", "").strip()
+
+# When HELPER takes longer than this, a short "רגע" goes out so the line is not silent. 0 = never.
+FILLER_AFTER = _seconds("LIVE_VOICE_FILLER_AFTER", 1.2)
+FILLERS = ("רגע.", "שנייה.", "רגע, בודקת.")
+# Sentences are spoken as soon as each is ready, not after the whole reply.
+SENTENCE_END = re.compile(r"(?<=[.!?…:;])\s+|\n+")
+
+
+def stt_options():
+    el_key = os.environ.get("ELEVENLABS_API_KEY") or os.environ.get("ELEVEN_API_KEY") or ""
+    el_model = (
+        os.environ.get("ELEVENLABS_STT_MODEL")
+        or os.environ.get("LIVE_VOICE_STT_MODEL")
+        or "scribe_v3_live"
+    )
+    # A leftover Groq Whisper id in LIVE_VOICE_STT_MODEL must not select Scribe.
+    if el_key and not str(el_model).startswith("whisper"):
+        from livekit.plugins import elevenlabs
+
+        print(f"STT: elevenlabs {el_model}")
+        return elevenlabs.STT(
+            api_key=el_key,
+            model=el_model,
+            language_code="he",
+            tag_audio_events=False,
+            # Proper-noun bias without Whisper-style prompt leakage.
+            keyterms=["הלפר", "וובטופ", "נאור"],
+        )
+
+    key = os.environ.get("GROQ_API_KEY") or os.environ.get("LIVE_VOICE_STT_KEY") or ""
+    base = os.environ.get("LIVE_VOICE_STT_BASE_URL") or ""
+    voice_base = os.environ.get("VOICE_BASE_URL") or ""
+    if not key and os.environ.get("VOICE_API_KEY") and ("groq" in voice_base or os.environ.get("STT_MODEL")):
+        key = os.environ["VOICE_API_KEY"]
+        base = base or voice_base
+    base = base or "https://api.groq.com/openai/v1"
+    model = os.environ.get("STT_MODEL") or "whisper-large-v3-turbo"
+    if not key:
+        raise RuntimeError("missing ELEVENLABS_API_KEY (or GROQ_API_KEY / VOICE_API_KEY for Whisper)")
+    os.environ["GROQ_API_KEY"] = key
+    print(f"STT: groq {model}")
+    return groq.STT(
+        model=model,
+        api_key=key,
+        base_url=base,
+        language="he",
+        prompt="היי הלפר, מה שלומך?",
+    )
+
+
+def latest_user(chat_ctx) -> str:
+    for item in reversed(list(getattr(chat_ctx, "items", []) or [])):
+        if getattr(item, "role", None) != "user":
+            continue
+        text = getattr(item, "text_content", None) or ""
+        if str(text).strip():
+            return str(text).strip()
+    return ""
+
+
+async def _post(path: str, payload: dict, timeout: int):
+    headers = {"Authorization": f"Bearer {SECRET}"}
+    client_timeout = aiohttp.ClientTimeout(total=timeout)
+    async with aiohttp.ClientSession(timeout=client_timeout) as session:
+        async with session.post(HELPER + path, json=payload, headers=headers) as res:
+            kind = res.headers.get("Content-Type", "")
+            if "json" in kind or res.status >= 400 and "audio" not in kind:
+                try:
+                    body = await res.json(content_type=None)
+                except Exception:
+                    body = {"error": (await res.text())[:300]}
+                return res.status, kind, body
+            return res.status, kind, await res.read()
+
+
+async def ask_helper(text: str) -> str:
+    try:
+        status, _kind, body = await _post("/internal/live/turn", {"text": text[:4000]}, 300)
+    except Exception:
+        return "אין לי קשר לשרת כרגע."
+    if status != 200 or not isinstance(body, dict):
+        return "לא הצלחתי להשלים את זה עכשיו."
+    return str(body.get("reply") or "").strip() or "אין לי תשובה."
+
+
+async def caller_allowed(number: str) -> bool:
+    # Fails closed: no answer from HELPER means the call is hung up.
+    if not number:
+        return False
+    try:
+        status, _kind, body = await _post("/internal/live/caller", {"text": number[:40]}, 10)
+    except Exception:
+        return False
+    return status == 200 and isinstance(body, dict) and body.get("allowed") is True
+
+
+def split_ready(buf: str):
+    """Complete sentences in buf, and the unfinished rest."""
+    parts = SENTENCE_END.split(buf)
+    if len(parts) == 1:
+        return [], buf
+    return [p.strip() for p in parts[:-1] if p.strip()], parts[-1]
+
+
+def _bg(coro):
+    task = asyncio.ensure_future(coro)
+    task.add_done_callback(lambda t: t.exception() if t.done() and not t.cancelled() else None)
+    return task
+
+
+async def helper_pcm(text: str, fallback: bool = False) -> bytes:
+    # ElevenLabs audio, only when this process asked for it. Edge is synthesized here.
+    payload = {"text": text[:1500], "fallback": True} if fallback else {"text": text[:1500]}
+    try:
+        status, _kind, body = await _post("/internal/live/tts", payload, 60)
+    except Exception:
+        return b""
+    if status == 200 and isinstance(body, (bytes, bytearray)) and body:
+        return bytes(body)
+    return b""
+
+
+async def post_face(text: str, pcm: bytes):
+    # The talking face is off unless FACE_ENABLED=on. Cap the clip so the wav fits the face limit.
+    raw = pcm[:1_800_000]
+    if len(raw) % 2:
+        raw = raw[:-1]
+    if len(raw) < 2 or not SECRET:
+        return
+    try:
+        await _post("/internal/live/face", {"text": text[:500], "pcm": base64.b64encode(raw).decode("ascii")}, 20)
+    except Exception:
+        pass
+
+
+async def stream_frames(text: str):
+    line = " ".join(str(text or "").split()).strip()
+    if not line:
+        return
+    voice, rate, _lang = choose_voice(line)
+    if live_tts_provider() == "fish" and fish_configured():
+        collected = bytearray()
+        try:
+            async for chunk in iter_fish_pcm(line):
+                if not chunk:
+                    continue
+                collected.extend(chunk)
+                for frame in pcm_frames(chunk):
+                    yield frame
+        except Exception as e:
+            print(f"fish-audio failed: {e}")
+        if collected:
+            _bg(post_face(line, bytes(collected)))
+            return
+        pcm = await helper_pcm(line, fallback=True)
+        if pcm:
+            for frame in pcm_frames(pcm):
+                yield frame
+            return
+        # Fish and ElevenLabs produced nothing; Edge is the last resort.
+    elif tts_provider() == "elevenlabs":
+        pcm = await helper_pcm(line, fallback=False)
+        if pcm:
+            for frame in pcm_frames(pcm):
+                yield frame
+            return
+    collected = bytearray()
+    try:
+        async for chunk in iter_pcm(line, voice, rate):
+            if not chunk:
+                continue
+            collected.extend(chunk)
+            for frame in pcm_frames(chunk):
+                yield frame
+    except Exception as e:
+        print(f"edge-tts failed: {e}")
+    if collected:
+        _bg(post_face(line, bytes(collected)))
+        return
+    # Edge produced nothing. ElevenLabs was already tried when it is the selected provider.
+    if tts_provider() == "elevenlabs":
+        return
+    pcm = await helper_pcm(line, fallback=True)
+    if pcm:
+        for frame in pcm_frames(pcm):
+            yield frame
+
+
+async def speak_pcm(text: str) -> bytes:
+    parts = []
+    async for frame in stream_frames(text):
+        parts.append(bytes(frame.data))
+    return b"".join(parts)
+
+
+class HelperTTS(tts.TTS):
+    """Fish Audio, Edge-TTS, or ElevenLabs (backup), exposed as a LiveKit TTS.
+
+    The session needs a TTS object for say() (the greeting) to work at all; the
+    per-sentence parallel synthesis stays in HelperVoice.tts_node.
+    """
+
+    def __init__(self):
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=False),
+            sample_rate=16000,
+            num_channels=1,
+        )
+
+    def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+        return _HelperChunks(tts=self, input_text=text, conn_options=conn_options)
+
+
+class _HelperChunks(tts.ChunkedStream):
+    async def _run(self, output_emitter):
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=16000,
+            num_channels=1,
+            mime_type="audio/pcm",
+        )
+        async for frame in stream_frames(self.input_text):
+            output_emitter.push(bytes(frame.data))
+        output_emitter.flush()
+
+
+
+class _HelperLLM(llm.LLM):
+    """LiveKit 1.8 skips the reply pipeline when AgentSession has no LLM.
+
+    HelperVoice.llm_node talks to HELPER for every turn. This object is only
+    here so LiveKit will run that node after the caller finishes speaking.
+    """
+
+    def chat(self, *, chat_ctx, tools=None, conn_options=DEFAULT_API_CONNECT_OPTIONS, parallel_tool_calls=None, tool_choice=None, extra_kwargs=None):
+        raise RuntimeError("HelperVoice.llm_node handles replies; this LLM should not be called")
+
+
+class HelperVoice(Agent):
+    def __init__(self, greeting: str = "היי, אני כאן."):
+        super().__init__(
+            instructions="את HELPER. התשובה המדוברת מגיעה מהשרת של HELPER, לא מכאן.",
+            allow_interruptions=True,
+        )
+        self.greeting = greeting
+
+    async def on_enter(self):
+        await self.session.say(self.greeting, allow_interruptions=True)
+
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        text = latest_user(chat_ctx)
+        if not text:
+            print("llm_node: empty user transcript; skipping")
+            return
+        print(f"heard {len(text)} chars")
+        task = asyncio.ensure_future(ask_helper(text))
+        try:
+            if FILLER_AFTER > 0:
+                done, _ = await asyncio.wait({task}, timeout=FILLER_AFTER)
+                if not done:
+                    yield random.choice(FILLERS) + "\n"
+            yield await task
+        finally:
+            # Barge-in or hang-up: the request closes, and HELPER drops the turn.
+            if not task.done():
+                task.cancel()
+
+    async def tts_node(self, text, model_settings):
+        # Each sentence starts as soon as it is complete. Two synthesize at once; playback stays in order.
+        # Frames are yielded as ffmpeg decodes them, not after the whole sentence is done.
+        gate = asyncio.Semaphore(2)
+        jobs: asyncio.Queue = asyncio.Queue()
+        tasks = []
+
+        def synth(line: str):
+            q: asyncio.Queue = asyncio.Queue()
+
+            async def run():
+                try:
+                    async with gate:
+                        async for frame in stream_frames(line):
+                            await q.put(frame)
+                except Exception as e:
+                    await q.put(e)
+                finally:
+                    await q.put(None)
+
+            tasks.append(asyncio.ensure_future(run()))
+            return q
+
+        async def read():
+            buf = ""
+            try:
+                async for chunk in text:
+                    buf += str(chunk)
+                    ready, buf = split_ready(buf)
+                    for line in ready:
+                        await jobs.put(synth(line))
+                if buf.strip():
+                    await jobs.put(synth(buf.strip()))
+            finally:
+                await jobs.put(None)
+
+        reader = asyncio.ensure_future(read())
+        try:
+            while True:
+                job = await jobs.get()
+                if job is None:
+                    break
+                while True:
+                    item = await job.get()
+                    if item is None:
+                        break
+                    if isinstance(item, Exception):
+                        print(f"tts {item}")
+                        break
+                    yield item
+        finally:
+            reader.cancel()
+            for task in tasks:
+                task.cancel()
+            while not jobs.empty():
+                jobs.get_nowait()
+
+
+REALTIME_INSTRUCTIONS = """You are HELPER, Naor's personal assistant, on a live phone call with him. You ARE Helper: never say you are a different assistant, a model, or that you "ask" someone else.
+Speak Hebrew, in a warm natural spoken tone, like a person. One or two short sentences per turn. Never read lists, links or formatting aloud.
+You have one tool, ask_helper. It is your real hands, memory and senses: calendar, mail, WhatsApp, reminders, memory, search, the web, the computer, the phone, the TV, shopping, and anything that changes the outside world.
+Rules:
+- Small talk, greetings, thanks and simple questions about this call: answer yourself, instantly.
+- Anything else, every request for information about Naor's life or the world, and every action ("open Google", "remind me", "what do I have tomorrow"): call ask_helper with Naor's request in his own words, in Hebrew, with all the details he said. Do not answer these from your own knowledge.
+- Speak in the first person as a woman (the voice is female): "בודקת", "עושה", "כיביתי". Before calling ask_helper, say one short phrase once ("רגע, בודקת" / "שנייה") so the line is not silent, and do not keep repeating it. Then say the result plainly in your own words.
+- If the result says an action waits for approval in WhatsApp, tell him that in one sentence and wait.
+- If he interrupts, stop and listen."""
+
+
+class HelperRealtime(Agent):
+    def __init__(self, greeting: str = "היי, כאן הלפר."):
+        super().__init__(instructions=REALTIME_INSTRUCTIONS, allow_interruptions=True)
+        self.greeting = greeting
+
+    async def on_enter(self):
+        self.session.generate_reply(instructions=f"Greet him in Hebrew in a few words, like: {self.greeting}")
+
+    @function_tool
+    async def ask_helper(self, request: str) -> str:
+        """Do or look up anything real for Naor. Pass his request in Hebrew with every detail he gave."""
+        return await ask_helper(request)
+
+
+def prewarm(proc: JobProcess):
+    proc.userdata["vad"] = silero.VAD.load(force_cpu=True)
+
+
+server = AgentServer(
+    num_idle_processes=1,
+    setup_fnc=prewarm,
+    initialize_process_timeout=60,
+    port=8081,
+)
+
+
+@server.rtc_session(agent_name=AGENT_NAME)
+async def helper_voice(ctx: agents.JobContext):
+    await ctx.connect()
+    greeting = "היי, אני כאן."
+    caller = await ctx.wait_for_participant()
+    if caller.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+        number = caller.attributes.get("sip.phoneNumber", "")
+        if not await caller_allowed(number):
+            # Not the owner: hang up before any speech, STT or model call costs anything.
+            print("phone call from a number that is not allowed; hanging up")
+            await ctx.delete_room()
+            return
+        greeting = "היי, כאן הלפר."
+    if MODE == "realtime":
+        # Authenticates with the LiveKit project key pair already used here: no separate model key.
+        kwargs = {"voice": REALTIME_VOICE} if REALTIME_VOICE else {}
+        session = AgentSession(llm=inference.RealtimeModel(REALTIME_MODEL, **kwargs), allow_interruptions=True)
+        await session.start(HelperRealtime(greeting), room=ctx.room, record=False)
+        return
+    session = AgentSession(
+        vad=ctx.proc.userdata["vad"],
+        stt=stt_options(),
+        llm=_HelperLLM(),
+        tts=HelperTTS(),
+        allow_interruptions=True,
+        min_endpointing_delay=_seconds("LIVE_VOICE_MIN_ENDPOINT", 0.3),
+        max_endpointing_delay=_seconds("LIVE_VOICE_MAX_ENDPOINT", 1.1),
+    )
+    await session.start(HelperVoice(greeting), room=ctx.room, record=False)
+
+
+if __name__ == "__main__":
+    if os.environ.get("LIVE_VOICE", "").strip().lower() not in {"on", "1", "true", "yes"}:
+        print("LIVE_VOICE is off; not starting the voice agent")
+        raise SystemExit(0)
+    if not os.environ.get("LIVEKIT_API_KEY") or not os.environ.get("LIVEKIT_API_SECRET"):
+        raise SystemExit("LIVEKIT_API_KEY and LIVEKIT_API_SECRET are required")
+    agents.cli.run_app(server)

@@ -1,0 +1,5 @@
+# The adapter (helper_face.py) uses the Python standard library.
+# Pillow only crops the original HELPER portrait into a LiveTalking avatar folder.
+# PyTorch, CUDA and LiveTalking's own requirements are installed by install-face.ps1
+# into the LiveTalking checkout, not from this file.
+pillow

@@ -32,7 +32,7 @@ export function maskArgs(args) {
 const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 const fileFor = (d) => path.join(AUDIT_DIR(), `${monthKey(d)}.jsonl`)
 
-// source: whatsapp | task | job | the bridge client's name (tv, android_app, discord). approval: none | approved | declined.
+// source: whatsapp | task | job | the bridge client's name (tv, android_app, discord). approval: none | approved | declined | denied (blocked by the actor's scopes, src/panel-scopes.js).
 export function record({ tool, args, source = 'unknown', approval = 'none', ok = true, result = '', error = '', ms = 0, now = new Date() }) {
   try {
     const file = fileFor(now)
@@ -106,7 +106,7 @@ export function auditStats(days = 7, now = new Date()) {
 }
 
 const when = (iso) => new Date(iso).toLocaleString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
-const SOURCES = { whatsapp: 'וואטסאפ', task: 'משימה מתוזמנת', job: 'משימת רקע', tv: 'טלוויזיה', android_app: 'האפליקציה', discord: 'דיסקורד' }
+const SOURCES = { whatsapp: 'וואטסאפ', task: 'משימה מתוזמנת', job: 'משימת רקע', tv: 'טלוויזיה', android_app: 'האפליקציה', discord: 'דיסקורד', panel: 'פאנל מרחוק' }
 
 // The model's view: "what did you do yesterday?", "did you send anything to Dani?".
 export const auditTools = [
@@ -128,7 +128,7 @@ export const auditTools = [
       const rows = searchAudit({ q, tool, approval, from, limit: 25 })
       if (!rows.length) return 'אין פעולות מתאימות ביומן'
       return rows
-        .map((r) => `${when(r.t)} · ${SOURCES[r.source] || r.source} · ${r.tool}${Object.keys(r.args).length ? ` ${JSON.stringify(r.args).slice(0, 90)}` : ''} · ${r.approval === 'approved' ? 'אושר' : r.approval === 'declined' ? 'סורב' : 'ללא אישור'} · ${r.ok ? 'הצליח' : `נכשל${r.error ? `: ${r.error}` : ''}`}`)
+        .map((r) => `${when(r.t)} · ${SOURCES[r.source] || (String(r.source).startsWith('panel:') ? `פאנל מרחוק (${r.source.slice(6)})` : r.source)} · ${r.tool}${Object.keys(r.args).length ? ` ${JSON.stringify(r.args).slice(0, 90)}` : ''} · ${r.approval === 'approved' ? 'אושר' : r.approval === 'declined' ? 'סורב' : r.approval === 'denied' ? 'נחסם (לא מורשה)' : 'ללא אישור'} · ${r.ok ? 'הצליח' : `נכשל${r.error ? `: ${r.error}` : ''}`}`)
         .join('\n')
     },
   },

@@ -52,7 +52,7 @@ export function adoptTv(ws) {
     const wait = pending.get(msg.id)
     if (!wait) return
     pending.delete(msg.id)
-    msg.ok ? wait.resolve(msg.result ?? {}) : wait.reject(new Error(String(msg.error || 'הפעולה נכשלה בטלוויזיה')))
+    msg.ok ? wait.resolve(msg.result ?? {}) : wait.reject(Object.assign(new Error(String(msg.error || 'הפעולה נכשלה בטלוויזיה')), { reported: true }))
   })
   ws.on('close', () => {
     clearInterval(ping)
@@ -63,7 +63,8 @@ export function adoptTv(ws) {
 }
 
 export function tvCall(op, args = {}) {
-  if (!tvConnected()) return Promise.reject(new Error('הטלוויזיה לא מחוברת ל-HELPER כרגע (היא כבויה, או שמסך הבית לא הוגדר עם כתובת וקוד)'))
+  // notSent: nothing was sent, so nothing can have happened on the TV. reported (below): the TV itself said it failed.
+  if (!tvConnected()) return Promise.reject(Object.assign(new Error('הטלוויזיה לא מחוברת ל-HELPER כרגע (היא כבויה, או שמסך הבית לא הוגדר עם כתובת וקוד)'), { notSent: true }))
   const ws = link.ws
   const id = ++nextId
   return new Promise((resolve, reject) => {

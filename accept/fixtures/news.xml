@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Controlled news feed for accept:real task 12. each pubDate placeholder (NOW minus N minutes) is filled in when served. -->
+<rss version="2.0">
+  <channel>
+    <title>חדשות בדיקה</title>
+    <link>https://accept.fixtures.test/</link>
+    <item>
+      <title>עיריית רמת גן פותחת שלושה גני שעשועים חדשים בשכונת הבורסה</title>
+      <link>https://accept.fixtures.test/news/ramat-gan-parks</link>
+      <pubDate>{{NOW-30}}</pubDate>
+    </item>
+    <item>
+      <title>הכנסת אישרה בקריאה ראשונה את תקציב התחבורה הציבורית לשנה הבאה</title>
+      <link>https://accept.fixtures.test/news/transport-budget</link>
+      <pubDate>{{NOW-90}}</pubDate>
+    </item>
+    <item>
+      <title>מכבי חיפה חתמה על שחקן הגנה חדש לשלוש עונות</title>
+      <link>https://accept.fixtures.test/news/maccabi-defender</link>
+      <pubDate>{{NOW-150}}</pubDate>
+    </item>
+  </channel>
+</rss>

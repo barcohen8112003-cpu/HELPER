@@ -67,8 +67,43 @@ export function webtopPageBlocked(text) {
 let cloudBlocked = false
 export const webtopCloudBlockedNow = () => cloudBlocked
 
+// Chromium's own "This site can't be reached" page: the tab never got to Webtop at all. On the VPS this is
+// almost always the WEBTOP_PROXY route (Tailscale exit node) being down: ERR_SOCKS_CONNECTION_FAILED,
+// ERR_PROXY_CONNECTION_FAILED, a DNS timeout through the proxy, and so on. -> the net error code, or ''.
+export const WEBTOP_UNREACHABLE_STATUS = 'Webtop לא נטען מהשרת: הדפדפן לא הגיע לאתר'
+const NET_ERROR = /\b(ERR_[A-Z_]{4,60})\b/
+export function webtopNetError(snap) {
+  const href = String(snap?.href || '')
+  const text = String(snap?.text || '')
+  const code = (text.match(NET_ERROR) || [])[1] || ''
+  if (/^chrome-error:/i.test(href)) return code || 'ERR_UNKNOWN'
+  // Only a short page that is nothing but Chromium's error screen. A real Webtop page that mentions ERR_ is not one.
+  if (code && text.length < 600 && /can.t be reached|unable to connect|no internet|לא ניתן להגיע/i.test(text)) return code
+  return ''
+}
+
+export function isWebtopUnreachableError(err) {
+  return Boolean(err && err.code === 'webtop-unreachable')
+}
+
+function unreachablePage(net) {
+  const viaProxy = Boolean(config.webtop.cloud && config.webtop.proxy)
+  return Object.assign(
+    fail(
+      `${WEBTOP_UNREACHABLE_STATUS} (${net}).`,
+      viaProxy
+        ? 'הדפדפן בענן יוצא דרך WEBTOP_PROXY (ה-exit node של Tailscale). צריך שהמכשיר שמשמש exit node יהיה מחובר ל-Tailscale.'
+        : 'אין חיבור מהדפדפן לאתר. אני ממשיך לנסות.',
+      'webtop-unreachable',
+    ),
+    { net },
+  )
+}
+
 export function classifyWebtopSnapshot(snap) {
   const text = `${snap?.text || ''}\n${snap?.href || ''}`
+  // Not a page from Webtop at all, so it says nothing about a block or a login: the blocked flag is left as it was.
+  if (webtopNetError(snap)) return 'unreachable'
   if (webtopPageBlocked(text)) {
     cloudBlocked = true
     return 'blocked'
@@ -89,6 +124,8 @@ function blockedPage() {
 // The keepalive loop's reaction. A block is silent: the settings page says so, and WhatsApp is not pinged again.
 export function webtopKeepAliveFailure(err) {
   if (isWebtopBlockedError(err)) return 'silent'
+  // The proxy route is down: tracked like any other failure (reported once it repeats), never a re-login notice.
+  if (isWebtopUnreachableError(err)) return 'track'
   if (isWebtopLoginError(err)) return 'login'
   return 'track'
 }
@@ -96,7 +133,7 @@ export function webtopKeepAliveFailure(err) {
 // Cloud keepalive falls back to the home window only for a block. A login page stays on the cloud browser
 // so the re-login notice still fires, and a signed-in home window cannot hide it.
 export function keepAliveAfterCloudError(err, bridgeUp) {
-  return isWebtopBlockedError(err) && bridgeUp ? 'home' : 'throw'
+  return (isWebtopBlockedError(err) || isWebtopUnreachableError(err)) && bridgeUp ? 'home' : 'throw'
 }
 
 function signedOut() {
@@ -140,7 +177,8 @@ export async function runSessionRead(local, home, route) {
   try {
     return await local()
   } catch (e) {
-    if (route.fallback === 'home' && (isWebtopLoginError(e) || isWebtopBlockedError(e))) {
+    // A login page, a CloudFront block, or a cloud browser that cannot reach the site at all (proxy down).
+    if (route.fallback === 'home' && (isWebtopLoginError(e) || isWebtopBlockedError(e) || isWebtopUnreachableError(e))) {
       try {
         return await home()
       } catch {
@@ -203,8 +241,10 @@ async function withTab(run) {
       const timer = setTimeout(done, ms)
       listeners.set(event, [done])
     })
+  // A listener that stays for the whole conversation (several may share one event).
+  const on = (event, fn) => listeners.set(event, [...(listeners.get(event) || []), fn])
   try {
-    return await run({ call, once })
+    return await run({ call, once, on })
   } finally {
     ws.close()
   }
@@ -216,6 +256,7 @@ async function snapshot(call) {
   const { result } = await call('Runtime.evaluate', { expression: SNAPSHOT, returnByValue: true })
   const snap = JSON.parse(result.value)
   const kind = classifyWebtopSnapshot(snap)
+  if (kind === 'unreachable') throw unreachablePage(webtopNetError(snap))
   if (kind === 'blocked') throw blockedPage()
   if (kind === 'login') throw signedOut()
   return snap
@@ -368,6 +409,121 @@ export function readTimetable() {
   return runSessionRead(
     () => timetableLocal(),
     () => remoteCall('readTimetable', []),
+    sessionTransport(),
+  )
+}
+
+// The site's own API answers, read in the signed-in tab: grades, timetable changes, exams, events and messages.
+// Webtop's pages call webtopserver.../server/api/*, authorized by the session cookie. The answers are taken from
+// the page's own requests (no ids to guess), and the school-changes board for today and tomorrow is asked for
+// from inside the page with the same cookie. Nothing signs in and no password is involved.
+// -> { grades: [...], changes: { changes, exams, events, messages }, school: [{ date, data }] }
+const API_WAIT_MS = 20000
+const parseJson = (t) => {
+  try {
+    return JSON.parse(t)
+  } catch {
+    return null
+  }
+}
+
+async function captureApi({ call, once, on }, url, want) {
+  const asked = new Map()
+  const done = []
+  on('Network.requestWillBeSent', (p) => {
+    const u = p.request?.url || ''
+    const w = want.find((x) => u.includes(x))
+    if (w) asked.set(p.requestId, { want: w, url: u, body: p.request.postData })
+  })
+  on('Network.loadingFinished', (p) => asked.has(p.requestId) && done.push(p.requestId))
+  await call('Network.enable')
+  const loaded = once('Page.loadEventFired')
+  await call('Page.navigate', { url })
+  await loaded
+  await snapshot(call)
+  const got = {}
+  const end = Date.now() + API_WAIT_MS
+  while (Date.now() < end && want.some((w) => !got[w])) {
+    for (const id of done.splice(0)) {
+      const r = asked.get(id)
+      try {
+        const { body, base64Encoded } = await call('Network.getResponseBody', { requestId: id })
+        const json = parseJson(base64Encoded ? Buffer.from(body, 'base64').toString('utf8') : body)
+        if (json?.status) got[r.want] = { url: r.url, request: parseJson(r.body), data: json.data }
+      } catch {}
+    }
+    await new Promise((res) => setTimeout(res, 400))
+  }
+  await call('Network.disable').catch(() => {})
+  return got
+}
+
+const GRADES_API = 'PupilCard/GetPupilGrades'
+const CHANGES_API = 'shotef/ChangesAndMessagesData'
+// Webtop's homework board. The dashboard page asks for it itself (POST dashboard/GetHomeWork with the pupil's own
+// ids); its answer is taken from that request, like the two above. Nothing is asked for on our own and no id is built.
+const HOMEWORK_API = 'dashboard/GetHomeWork'
+
+// opts.homework: also open the dashboard page and take its homework answer. Only the homework list
+// (src/schoolwork.js, SCHOOLWORK=on) asks for it; otherwise this read is exactly what it was.
+function updatesLocal(opts = {}) {
+  return runLocal(async (tab) => {
+    await tab.call('Page.enable')
+    const site = (p) => new URL(p, config.webtop.url).href
+    const ch = (await captureApi(tab, site('/Timetable_Changes?tabIndex=1&tab=scheduale'), [CHANGES_API]))[CHANGES_API]
+    const gr = (await captureApi(tab, site('/Student_Card/6'), [GRADES_API]))[GRADES_API]
+    if (!ch && !gr) {
+      // Where the tab ended up (path only, no query), so the log says more than "could not read".
+      let where = ''
+      try {
+        const { result } = await tab.call('Runtime.evaluate', { expression: 'location.protocol + "//" + location.host + location.pathname', returnByValue: true })
+        where = String(result?.value || '').slice(0, 120)
+      } catch {}
+      throw Object.assign(fail('לא הצלחתי לקרוא ציונים ושינויים מ-Webtop.', 'אני ממשיך לנסות.'), { detail: `no ${CHANGES_API} / ${GRADES_API} answer within ${API_WAIT_MS / 1000}s${where ? ` at ${where}` : ''}` })
+    }
+    // The school-changes board ("שינויי מערכת בית ספריים") for today and tomorrow, for his grade.
+    let school = []
+    const inst = ch?.request?.institutionCode
+    const grade = Number(String(ch?.request?.selectedValue || '').split('|')[0]) || 0
+    if (inst && grade) {
+      const api = new URL('/server/api/shotef/SchoolchangesPerGradeFirst', ch.url).href
+      const dates = [0, 1].map((d) => new Date(Date.now() + d * 86400000).toISOString())
+      const { result } = await tab.call('Runtime.evaluate', {
+        awaitPromise: true,
+        returnByValue: true,
+        expression: `(async () => {
+          const out = []
+          for (const date of ${JSON.stringify(dates)}) {
+            try {
+              const r = await fetch(${JSON.stringify(api)}, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ institutionCode: ${JSON.stringify(inst)}, grade: ${grade}, selectedDate: date }) })
+              const j = await r.json()
+              if (j && j.status) out.push({ date, data: j.data })
+            } catch (e) {}
+          }
+          return JSON.stringify(out)
+        })()`,
+      })
+      school = parseJson(result?.value) || []
+    }
+    // Last, so a page that does not answer can never cost the grades and changes above.
+    // { asked: true, data } when the page answered; { asked: true, data: undefined } when it did not.
+    let homework = null
+    if (opts.homework) {
+      try {
+        const hw = (await captureApi(tab, site(config.webtop.homeworkPath), [HOMEWORK_API]))[HOMEWORK_API]
+        homework = { asked: true, data: hw ? hw.data : undefined }
+      } catch (e) {
+        homework = { asked: true, data: undefined, error: e.message }
+      }
+    }
+    return { grades: gr ? gr.data || [] : null, changes: ch ? ch.data || {} : null, school, ...(homework && { homework }) }
+  })
+}
+
+export function readWebtopUpdates(opts = {}) {
+  return runSessionRead(
+    () => updatesLocal(opts),
+    () => remoteCall('readWebtopUpdates', [opts]),
     sessionTransport(),
   )
 }
