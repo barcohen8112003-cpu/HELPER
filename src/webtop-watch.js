@@ -139,7 +139,7 @@ export async function webtopUpdates(notify, _runTask, _monitoring, { read: readN
     const why = isWebtopLoginError(e) ? 'Webtop לא מחובר (צריך להתחבר מחדש)' : isWebtopBlockedError(e) ? 'Webtop חסום מהשרת' : w.error
     sourceFailed('webtop', why)
     sourceFailed('webtopHomework', why)
-    if (!isWebtopLoginError(e) && !isWebtopBlockedError(e)) console.log(`[webtop-watch] ${w.error}`)
+    if (!isWebtopLoginError(e) && !isWebtopBlockedError(e)) console.log(`[webtop-watch] ${w.error}${e.detail ? ` (${e.detail})` : ''}`)
   } finally {
     running = false
   }
