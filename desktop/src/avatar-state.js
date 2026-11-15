@@ -1,7 +1,8 @@
 // The avatar's mood: a small state machine with four states, and what moves it between them.
 //
 //   idle   the rest of the time: a gentle breathing motion
-//   dance  while music plays (music HELPER started on this PC: play / media keys)
+//   dance  while music plays: music HELPER started on this PC (play / media keys), and, when the owner turned it on
+//          (avatarSystemMusic), any app Windows lists as playing ("now playing", see audio-watch.js)
 //   react  with a variant. Short bursts from events: a message for the owner went out (wave), a task started (work)
 //          or ended (done). And, for as long as it lasts, what HELPER on this PC is doing right now (the app's own
 //          state, see activityFor): listening (listen), thinking (think), speaking (speak), running tools (work)
@@ -26,6 +27,13 @@ const ALERT_MS = 4500
 // HELPER opens music in the browser and cannot see when the song ends, so a dance stops by itself after this long
 // unless the music is paused or stopped first (media keys, "תעצור").
 const MUSIC_MAX_MS = 10 * 60000
+// Music from any app (when tracked): the dance stops this long after Windows says nothing plays, so the gap between
+// two songs doesn't stop it.
+const SYSTEM_STOP_MS = 3000
+// HELPER's own music, when Windows' list is tracked: if nothing is listed as playing for HELPER_QUIET_MS (and the
+// browser had HELPER_GRACE_MS to start the song), the song is over and the dance ends before the 10 minutes.
+const HELPER_GRACE_MS = 20000
+const HELPER_QUIET_MS = 15000
 
 /** The animation for one event type, or null for anything that is not a known type. */
 function actionFor(type) {
@@ -72,16 +80,36 @@ function activityFor(app) {
 function createAvatarState({ now = () => Date.now(), onChange = () => {} } = {}) {
   let burst = null            // { state, variant, until }
   let musicUntil = 0
+  let musicFrom = 0           // when HELPER's own music started
   let live = null             // listen | think | speak | work | null
   let last = null
+  // Windows' "now playing" list, only while the owner turned it on (trackSystem(true)).
+  let tracking = false
+  let sysNow = false          // the latest report: some app is playing
+  let sysDance = false        // dancing for it (stays on SYSTEM_STOP_MS after sysNow went false)
+  let sysOffAt = 0
+  let sysQuietSince = 0       // since when nothing is listed as playing
+
+  /** When HELPER's own music counts as over because Windows lists nothing playing, or 0. */
+  function helperQuietEnd() {
+    if (!tracking || sysNow || !musicUntil) return 0
+    return Math.max(musicFrom + HELPER_GRACE_MS, sysQuietSince + HELPER_QUIET_MS)
+  }
+
+  function settle(t) {
+    if (sysOffAt && t >= sysOffAt) { sysDance = false; sysOffAt = 0 }
+    if (musicUntil && t >= musicUntil) musicUntil = 0
+    const q = helperQuietEnd()
+    if (q && t >= q) musicUntil = 0
+  }
 
   function compute() {
     const t = now()
+    settle(t)
     if (burst && t < burst.until) return { state: burst.state, variant: burst.variant }
     burst = null
     if (live) return { state: 'react', variant: live }
-    if (musicUntil && t < musicUntil) return { state: 'dance', variant: '' }
-    musicUntil = 0
+    if (musicUntil || (tracking && sysDance)) return { state: 'dance', variant: '' }
     return { state: 'idle', variant: '' }
   }
 
@@ -108,9 +136,30 @@ function createAvatarState({ now = () => Date.now(), onChange = () => {} } = {})
 
   /** on: true, false or 'toggle'. */
   function music(on) {
-    const playing = Boolean(musicUntil && now() < musicUntil)
+    settle(now())
+    const playing = Boolean(musicUntil)
     const want = on === 'toggle' ? !playing : Boolean(on)
     musicUntil = want ? now() + MUSIC_MAX_MS : 0
+    if (want && !playing) musicFrom = now()
+    return tick()
+  }
+
+  /** Follow Windows' "now playing" list (true) or not (false: only HELPER's own music dances, as before). */
+  function trackSystem(on) {
+    const want = on === true
+    if (want === tracking) return tick()
+    tracking = want
+    sysNow = false; sysDance = false; sysOffAt = 0; sysQuietSince = now()
+    return tick()
+  }
+
+  /** Windows says some app is playing (true) or nothing is (false). Ignored unless tracking. */
+  function systemMusic(on) {
+    if (!tracking) return tick()
+    const t = now()
+    settle(t)
+    if (on === true) { sysNow = true; sysDance = true; sysOffAt = 0 }
+    else if (sysNow) { sysNow = false; sysQuietSince = t; if (sysDance) sysOffAt = t + SYSTEM_STOP_MS }
     return tick()
   }
 
@@ -123,11 +172,11 @@ function createAvatarState({ now = () => Date.now(), onChange = () => {} } = {})
   /** Milliseconds until the state can change by itself (a burst or the music running out), or null. */
   function nextChangeIn() {
     const t = now()
-    const ends = [burst && burst.until, musicUntil].filter((x) => x && x > t)
+    const ends = [burst && burst.until, musicUntil, sysOffAt, helperQuietEnd()].filter((x) => x && x > t)
     return ends.length ? Math.min(...ends) - t : null
   }
 
-  return { event, music, activity, tick, nextChangeIn, current: () => compute() }
+  return { event, music, activity, trackSystem, systemMusic, tick, nextChangeIn, current: () => compute() }
 }
 
-module.exports = { createAvatarState, actionFor, activityFor, musicFromStep, STATES, VARIANTS, ACTIVITIES, EVENT_TYPES, REACT_MS, ALERT_MS, MUSIC_MAX_MS }
+module.exports = { createAvatarState, actionFor, activityFor, musicFromStep, STATES, VARIANTS, ACTIVITIES, EVENT_TYPES, REACT_MS, ALERT_MS, MUSIC_MAX_MS, SYSTEM_STOP_MS, HELPER_GRACE_MS, HELPER_QUIET_MS }
