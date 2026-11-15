@@ -2,7 +2,7 @@
 'use strict'
 const { contextBridge, ipcRenderer } = require('electron')
 
-const IN = new Set(['state', 'record', 'play', 'overlay', 'live', 'avatar'])
+const IN = new Set(['state', 'record', 'play', 'overlay', 'live', 'avatar', 'avatar-level'])
 const OUT = new Set(['audio', 'typed', 'confirm', 'hover', 'dismiss', 'mark', 'mark-cancel', 'voice-state', 'mics', 'partial', 'endpoint', 'avatar-hover', 'avatar-drag', 'avatar-click', 'avatar-menu'])
 
 contextBridge.exposeInMainWorld('helper', {

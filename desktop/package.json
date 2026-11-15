@@ -7,7 +7,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
-    "check": "node test/selftest.js && node test/cloud-link-check.js && node test/avatar-check.js && node test/wa-announce-check.js"
+    "check": "node test/selftest.js && node test/cloud-link-check.js && node test/avatar-check.js && node test/audio-react-check.js && node test/wa-announce-check.js"
   },
   "dependencies": {
     "electron": "^33.4.11",

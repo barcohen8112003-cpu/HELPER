@@ -224,10 +224,74 @@ function avatarHome() {
 
 function sendAvatar(s) {
   const w = avatarWin
+  avatarShown = s.state
+  avatarLevelRate()
   if (!w || w.isDestroyed()) return
   const msg = { state: s.state, variant: s.variant || '', design: avatarDesign() }
   if (w.webContents.isLoading()) w.webContents.once('did-finish-load', () => { if (!w.isDestroyed()) w.webContents.send('avatar', msg) })
   else w.webContents.send('avatar', msg)
+}
+
+// ---- the avatar and music from any app on this PC (off by default) ---------------------------------------
+// Tray "לרקוד לכל מוזיקה במחשב" (avatarSystemMusic): Windows' "now playing" list starts and stops the dance.
+// Tray "לזוז לפי הקצב והעוצמה" (avatarBeat): while it dances, Windows' own peak meter on the speakers (one number,
+// no audio) makes the moves bigger or smaller and kicks on the beat (src/beat.js). Both through one PowerShell
+// worker (src/audio-watch.js), which runs only while the setting is on. Levels are asked for only while the avatar
+// is dancing, go only to the avatar window as numbers, and are never logged or kept.
+let audioWatch = null, avatarFeel = null, avatarShown = 'idle', avatarLevelOn = false, avatarLevelAt = 0, avatarLevelKey = ''
+
+function applyAudioWatch() {
+  const s = store.settings()
+  const want = Boolean(avatarState && s.avatarSystemMusic && process.platform === 'win32')
+  if (!want) {
+    if (audioWatch) { audioWatch.stop(); audioWatch = null }
+    if (avatarState) { avatarState.trackSystem(false); avatarTick() }
+    avatarLevelRate()
+    return
+  }
+  avatarState.trackSystem(true)
+  if (!audioWatch) {
+    audioWatch = require('./src/audio-watch').createAudioWatch({
+      log, ignore: s.avatarMusicIgnore,
+      onPlaying: (on) => { if (avatarState) { avatarState.systemMusic(on); avatarTick() } },
+      onLevel: (x) => avatarLevelIn(x),
+    })
+    audioWatch.start()
+  } else audioWatch.setIgnore(s.avatarMusicIgnore)
+  avatarTick()
+  avatarLevelRate()
+}
+
+/** Levels only while the avatar is on screen and dancing, and the owner asked for it. */
+function avatarLevelRate() {
+  const on = Boolean(audioWatch && store.settings().avatarBeat && avatarWin && !avatarWin.isDestroyed() && avatarShown === 'dance')
+  if (audioWatch) audioWatch.rate(on ? 30 : 0)
+  if (on === avatarLevelOn) return
+  avatarLevelOn = on
+  avatarFeel = null
+  avatarLevelKey = ''
+  if (!on) sendAvatarLevel({ k: -1 })
+}
+
+/** One peak reading → the avatar window, as four numbers, at most about 15 a second (a beat always goes). */
+function avatarLevelIn(x) {
+  if (!avatarLevelOn) return
+  if (!avatarFeel) avatarFeel = require('./src/beat').createBeat()
+  const t = Date.now()
+  const out = avatarFeel.push(x, t)
+  if (!out) return
+  const msg = { e: out.energy, b: out.beat ? 1 : 0, k: out.level, t: out.bpm }
+  const key = msg.e + '|' + msg.k + '|' + msg.t
+  if (!msg.b && (key === avatarLevelKey || t - avatarLevelAt < 66)) return
+  avatarLevelKey = key
+  avatarLevelAt = t
+  sendAvatarLevel(msg)
+}
+
+function sendAvatarLevel(msg) {
+  const w = avatarWin
+  if (!w || w.isDestroyed() || w.webContents.isLoading()) return
+  w.webContents.send('avatar-level', msg)
 }
 
 function makeAvatar() {
@@ -356,6 +420,7 @@ function applyAvatar() {
     if (avatarWin && !avatarWin.isDestroyed()) avatarWin.destroy()
     avatarWin = null
     avatarState = null
+    avatarShown = 'idle'
   } else {
     if (!avatarState) avatarState = require('./src/avatar-state').createAvatarState({ onChange: sendAvatar })
     makeAvatar()
@@ -363,6 +428,7 @@ function applyAvatar() {
     if (!avatarSyncTimer) avatarSyncTimer = setInterval(avatarSync, 200)
     avatarSync()
   }
+  applyAudioWatch()
   const want = s.avatarEnabled && s.avatarEvents
   const key = want ? `${s.avatarPanelUrl}\n${s.avatarCredential}` : ''
   if (avatarFeed && key !== avatarFeedKey) { avatarFeed.stop(); avatarFeed = null }
@@ -1127,6 +1193,8 @@ function trayMenu() {
       { label: 'להציג את האווטאר', type: 'checkbox', checked: s.avatarEnabled, click: (i) => { store.saveSettings({ avatarEnabled: i.checked }); applyAvatar(); refreshTray() } },
       { label: 'אירועים מ-HELPER בענן (סוג בלבד, בלי תוכן)', type: 'checkbox', checked: s.avatarEvents, enabled: Boolean(s.avatarPanelUrl && s.avatarCredential), click: (i) => { store.saveSettings({ avatarEvents: i.checked }); applyAvatar(); refreshTray() } },
       { label: 'אירועים: ' + (s.avatarEnabled && s.avatarEvents ? AVATAR_STATUS[avatarStatus] || avatarStatus : 'כבוי'), enabled: false },
+      { label: 'לרקוד לכל מוזיקה במחשב', type: 'checkbox', checked: s.avatarSystemMusic, enabled: s.avatarEnabled, click: (i) => { store.saveSettings({ avatarSystemMusic: i.checked }); applyAudioWatch(); refreshTray() } },
+      { label: 'לזוז לפי הקצב והעוצמה (בלי הקלטה)', type: 'checkbox', checked: s.avatarBeat, enabled: s.avatarEnabled && s.avatarSystemMusic, click: (i) => { store.saveSettings({ avatarBeat: i.checked }); applyAudioWatch(); refreshTray() } },
       { label: 'עיצוב', submenu: avatarDesignMenu(avatarDesign()) },
       { label: 'להחזיר לפינה', enabled: s.avatarEnabled, click: () => { store.saveSettings({ avatarPos: null }); if (avatarWin && !avatarWin.isDestroyed()) { const p = avatarHome(); avatarWin.setPosition(p.x, p.y) } } },
     ] },
@@ -1350,6 +1418,7 @@ app.on('second-instance', (e, argv, cwd, extra) => {
 app.on('window-all-closed', (e) => e.preventDefault())
 app.on('before-quit', () => {
   try { require('./src/uia').stop() } catch { }
+  try { if (audioWatch) audioWatch.stop() } catch { }
   try { globalShortcut.unregisterAll() } catch { }
   try { hook && hook.uIOhook.stop() } catch { }
   speech && speech.stop()
